@@ -56,20 +56,20 @@ pub async fn atomic_write_config(path: &Path, config: &AppConfig) -> Result<(), 
     }
     // Persist the directory entry too so the rename itself is
     // durable before we report success.
-    if let Some(parent) = path.parent() {
-        if let Ok(dir) = std::fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
+    if let Some(parent) = path.parent()
+        && let Ok(dir) = std::fs::File::open(parent)
+    {
+        let _ = dir.sync_all();
     }
     Ok(())
 }
 
 fn write_tmp(tmp: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
     use std::io::Write as _;
-    if let Some(parent) = tmp.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = tmp.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
     }
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
@@ -107,10 +107,10 @@ pub fn atomic_write_config_blocking(
             return Err(AtomicWriteError::Io(e));
         }
     }
-    if let Some(parent) = path.parent() {
-        if let Ok(dir) = std::fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
+    if let Some(parent) = path.parent()
+        && let Ok(dir) = std::fs::File::open(parent)
+    {
+        let _ = dir.sync_all();
     }
     Ok(())
 }

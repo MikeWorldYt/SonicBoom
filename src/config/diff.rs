@@ -447,6 +447,7 @@ fn collect_uncovered(
 /// Event published by the [`ConfigManager`](super::manager::ConfigManager)
 /// on every committed configuration change.
 #[derive(Debug, Clone, Serialize)]
+#[allow(clippy::large_enum_variant)] // Owned snapshots preserve atomic configuration event semantics.
 pub enum ConfigEvent {
     /// A validated configuration was installed.
     Updated {

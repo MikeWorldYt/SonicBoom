@@ -45,10 +45,10 @@ pub fn config_dir() -> PathBuf {
     }
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     {
-        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-            if !xdg.is_empty() {
-                return PathBuf::from(xdg).join(APP_DIR_NAME);
-            }
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME")
+            && !xdg.is_empty()
+        {
+            return PathBuf::from(xdg).join(APP_DIR_NAME);
         }
         if let Some(home) = std::env::var_os("HOME") {
             return PathBuf::from(home).join(".config").join(APP_DIR_NAME);
@@ -71,10 +71,10 @@ pub fn data_dir() -> PathBuf {
 /// 2. Exe-adjacent `config.toml` (portable installs).
 /// 3. Platform configuration directory.
 pub fn resolve_config_path() -> PathBuf {
-    if let Some(explicit) = std::env::var_os("SONICBOOM_CONFIG") {
-        if !explicit.is_empty() {
-            return PathBuf::from(explicit);
-        }
+    if let Some(explicit) = std::env::var_os("SONICBOOM_CONFIG")
+        && !explicit.is_empty()
+    {
+        return PathBuf::from(explicit);
     }
     if let Some(exe_dir) = std::env::current_exe()
         .ok()

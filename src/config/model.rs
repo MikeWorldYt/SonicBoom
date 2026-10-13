@@ -368,6 +368,8 @@ pub struct ProvidersConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VoicesConfig {
+    #[serde(default = "default_max_voice_profiles")]
+    pub max_profiles: usize,
     /// Directory for `profiles.json` plus `<uuid>.wav` references.
     #[serde(default = "default_voices_dir")]
     pub store_dir: String,
@@ -379,6 +381,7 @@ pub struct VoicesConfig {
 /// Security-relevant settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(Default)]
 pub struct SecurityConfig {
     /// Honor forwarded headers (`X-Forwarded-For`) from trusted proxies.
     #[serde(default)]
@@ -594,6 +597,9 @@ fn default_gpt_temperature() -> f32 {
 fn default_gpt_repetition_penalty() -> f32 {
     1.0
 }
+fn default_max_voice_profiles() -> usize {
+    256
+}
 fn default_voices_dir() -> String {
     "./voices".to_string()
 }
@@ -707,6 +713,7 @@ impl Default for GptSovitsConfig {
 impl Default for VoicesConfig {
     fn default() -> Self {
         Self {
+            max_profiles: default_max_voice_profiles(),
             store_dir: default_voices_dir(),
             max_upload_bytes: default_voices_max_upload_bytes(),
         }
@@ -828,18 +835,6 @@ impl Default for PathsConfig {
             audio,
             temp_audio: default_temp_audio_dir(),
             token_store: default_token_store_path(),
-        }
-    }
-}
-
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        Self {
-            trust_proxy: false,
-            trusted_proxies: Vec::new(),
-            cookie_secure: false,
-            enable_hsts: false,
-            allow_insecure_remote: false,
         }
     }
 }

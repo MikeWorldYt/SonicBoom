@@ -323,6 +323,11 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
     }
     for (path, description, max) in [
         (
+            "voices.max_profiles",
+            "Maximum stored voice profiles (also bounded by manifest byte limit)",
+            4096.0,
+        ),
+        (
             "inference.generation_deadline_secs",
             "Cooperative inference deadline, independent of HTTP timeout",
             86400.0,
@@ -666,9 +671,9 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
     for (path, desc, min, max) in [
         (
             "providers.qwen3.max_concurrent",
-            "Maximum concurrent Qwen3-TTS syntheses",
+            "Qwen3-TTS uses one serialized model-owning worker",
             1.0,
-            64.0,
+            1.0,
         ),
         (
             "providers.qwen3.cache_entries",
@@ -678,9 +683,9 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
         ),
         (
             "providers.gpt_sovits.max_concurrent",
-            "Maximum concurrent GPT-SoVITS syntheses",
+            "GPT-SoVITS uses one serialized mutable model",
             1.0,
-            64.0,
+            1.0,
         ),
         (
             "providers.qwen3.max_tokens",

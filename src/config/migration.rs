@@ -18,6 +18,8 @@ pub const SECRET_KEYS: &[&str] = &["SONICBOOM_ADMIN_PW", "HF_TOKEN"];
 
 /// Parse a `.env` file into a key/value map (best-effort:
 /// comments and malformed lines are skipped).
+type LegacyMigration = (AppConfig, Vec<&'static str>, Vec<&'static str>);
+
 pub fn parse_env_file(path: &Path) -> Option<HashMap<String, String>> {
     if let Ok(values) = dotenvy::from_path_iter(path)
         .ok()?
@@ -89,7 +91,7 @@ fn parse_env_text(text: &str) -> HashMap<String, String> {
 pub fn migrate_env(
     env_path: &Path,
     fallback: &AppConfig,
-) -> Result<Option<(AppConfig, Vec<&'static str>, Vec<&'static str>)>, String> {
+) -> Result<Option<LegacyMigration>, String> {
     let env = parse_env_file(env_path)
         .ok_or_else(|| "could not read legacy environment file".to_string())?;
     if env.is_empty() {
@@ -138,11 +140,11 @@ pub fn migrate_env(
         config.admin.session_expiry_secs = v;
         converted.push("ADMIN_SESSION_EXPIRY_SECS -> admin.session_expiry_secs");
     }
-    if let Some(v) = take("ENABLE_SAMPLE_TOKEN") {
-        if matches!(v.to_ascii_lowercase().as_str(), "true" | "1") {
-            config.admin.enable_sample_token = true;
-            converted.push("ENABLE_SAMPLE_TOKEN -> admin.enable_sample_token");
-        }
+    if let Some(v) = take("ENABLE_SAMPLE_TOKEN")
+        && matches!(v.to_ascii_lowercase().as_str(), "true" | "1")
+    {
+        config.admin.enable_sample_token = true;
+        converted.push("ENABLE_SAMPLE_TOKEN -> admin.enable_sample_token");
     }
     if let Some(v) = take("AUDIO_OUTPUT_DEVICE") {
         config.audio.output_device = v;
@@ -217,17 +219,17 @@ pub fn migrate_env(
         config.logging.level = v;
         converted.push("LOG_LEVEL -> logging.level");
     }
-    if let Some(v) = take("LOG_TO_FILE") {
-        if matches!(v.to_ascii_lowercase().as_str(), "true" | "1") {
-            config.logging.to_file = true;
-            converted.push("LOG_TO_FILE -> logging.to_file");
-        }
+    if let Some(v) = take("LOG_TO_FILE")
+        && matches!(v.to_ascii_lowercase().as_str(), "true" | "1")
+    {
+        config.logging.to_file = true;
+        converted.push("LOG_TO_FILE -> logging.to_file");
     }
-    if let Some(v) = take("LOG_TO_STDOUT") {
-        if matches!(v.to_ascii_lowercase().as_str(), "true" | "1") {
-            config.logging.to_stdout = true;
-            converted.push("LOG_TO_STDOUT -> logging.to_stdout");
-        }
+    if let Some(v) = take("LOG_TO_STDOUT")
+        && matches!(v.to_ascii_lowercase().as_str(), "true" | "1")
+    {
+        config.logging.to_stdout = true;
+        converted.push("LOG_TO_STDOUT -> logging.to_stdout");
     }
     if let Some(v) = take("LOG_DIR") {
         config.paths.logs = v;
@@ -245,11 +247,11 @@ pub fn migrate_env(
         config.paths.token_store = v;
         converted.push("TOKEN_STORE_PATH -> paths.token_store");
     }
-    if let Some(v) = take("TRUST_PROXY") {
-        if matches!(v.to_ascii_lowercase().as_str(), "true" | "1") {
-            config.security.trust_proxy = true;
-            converted.push("TRUST_PROXY -> security.trust_proxy");
-        }
+    if let Some(v) = take("TRUST_PROXY")
+        && matches!(v.to_ascii_lowercase().as_str(), "true" | "1")
+    {
+        config.security.trust_proxy = true;
+        converted.push("TRUST_PROXY -> security.trust_proxy");
     }
     if let Some(v) = take("TRUSTED_PROXIES") {
         config.security.trusted_proxies = v
@@ -260,17 +262,17 @@ pub fn migrate_env(
             .collect();
         converted.push("TRUSTED_PROXIES -> security.trusted_proxies");
     }
-    if let Some(v) = take("COOKIE_SECURE") {
-        if matches!(v.to_ascii_lowercase().as_str(), "true" | "1") {
-            config.security.cookie_secure = true;
-            converted.push("COOKIE_SECURE -> security.cookie_secure");
-        }
+    if let Some(v) = take("COOKIE_SECURE")
+        && matches!(v.to_ascii_lowercase().as_str(), "true" | "1")
+    {
+        config.security.cookie_secure = true;
+        converted.push("COOKIE_SECURE -> security.cookie_secure");
     }
-    if let Some(v) = take("ENABLE_HSTS") {
-        if matches!(v.to_ascii_lowercase().as_str(), "true" | "1") {
-            config.security.enable_hsts = true;
-            converted.push("ENABLE_HSTS -> security.enable_hsts");
-        }
+    if let Some(v) = take("ENABLE_HSTS")
+        && matches!(v.to_ascii_lowercase().as_str(), "true" | "1")
+    {
+        config.security.enable_hsts = true;
+        converted.push("ENABLE_HSTS -> security.enable_hsts");
     }
 
     // Secrets are reported but never written into the TOML.

@@ -310,6 +310,9 @@ fn validate_security(config: &AppConfig) -> Result<(), String> {
 }
 
 fn validate_providers(config: &AppConfig) -> Result<(), String> {
+    if !(1..=4096).contains(&config.voices.max_profiles) {
+        return Err("voices.max_profiles must be 1..=4096".into());
+    }
     let qwen = &config.providers.qwen3;
     if !["cpu", "auto", "cuda"].contains(&qwen.device.as_str()) {
         return Err("providers.qwen3.device must be one of: cpu, auto, cuda".to_string());
@@ -320,8 +323,8 @@ fn validate_providers(config: &AppConfig) -> Result<(), String> {
     if qwen.revision.trim().is_empty() || qwen.revision.len() > 128 {
         return Err("providers.qwen3.revision must be 1-128 characters".to_string());
     }
-    if !(1..=64).contains(&qwen.max_concurrent) {
-        return Err("providers.qwen3.max_concurrent must be between 1 and 64".to_string());
+    if qwen.max_concurrent != 1 {
+        return Err("providers.qwen3.max_concurrent must be 1: one model-owning worker serializes native inference".to_string());
     }
     if !(1..=1024).contains(&qwen.cache_entries) {
         return Err("providers.qwen3.cache_entries must be between 1 and 1024".to_string());
@@ -344,8 +347,8 @@ fn validate_providers(config: &AppConfig) -> Result<(), String> {
     if gpt.revision.trim().is_empty() || gpt.revision.len() > 128 {
         return Err("providers.gpt_sovits.revision must be 1-128 characters".to_string());
     }
-    if !(1..=64).contains(&gpt.max_concurrent) {
-        return Err("providers.gpt_sovits.max_concurrent must be between 1 and 64".to_string());
+    if gpt.max_concurrent != 1 {
+        return Err("providers.gpt_sovits.max_concurrent must be 1: mutable reference conditioning is serialized".to_string());
     }
     if !(1..=1024).contains(&gpt.cache_entries) {
         return Err("providers.gpt_sovits.cache_entries must be between 1 and 1024".to_string());
