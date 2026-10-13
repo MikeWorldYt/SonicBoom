@@ -206,7 +206,7 @@ mod worker {
         Load {
             dir: String,
             device: String,
-            reply: mpsc::Sender<Result<ModelInfo, String>>,
+            reply: mpsc::SyncSender<Result<ModelInfo, String>>,
         },
         Prompt {
             key: String,
@@ -216,7 +216,7 @@ mod worker {
             mode: CloneMode,
             capacity: usize,
             control: std::sync::Arc<crate::tts::control::InferenceControl>,
-            reply: mpsc::Sender<Result<(), String>>,
+            reply: mpsc::SyncSender<Result<(), String>>,
         },
         Synthesize {
             text: String,
@@ -225,10 +225,11 @@ mod worker {
             max_tokens: usize,
             seed: Option<u64>,
             control: std::sync::Arc<crate::tts::control::InferenceControl>,
-            reply: mpsc::Sender<Result<(Vec<f32>, u32), String>>,
+            reply: mpsc::SyncSender<Result<(Vec<f32>, u32), String>>,
         },
         Unload,
         Shutdown,
+        Invalidate,
     }
 
     pub struct WorkerHandle {
@@ -245,11 +246,14 @@ mod worker {
     }
 
     impl WorkerHandle {
-        pub fn spawn(metrics: std::sync::Arc<super::QwenMetrics>) -> Result<Self, String> {
+        pub fn spawn(
+            metrics: std::sync::Arc<super::QwenMetrics>,
+            invalidations: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+        ) -> Result<Self, String> {
             let (tx, rx) = mpsc::sync_channel::<Job>(2);
             let thread = std::thread::Builder::new()
                 .name("qwen3-inference".to_owned())
-                .spawn(move || run(rx, metrics))
+                .spawn(move || run(rx, metrics, invalidations))
                 .map_err(|e| format!("could not start qwen3 worker thread: {e}"))?;
             Ok(Self {
                 tx,
@@ -259,12 +263,17 @@ mod worker {
 
         fn call<T: Send + 'static>(
             &self,
-            make: impl FnOnce(mpsc::Sender<T>) -> Job,
+            make: impl FnOnce(mpsc::SyncSender<T>) -> Job,
         ) -> Result<T, String> {
-            let (reply_tx, reply_rx) = mpsc::channel::<T>();
+            let (reply_tx, reply_rx) = mpsc::sync_channel::<T>(1);
             self.tx
                 .try_send(make(reply_tx))
-                .map_err(|_| "qwen3 worker thread is gone".to_string())?;
+                .map_err(|error| match error {
+                    mpsc::TrySendError::Full(_) => "qwen3 worker queue is full".to_string(),
+                    mpsc::TrySendError::Disconnected(_) => {
+                        "qwen3 worker thread is gone".to_string()
+                    }
+                })?;
             loop {
                 match reply_rx.recv_timeout(std::time::Duration::from_secs(30)) {
                     Ok(result) => return Ok(result),
@@ -335,18 +344,39 @@ mod worker {
             })?
         }
 
+        pub fn invalidate(&self) {
+            let _ = self.tx.try_send(Job::Invalidate);
+        }
         pub fn unload(&self) {
             let _ = self.tx.send(Job::Unload);
         }
     }
 
-    fn run(rx: mpsc::Receiver<Job>, metrics: std::sync::Arc<super::QwenMetrics>) {
+    fn run(
+        rx: mpsc::Receiver<Job>,
+        metrics: std::sync::Arc<super::QwenMetrics>,
+        invalidations: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    ) {
         let mut model: Option<Qwen3TTS> = None;
         let mut prompts: HashMap<String, qwen3_tts::VoiceClonePrompt> = HashMap::new();
         let mut order: VecDeque<String> = VecDeque::new();
         while let Ok(job) = rx.recv() {
+            let stale = invalidations
+                .lock()
+                .map(|mut set| std::mem::take(&mut *set))
+                .unwrap_or_default();
+            if stale.contains("*") {
+                prompts.clear();
+                order.clear();
+            } else {
+                prompts.retain(|key, _| !stale.iter().any(|prefix| key.starts_with(prefix)));
+                order.retain(|key| !stale.iter().any(|prefix| key.starts_with(prefix)));
+            }
             match job {
                 Job::Load { dir, device, reply } => {
+                    model = None;
+                    prompts.clear();
+                    order.clear();
                     let result = (|| {
                         let parsed = qwen3_tts::parse_device(&device).map_err(|e| e.to_string())?;
                         let loaded =
@@ -400,20 +430,41 @@ mod worker {
                             tracing::debug!(cache_hit = true, "Qwen conditioning");
                             return Ok(());
                         }
-                        metrics
-                            .misses
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let prepared = key
+                            .split_once('|')
+                            .filter(|(prefix, _)| prefix.len() == 64)
+                            .and_then(|(_, base)| prompts.get(base))
+                            .map(|p| qwen3_tts::VoiceClonePrompt {
+                                speaker_embedding: p.speaker_embedding.clone(),
+                                ref_codes: p.ref_codes.clone(),
+                                ref_text_ids: p.ref_text_ids.clone(),
+                            });
+                        if prepared.is_some() {
+                            metrics
+                                .hits
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        } else {
+                            metrics
+                                .misses
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         let preparation = std::time::Instant::now();
                         let reference = AudioBuffer::new(pcm, rate);
                         let ref_text = match mode {
                             CloneMode::Icl => transcript.as_deref(),
                             CloneMode::XVector => None,
                         };
-                        let prompt = qwen3_tts::control::scope(
-                            std::sync::Arc::new(move |stage, frames| control.update(stage, frames)),
-                            || active.create_voice_clone_prompt(&reference, ref_text),
-                        )
-                        .map_err(|e| e.to_string())?;
+                        let prompt = if let Some(prepared) = prepared {
+                            prepared
+                        } else {
+                            qwen3_tts::control::scope(
+                                std::sync::Arc::new(move |stage, frames| {
+                                    control.update(stage, frames)
+                                }),
+                                || active.create_voice_clone_prompt(&reference, ref_text),
+                            )
+                            .map_err(|e| e.to_string())?
+                        };
                         let prompt_bytes = |p: &qwen3_tts::VoiceClonePrompt| {
                             p.speaker_embedding.elem_count()
                                 * p.speaker_embedding.dtype().size_in_bytes()
@@ -461,6 +512,8 @@ mod worker {
                     control,
                     reply,
                 } => {
+                    let span = tracing::info_span!("qwen_job", job_id = %control.id);
+                    let _span = span.enter();
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         if control.stopped() {
                             return Err("inference cancelled or deadline exceeded".into());
@@ -505,6 +558,7 @@ mod worker {
                     let _ = reply.send(result);
                 }
                 Job::Shutdown => break,
+                Job::Invalidate => {}
                 Job::Unload => {
                     model = None;
                     prompts.clear();
@@ -523,7 +577,9 @@ mod worker {
 /// absent assets — never silence, never a Supertonic fallback.
 pub struct QwenProvider {
     config: Mutex<QwenConfig>,
+    pending_config: Mutex<Option<QwenConfig>>,
     metrics: Arc<QwenMetrics>,
+    invalidations: Arc<Mutex<std::collections::HashSet<String>>>,
     state: Mutex<QwenState>,
     /// Worker owning the native model (`Send`, not `Sync`: only the
     /// channel handle lives here, so this provider stays `Sync`).
@@ -549,7 +605,9 @@ impl QwenProvider {
     pub fn new(config: QwenConfig) -> Arc<Self> {
         Arc::new(Self {
             config: Mutex::new(config),
+            pending_config: Mutex::new(None),
             metrics: Arc::new(QwenMetrics::default()),
+            invalidations: Arc::new(Mutex::new(std::collections::HashSet::new())),
             state: Mutex::new(QwenState {
                 loaded_model: None,
                 selected_device: None,
@@ -571,8 +629,14 @@ impl QwenProvider {
         // Request-scoped config sync must never block the Tokio executor on
         // active native computation. Adopt a busy model's change on the next sync.
         let Ok(_lifecycle) = self.inference_lock.try_lock() else {
+            if let Ok(mut pending) = self.pending_config.lock() {
+                *pending = Some(config);
+            }
             return;
         };
+        if let Ok(mut pending) = self.pending_config.lock() {
+            *pending = None;
+        }
         let old = self.config_snapshot();
         let reload = old.enabled != config.enabled
             || old.model_dir != config.model_dir
@@ -601,6 +665,29 @@ impl QwenProvider {
         }
     }
 
+    fn model_change_pending(&self) -> bool {
+        let current = self.config_snapshot();
+        self.pending_config
+            .lock()
+            .map(|p| {
+                p.as_ref()
+                    .is_some_and(|next| !Self::same_model(&current, next))
+            })
+            .unwrap_or(true)
+    }
+    pub fn reload_pending(&self) -> bool {
+        self.pending_config
+            .lock()
+            .map(|p| p.is_some())
+            .unwrap_or(true)
+    }
+    fn same_model(a: &QwenConfig, b: &QwenConfig) -> bool {
+        a.enabled == b.enabled
+            && a.model_dir == b.model_dir
+            && a.model_id == b.model_id
+            && a.revision == b.revision
+            && a.device == b.device
+    }
     fn config_snapshot(&self) -> QwenConfig {
         self.config.lock().map(|c| c.clone()).unwrap_or_default()
     }
@@ -613,7 +700,7 @@ impl QwenProvider {
             .lock()
             .map(|current| *current != next)
             .unwrap_or(true);
-        if changed {
+        if changed || self.reload_pending() {
             self.reconfigure(next);
         }
     }
@@ -707,9 +794,9 @@ impl QwenProvider {
                 "reference audio is empty; provide a 3-10 s authorized recording",
             ));
         }
-        if sample_rate == 0 {
+        if !(8000..=192000).contains(&sample_rate) {
             return Err(ProviderError::invalid_voice(
-                "reference sample rate must be nonzero",
+                "reference sample rate must be 8000..=192000 Hz",
             ));
         }
         let secs = pcm.len() as f64 / f64::from(sample_rate);
@@ -737,6 +824,10 @@ impl QwenProvider {
         hex::encode(hasher.finalize())
     }
 
+    fn voice_prefix(voice: &str) -> String {
+        use sha2::Digest;
+        format!("{}|", hex::encode(sha2::Sha256::digest(voice.as_bytes())))
+    }
     fn conditioning_key(
         &self,
         reference_hash: &str,
@@ -770,7 +861,7 @@ impl QwenProvider {
             .inference_lock
             .lock()
             .map_err(|_| ProviderError::inference_failed("qwen lifecycle lock poisoned"))?;
-        if &self.config_snapshot() != expected {
+        if self.model_change_pending() || !Self::same_model(&self.config_snapshot(), expected) {
             return Err(ProviderError::loading("obsolete Qwen load discarded"));
         }
         if self.is_loaded() {
@@ -790,13 +881,14 @@ impl QwenProvider {
                 ));
             }
             super::assets::verify_local_files(&config.model_dir, &qwen_manifest(model_id)?)?;
+            let _load_resource = super::worker::model_load_guard();
             let device_name = match effective {
                 EffectiveDevice::Cpu => "cpu",
                 EffectiveDevice::Cuda => "cuda",
             };
             // Take or spawn the worker; a dead worker is replaced, never reused.
             let spawn = || {
-                worker::WorkerHandle::spawn(self.metrics.clone())
+                worker::WorkerHandle::spawn(self.metrics.clone(), self.invalidations.clone())
                     .map_err(ProviderError::inference_failed)
             };
             let mut slot = self
@@ -825,6 +917,14 @@ impl QwenProvider {
                 }
             };
             drop(slot);
+            if self.model_change_pending() {
+                if let Ok(mut slot) = self.worker.lock() {
+                    *slot = None;
+                }
+                return Err(ProviderError::loading(
+                    "obsolete Qwen native load discarded",
+                ));
+            }
             // Reject incompatible variants explicitly: only Base weights
             // carry the speaker encoder required for cloning.
             use qwen3_tts::ModelType;
@@ -893,6 +993,7 @@ impl QwenProvider {
         }
         let this = Arc::clone(self);
         tokio::spawn(async move {
+            let retry_token = hf_token.clone();
             let result = this.ensure_async(hf_token).await;
             if let Ok(mut state) = this.state.lock() {
                 state.ensuring = false;
@@ -903,6 +1004,12 @@ impl QwenProvider {
                     Err(error) => state.load_error = Some(error.message().to_string()),
                 }
             }
+            if result
+                .as_ref()
+                .is_err_and(|error| error.message().contains("obsolete"))
+            {
+                this.kick_ensure_if_needed(retry_token);
+            }
             if let Err(error) = &result {
                 tracing::error!("qwen3 background prepare failed: {error}");
             }
@@ -910,6 +1017,11 @@ impl QwenProvider {
     }
 
     async fn ensure_async(self: &Arc<Self>, hf_token: Option<String>) -> Result<(), ProviderError> {
+        if !cfg!(feature = "qwen") {
+            return Err(ProviderError::model_missing(
+                "native backend is not compiled; rebuild with --features qwen",
+            ));
+        }
         let config = self.config_snapshot();
         if !config.enabled {
             return Err(ProviderError::model_missing(
@@ -937,6 +1049,9 @@ impl QwenProvider {
             || false,
         )
         .await?;
+        if let Ok(mut state) = self.state.lock() {
+            state.downloading = false;
+        }
         // Heavy native load runs on a blocking thread; the async task only
         // records the outcome. Reload failure keeps the last working model.
         let loader = Arc::clone(self);
@@ -955,6 +1070,9 @@ impl QwenProvider {
     /// loaded model and no error yet (hot-reload path). Called during
     /// request-scoped registry sync; never blocks.
     pub fn kick_ensure_if_needed(self: &Arc<Self>, hf_token: Option<String>) {
+        if self.reload_pending() {
+            return;
+        }
         let resident = self.is_loaded();
         let needs = {
             let config = self.config_snapshot();
@@ -992,6 +1110,9 @@ impl QwenProvider {
     fn not_loaded_error(&self) -> ProviderError {
         let state = self.state.lock().ok();
         match state {
+            Some(state) if state.ensuring && state.download_progress >= 1.0 => {
+                ProviderError::loading("Qwen assets verified; native model is loading")
+            }
             Some(state) if state.ensuring && state.downloading => ProviderError::loading(format!(
                 "qwen3 model is downloading ({:.0}% complete)",
                 state.download_progress * 100.0
@@ -1017,9 +1138,13 @@ impl QwenProvider {
         reference_rate: u32,
         transcript: Option<&str>,
         mode: CloneMode,
+        voice: Option<&str>,
     ) -> Result<String, ProviderError> {
         let hash = format!("{reference_rate}:{}", Self::reference_hash(reference_pcm));
-        let key = self.conditioning_key(&hash, transcript, mode);
+        let base_key = self.conditioning_key(&hash, transcript, mode);
+        let key = voice
+            .map(|voice| format!("{}{base_key}", Self::voice_prefix(voice)))
+            .unwrap_or(base_key);
         let worker = self
             .worker
             .lock()
@@ -1035,14 +1160,18 @@ impl QwenProvider {
                 self.config_snapshot().cache_capacity,
             )
             .map_err(|error| {
-                if error.contains("worker reply lost") || error.contains("worker thread is gone") {
-                    if let Ok(mut state) = self.state.lock() {
-                        state.loaded_model = None;
-                        state.selected_device = None;
-                        state.load_error = None;
-                    }
+                if (error.contains("worker reply lost") || error.contains("worker thread is gone"))
+                    && let Ok(mut state) = self.state.lock()
+                {
+                    state.loaded_model = None;
+                    state.selected_device = None;
+                    state.load_error = None;
                 }
-                ProviderError::inference_failed(error)
+                if error.contains("queue is full") {
+                    ProviderError::busy(error)
+                } else {
+                    ProviderError::inference_failed(error)
+                }
             })?;
         Ok(key)
     }
@@ -1096,7 +1225,9 @@ impl TtsProvider for QwenProvider {
         let native = true;
         let installed = Self::validate_assets(&config.model_dir).is_ok();
         let ready = loaded.is_some() && (!native || self.is_loaded());
-        let state = if ready {
+        let state = if self.reload_pending() {
+            ProviderStatusState::Loading
+        } else if ready {
             ProviderStatusState::Ready
         } else if error.is_some() {
             ProviderStatusState::Error
@@ -1109,8 +1240,12 @@ impl TtsProvider for QwenProvider {
             .or_else(|| Self::resolve_device(config.device).ok())
             .map(|d| d.as_str().to_string());
         let detail = error.or_else(|| {
-            if ready {
+            if self.reload_pending() {
+                Some("Reconfiguration waiting for active model work to stop".into())
+            } else if ready {
                 None
+            } else if ensuring && progress >= 1.0 {
+                Some("Qwen assets verified; loading native model".into())
             } else if ensuring && downloading {
                 Some(format!(
                     "qwen3 weights downloading ({:.0}% complete)",
@@ -1172,6 +1307,23 @@ impl TtsProvider for QwenProvider {
         }
     }
 
+    fn invalidate_voice(&self, voice: &str) {
+        if let Ok(mut pending) = self.invalidations.lock() {
+            if pending.len() >= 1024 {
+                pending.clear();
+                pending.insert("*".into());
+            } else {
+                pending.insert(Self::voice_prefix(voice));
+            }
+        }
+        #[cfg(feature = "qwen")]
+        if let Ok(worker) = self.worker.try_lock()
+            && let Some(worker) = worker.as_ref()
+        {
+            worker.invalidate();
+        }
+    }
+
     fn prepare_reference(
         &self,
         model_id: &str,
@@ -1203,7 +1355,7 @@ impl TtsProvider for QwenProvider {
         if self.is_loaded() {
             let _guard = crate::tts::control::lock_cancellable(&self.inference_lock)
                 .map_err(ProviderError::inference_failed)?;
-            let _ = self.ensure_prompt(reference_pcm, reference_rate, transcript, mode)?;
+            let _ = self.ensure_prompt(reference_pcm, reference_rate, transcript, mode, None)?;
         }
         Ok(key)
     }
@@ -1211,7 +1363,15 @@ impl TtsProvider for QwenProvider {
     fn synthesize(&self, request: &ProviderRequest) -> Result<PcmAudio, ProviderError> {
         Self::check_model(&request.model)?;
         Self::check_language(&request.language)?;
-        let effective = Self::resolve_device(request.device)?;
+        let effective = if request.device == DevicePreference::Auto {
+            self.state
+                .lock()
+                .ok()
+                .and_then(|s| s.selected_device)
+                .unwrap_or(EffectiveDevice::Cpu)
+        } else {
+            Self::resolve_device(request.device)?
+        };
         if request.text.trim().is_empty() {
             return Err(ProviderError::invalid_voice("text cannot be empty"));
         }
@@ -1270,7 +1430,22 @@ impl TtsProvider for QwenProvider {
             }
             let _guard = crate::tts::control::lock_cancellable(&self.inference_lock)
                 .map_err(ProviderError::inference_failed)?;
+            if self.reload_pending() {
+                return Err(ProviderError::loading(
+                    "model reconfiguration pending; retry after the provider is ready",
+                ));
+            }
             let config = self.config_snapshot();
+            if let Some(control) = crate::tts::control::current() {
+                let device = self
+                    .state
+                    .lock()
+                    .ok()
+                    .and_then(|s| s.selected_device)
+                    .map(|d| d.as_str())
+                    .unwrap_or("unknown");
+                control.set_context("qwen3", &request.model, &request.voice, device);
+            }
             if request.device != DevicePreference::Auto
                 && self
                     .state
@@ -1291,6 +1466,7 @@ impl TtsProvider for QwenProvider {
                 reference.sample_rate,
                 request.reference_transcript.as_deref(),
                 mode,
+                Some(&request.voice),
             )?;
             let worker = self
                 .worker
@@ -1315,7 +1491,11 @@ impl TtsProvider for QwenProvider {
                         state.selected_device = None;
                         state.load_error = None;
                     }
-                    ProviderError::inference_failed(error)
+                    if error.contains("queue is full") {
+                        ProviderError::busy(error)
+                    } else {
+                        ProviderError::inference_failed(error)
+                    }
                 })?;
             let _ = effective;
             if samples.is_empty()
@@ -1356,6 +1536,30 @@ mod tests {
         request
     }
 
+    #[tokio::test]
+    async fn busy_reconfiguration_is_retried_without_another_request() {
+        let pool = super::super::ProviderPool::new();
+        pool.qwen.reconfigure(QwenConfig {
+            enabled: true,
+            ..Default::default()
+        });
+        let guard = pool.qwen.inference_lock.lock().unwrap();
+        pool.sync_versioned(
+            1,
+            QwenConfig::default(),
+            super::super::gptsovits::GptSovitsConfig::default(),
+        );
+        assert!(pool.qwen.reload_pending());
+        drop(guard);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while pool.qwen.reload_pending() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!pool.qwen.status().enabled);
+    }
     #[test]
     fn inference_options_do_not_retire_a_model() {
         let p = provider();

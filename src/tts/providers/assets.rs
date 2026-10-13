@@ -44,12 +44,13 @@ fn safe_join(model_dir: &Path, rel: &str) -> Result<PathBuf, ProviderError> {
     Ok(model_dir.join(rel_path))
 }
 
-fn hex_sha256_file(path: &Path, on_bytes: impl Fn(u64)) -> Result<String, String> {
+fn hex_sha256_file(path: &Path, limit: u64, on_bytes: impl Fn(u64)) -> Result<String, String> {
     use std::io::Read;
-    let mut input = std::io::BufReader::with_capacity(
+    let input = std::io::BufReader::with_capacity(
         256 * 1024,
         std::fs::File::open(path).map_err(|e| format!("could not open {}: {e}", path.display()))?,
     );
+    let mut input = input.take(limit.saturating_add(1));
     let mut hasher = sha2::Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     let mut hashed = 0u64;
@@ -149,7 +150,7 @@ fn verify_cached_progress(
     if std::fs::metadata(path).map_err(|e| e.to_string())?.len() != file.size {
         return Ok(false);
     }
-    let valid = hex_sha256_file(path, on_bytes)?.eq_ignore_ascii_case(file.sha256);
+    let valid = hex_sha256_file(path, file.size, on_bytes)?.eq_ignore_ascii_case(file.sha256);
     if valid && before.is_some() && identity(path) == before {
         let tmp = metadata_path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
         use std::io::Write;
@@ -171,7 +172,9 @@ fn verify_cached_progress(
             let _ = std::fs::remove_file(tmp);
         }
     }
-    Ok(valid && (before.is_none() || identity(path) == before))
+    Ok(valid
+        && std::fs::metadata(path).is_ok_and(|m| m.len() == file.size)
+        && (before.is_none() || identity(path) == before))
 }
 
 /// Verify an offline/native load against the same trust root as downloads.
@@ -197,6 +200,39 @@ impl Drop for StagedFile {
     }
 }
 
+/// Reap only our process-tagged staging files whose Linux owner process
+/// no longer exists. Active downloads in another server are left intact.
+fn cleanup_staging(dest: &Path) {
+    #[cfg(target_os = "linux")]
+    if let (Some(parent), Some(stem)) = (dest.parent(), dest.file_stem().and_then(|s| s.to_str()))
+        && let Ok(entries) = std::fs::read_dir(parent)
+    {
+        for entry in entries.take(1024).flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let Some(tail) = name
+                .strip_prefix(&format!("{stem}."))
+                .and_then(|n| n.strip_suffix(".part"))
+            else {
+                continue;
+            };
+            let Some((pid, id)) = tail.split_once('.') else {
+                continue;
+            };
+            if let Ok(pid) = pid.parse::<u32>()
+                && uuid::Uuid::parse_str(id).is_ok()
+                && !Path::new("/proc").join(pid.to_string()).exists()
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = dest;
+}
+
 /// Download every missing or corrupt file, verifying hashes.
 ///
 /// `on_progress` receives overall 0.0–1.0 progress and is safe to call
@@ -212,7 +248,10 @@ pub async fn ensure_pinned_files(
     on_download_start: impl Fn() + Send + Sync,
     cancelled: impl Fn() -> bool + Send + Sync,
 ) -> Result<(), ProviderError> {
-    let total: u64 = files.iter().map(|f| f.size).sum::<u64>().max(1);
+    let total: u64 = files
+        .iter()
+        .fold(0u64, |sum, f| sum.saturating_add(f.size))
+        .max(1);
     let mut done: u64 = 0;
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
@@ -226,6 +265,8 @@ pub async fn ensure_pinned_files(
             )));
         }
         let dest = safe_join(model_dir, file.path)?;
+        let sweep_path = dest.clone();
+        let _ = tokio::task::spawn_blocking(move || cleanup_staging(&sweep_path)).await;
         let mut valid = false;
         if dest.is_file() {
             let check_path = dest.clone();
@@ -291,7 +332,11 @@ pub async fn ensure_pinned_files(
                 response.status()
             )));
         }
-        let tmp = dest.with_extension(format!("{}.part", uuid::Uuid::new_v4().simple()));
+        let tmp = dest.with_extension(format!(
+            "{}.{}.part",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
         let _staging = StagedFile(tmp.clone());
         let mut out = tokio::fs::File::create(&tmp).await.map_err(|e| {
             ProviderError::model_missing(format!("could not stage '{}': {e}", file.path))
@@ -321,6 +366,9 @@ pub async fn ensure_pinned_files(
                     file.path
                 ))
             })?;
+            if file_done.saturating_add(chunk.len() as u64) > file.size {
+                return Err(ProviderError::model_missing("asset exceeds pinned size"));
+            }
             hasher.update(&chunk);
             out.write_all(&chunk).await.map_err(|e| {
                 ProviderError::model_missing(format!("could not stage '{}': {e}", file.path))
@@ -362,6 +410,30 @@ pub async fn ensure_pinned_files(
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn crash_cleanup_reaps_only_owned_dead_process_staging() {
+        let dir = std::env::temp_dir().join(format!("sb-orphan-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dead = dir.join(format!(
+            "model.4294967295.{}.part",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let live = dir.join(format!(
+            "model.{}.{}.part",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let unrelated = dir.join("other.part");
+        for path in [&dead, &live, &unrelated] {
+            std::fs::write(path, b"partial").unwrap();
+        }
+        cleanup_staging(&dir.join("model.safetensors"));
+        assert!(!dead.exists());
+        assert!(live.exists());
+        assert!(unrelated.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
     #[test]
     fn verification_metadata_recovers_and_detects_changed_assets() {
         let dir = std::env::temp_dir().join(format!("sb-integrity-{}", uuid::Uuid::new_v4()));

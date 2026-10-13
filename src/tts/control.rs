@@ -10,10 +10,20 @@ use std::{
 };
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ExecutionContext {
+    pub provider: String,
+    pub model: String,
+    pub voice: String,
+    pub effective_device: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Progress {
+    pub context: Option<ExecutionContext>,
     pub stage: String,
     pub frames: usize,
     pub elapsed_secs: f64,
+    pub audio_secs: Option<f64>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub stage_secs: std::collections::BTreeMap<String, f64>,
 }
@@ -34,18 +44,45 @@ impl InferenceControl {
             id: uuid::Uuid::new_v4().to_string(),
             cancelled: AtomicBool::new(false),
             started,
-            deadline: started + timeout,
+            deadline: started + timeout.min(Duration::from_secs(86400)),
             progress: Mutex::new(Progress {
+                context: None,
                 stage: "queued".into(),
                 frames: 0,
                 elapsed_secs: 0.0,
+                audio_secs: None,
                 updated_at: chrono::Utc::now(),
                 stage_secs: std::collections::BTreeMap::new(),
             }),
         })
     }
+    pub fn set_audio_duration(&self, seconds: f64) {
+        if seconds.is_finite() && seconds > 0.0 {
+            self.progress
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .audio_secs = Some(seconds);
+        }
+    }
+    pub fn set_context(&self, provider: &str, model: &str, voice: &str, device: &str) {
+        self.progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .context = Some(ExecutionContext {
+            provider: provider.into(),
+            model: model.into(),
+            voice: voice.into(),
+            effective_device: device.into(),
+        });
+    }
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
+    }
+    pub fn cancellation_requested(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+    pub fn deadline_exceeded(&self) -> bool {
+        Instant::now() >= self.deadline
     }
     pub fn stopped(&self) -> bool {
         self.cancelled.load(Ordering::Acquire) || Instant::now() >= self.deadline

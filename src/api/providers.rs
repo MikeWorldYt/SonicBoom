@@ -13,6 +13,7 @@ use sonicboom::tts::providers::qwen::QwenConfig;
 use sonicboom::tts::providers::supertonic::SupertonicProvider;
 use sonicboom::tts::providers::types::DevicePreference;
 
+#[cfg(test)]
 use crate::config::model::AppConfig;
 
 fn parse_device(raw: &str) -> DevicePreference {
@@ -53,6 +54,7 @@ pub fn map_gpt_config(gpt: &crate::config::model::GptSovitsConfig) -> GptSovitsC
 /// Optional providers are always registered; when disabled or uninstalled
 /// they report that state explicitly and reject synthesis with actionable
 /// errors. One failing optional provider can never take down Supertonic.
+#[cfg(test)]
 pub fn build_registry(
     config: &AppConfig,
     supertonic_handle: Option<Arc<ModelHandle>>,
@@ -73,6 +75,23 @@ pub fn build_registry(
     pool.registry(supertonic)
 }
 
+/// Versioned request registry: stale request snapshots cannot roll back a
+/// resident provider after another request adopted a newer configuration.
+pub async fn build_registry_for_state(state: &crate::AppState) -> TtsProviderRegistry {
+    let (generation, config) = state.config.versioned_snapshot().await;
+    state.providers.sync_versioned(
+        generation,
+        map_qwen_config(&config.providers.qwen3),
+        map_gpt_config(&config.providers.gpt_sovits),
+    );
+    state.providers.kick_ensure_if_needed(None);
+    let supertonic = Arc::new(SupertonicProvider::new(config.model.cache_dir.clone()));
+    if let Some(handle) = supertonic_handle(state).await {
+        supertonic.attach_ready(handle, &config.model.revision);
+    }
+    state.providers.registry(supertonic)
+}
+
 /// Snapshot the live Supertonic handle (if the model is ready).
 pub async fn supertonic_handle(state: &crate::AppState) -> Option<Arc<ModelHandle>> {
     let status = state.model_status.read().await;
@@ -88,10 +107,10 @@ pub async fn get_providers(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
 ) -> impl axum::response::IntoResponse {
     use axum::http::{StatusCode, header};
-    let config = state.config.get().await;
-    let registry = build_registry(&config, supertonic_handle(&state).await, &state.providers);
+    let registry = build_registry_for_state(&state).await;
     let body = serde_json::json!({
         "providers": registry.statuses(),
+        "diagnostics": { "qwen3": state.providers.qwen.diagnostics() },
         "capabilities": [
             registry.get("supertonic").map(|p| p.capabilities()),
             registry.get("qwen3").map(|p| p.capabilities()),
@@ -113,8 +132,7 @@ pub async fn get_provider_status(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<impl axum::response::IntoResponse, crate::error::AppError> {
     use axum::http::{StatusCode, header};
-    let config = state.config.get().await;
-    let registry = build_registry(&config, supertonic_handle(&state).await, &state.providers);
+    let registry = build_registry_for_state(&state).await;
     match registry.get(id.trim()) {
         Some(provider) => {
             let body = serde_json::to_string(&provider.status())
@@ -149,6 +167,9 @@ pub fn provider_error_to_app(
         | ProviderErrorKind::Loading
         | ProviderErrorKind::DeviceUnavailable => {
             crate::error::AppError::ServiceUnavailable(error.message().to_string())
+        }
+        ProviderErrorKind::InferenceFailed if error.message().contains("maximum frame limit without EOS") => {
+            crate::error::AppError::ServiceUnavailable("Generation reached the configured frame limit without EOS; audio was withheld. Use shorter text or increase providers.qwen3.max_tokens within its validated range.".into())
         }
         ProviderErrorKind::InferenceFailed => {
             crate::error::AppError::internal(error.message().to_string())

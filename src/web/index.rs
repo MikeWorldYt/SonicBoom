@@ -126,15 +126,7 @@ fn voice_options_html(voices: &[String]) -> String {
 /// (not a table) so long model lists and detail strings stay readable.
 /// This page never implies an unavailable model can synthesize.
 async fn provider_rows_html(state: &AppState) -> String {
-    let config = state.config.get().await;
-    let handle = {
-        let status = state.model_status.read().await;
-        match &*status {
-            ModelStatus::Ready(handle) => Some(std::sync::Arc::clone(handle)),
-            _ => None,
-        }
-    };
-    let registry = crate::api::providers::build_registry(&config, handle, &state.providers);
+    let registry = crate::api::providers::build_registry_for_state(state).await;
     let mut cards = Vec::new();
     for status in registry.statuses() {
         let toggle_path = provider_toggle_path(&status.provider_id);
@@ -187,6 +179,7 @@ fn provider_toggle_path(provider_id: &str) -> Option<String> {
 /// One provider status card. All interpolated strings are escaped for
 /// both element and attribute contexts so provider metadata can never
 /// break out of the markup.
+#[allow(clippy::too_many_arguments)] // Mirrors the provider card template fields.
 fn provider_card_html(
     provider_id: &str,
     state: &str,
