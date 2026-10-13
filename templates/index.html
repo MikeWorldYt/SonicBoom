@@ -4,102 +4,99 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SonicBoom TTS</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230066cc'/%3E%3Cpath d='M3 6v4h2l3 2V4L5 6H3z' fill='white'/%3E%3Cpath d='M10 5.5a3.5 3.5 0 010 5M11.5 4a6 6 0 010 8' stroke='white' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/index.css">
 </head>
 <body data-model-ready="MODEL_READY_JS">
-<div class="card">
-  <h1>SonicBoom TTS</h1>
-  <div class="model-status" id="modelStatus" STATUS_HIDDEN>STATUS_MSG</div>
-
-  <div class="form-group" id="tokenGroup">
-    <label for="apiToken">API Token (create one in the <a href="/admin">admin panel</a>)</label>
-    <input type="password" id="apiToken" placeholder="Paste your API token here" autocomplete="off" spellcheck="false">
-  </div>
-
-  <div class="form-group">
-    <label for="text">Text Input</label>
-    <textarea id="text" placeholder="Enter text to convert to speech..."></textarea>
-  </div>
-
-  <div class="row">
-    <div class="field">
-      <label for="voice">Voice Model</label>
-      <select id="voice" VOICE_DISABLED>
-        VOICE_OPTIONS
-      </select>
+<div class="page">
+  <header class="page-header">
+    <div>
+      <h1>SonicBoom TTS</h1>
+      <p class="subtitle">Synthesize speech, check voice engines, and tune the server.</p>
     </div>
-    <div class="field">
-      <label for="lang">Language</label>
-      <select id="lang" VOICE_DISABLED>
-        <option value="en">English</option>
-        <option value="ko">Korean</option>
-        <option value="ja">Japanese</option>
-        <option value="zh">Chinese</option>
-        <option value="es">Spanish</option>
-        <option value="pt">Portuguese</option>
-        <option value="fr">French</option>
-        <option value="de">German</option>
-        <option value="it">Italian</option>
-        <option value="ru">Russian</option>
-        <option value="ar">Arabic</option>
-        <option value="hi">Hindi</option>
-        <option value="nl">Dutch</option>
-        <option value="pl">Polish</option>
-        <option value="tr">Turkish</option>
-        <option value="vi">Vietnamese</option>
-        <option value="id">Indonesian</option>
-        <option value="th">Thai</option>
-        <option value="sv">Swedish</option>
-        <option value="da">Danish</option>
-        <option value="fi">Finnish</option>
-        <option value="el">Greek</option>
-        <option value="cs">Czech</option>
-        <option value="sk">Slovak</option>
-        <option value="sl">Slovenian</option>
-        <option value="hr">Croatian</option>
-        <option value="ro">Romanian</option>
-        <option value="hu">Hungarian</option>
-        <option value="bg">Bulgarian</option>
-        <option value="uk">Ukrainian</option>
-        <option value="lt">Lithuanian</option>
-        <option value="lv">Latvian</option>
-        <option value="et">Estonian</option>
-      </select>
+    <div class="model-status" id="modelStatus" STATUS_HIDDEN>STATUS_MSG</div>
+  </header>
+
+  <div class="layout">
+    <div class="col-main">
+      <section class="card" aria-labelledby="tts-heading">
+        <h2 id="tts-heading">Synthesize</h2>
+        <div class="form-group" id="tokenGroup">
+          <label for="apiToken">API token <span class="hint">(<a href="/admin">create one in the admin panel</a>)</span></label>
+          <input type="password" id="apiToken" placeholder="Paste your API token here" autocomplete="off" spellcheck="false">
+        </div>
+
+        <div class="form-group">
+          <div class="label-row">
+            <label for="text">Text</label>
+            <span class="char-count" id="charCount">0 characters</span>
+          </div>
+          <textarea id="text" placeholder="Enter text to convert to speech..."></textarea>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="voice">Voice</label>
+            <select id="voice" VOICE_DISABLED>
+              VOICE_OPTIONS
+            </select>
+          </div>
+          <div class="field">
+            <label for="lang">Language</label>
+            <!-- Options are rendered from the LANGUAGES const in index.js. -->
+            <select id="lang" VOICE_DISABLED></select>
+          </div>
+        </div>
+
+        <button id="btn" class="primary" BTN_DISABLED>Generate speech</button>
+        <div id="status" role="status"></div>
+        <audio id="player" controls></audio>
+      </section>
+
+      <section class="card" aria-labelledby="providers-heading">
+        <div class="section-head">
+          <h2 id="providers-heading">Voice engines</h2>
+          <span class="hint">Live status from the server</span>
+        </div>
+        <div class="provider-list">PROVIDERS_ROWS</div>
+        <p class="muted">Voice cloning (Qwen3-TTS, GPT-SoVITS) needs an API token and a reference recording uploaded via <code>POST /api/voices/clones</code>. See <code>docs/providers.md</code> for setup. Cloning controls stay off until the engine reports ready.</p>
+      </section>
+    </div>
+
+    <div class="col-side">
+      <section class="card" aria-labelledby="config-heading">
+        <div class="section-head">
+          <h2 id="config-heading">Configuration</h2>
+          <span class="hint" id="configRevision"></span>
+        </div>
+
+        <dl class="stat-grid" id="configStats">
+          <div><dt>Watcher</dt><dd id="statWatcher">—</dd></div>
+          <div><dt>Last reload</dt><dd id="statReload">—</dd></div>
+          <div><dt>Pending</dt><dd id="statPending">none</dd></div>
+        </dl>
+        <p class="muted mono-line">Config file: <code id="configPath"></code></p>
+
+        <div class="toolbar">
+          <button type="button" class="btn-secondary" id="configOpen" hidden>Open file</button>
+          <button type="button" class="btn-secondary" id="configRefresh">Refresh</button>
+          <button type="button" class="btn-secondary" id="configReload">Reload file</button>
+          <button type="button" class="btn-secondary" id="configValidate">Validate</button>
+        </div>
+
+        <div class="config-filters">
+          <input type="search" id="configSearch" placeholder="Search settings (e.g. port, volume, timeout)" aria-label="Search settings">
+          <select id="configCategory" aria-label="Filter by category"></select>
+        </div>
+
+        <div id="configNotice" role="status"></div>
+        <div id="configGroups" aria-live="polite">
+          <p class="muted" id="configLoading">Loading configuration…</p>
+        </div>
+        <pre id="configError" role="alert" hidden></pre>
+      </section>
     </div>
   </div>
-
-  <button id="btn" BTN_DISABLED>Generate Speech</button>
-  <div id="status"></div>
-  <audio id="player" controls></audio>
-
-  <details id="providers">
-    <summary>Voice providers</summary>
-    <table>
-      <thead><tr><th>Provider</th><th>Models</th><th>Status</th><th>Device</th><th>Active model</th><th>Details</th></tr></thead>
-      <tbody>PROVIDERS_ROWS</tbody>
-    </table>
-    <p>Voice cloning (Qwen3-TTS, GPT-SoVITS) requires an API token and an authorized reference recording uploaded via <code>POST /api/voices/clones</code>. See <code>docs/providers.md</code> for setup. No new frontend framework is used; cloning controls stay disabled here until the provider reports ready.</p>
-  </details>
-
-  <details id="configuration">
-    <summary>Configuration</summary>
-    <p id="configStatus" role="status">Loading configuration…</p>
-    <p>Config file: <code id="configPath"></code></p>
-    <button type="button" id="configOpen" hidden>Open config file</button>
-    <button type="button" id="configRefresh">Refresh</button>
-    <button type="button" id="configReload">Reload file</button>
-    <button type="button" id="configValidate">Validate file</button>
-    <form id="configForm">
-      <label for="configSetting">Setting</label>
-      <select id="configSetting"></select>
-      <p id="configDescription"></p>
-      <label for="configValue">Configured value</label>
-      <input id="configValue">
-      <p id="configApply"></p>
-      <button type="submit">Save setting</button>
-    </form>
-    <pre id="configError" role="alert"></pre>
-  </details>
 
   <p class="footer">
     Powered by <a href="https://huggingface.co/Supertone/supertonic-3" target="_blank" rel="noopener">Supertonic 3</a>

@@ -83,6 +83,7 @@ pub async fn get_index(State(state): State<AppState>) -> Response {
         .replace("VOICE_DISABLED", if !model_ready { "disabled" } else { "" })
         .replace("BTN_DISABLED", if !model_ready { "disabled" } else { "" })
         .replace("MODEL_READY_JS", if model_ready { "true" } else { "false" });
+    let html = versioned_asset_urls(&html);
 
     (
         StatusCode::OK,
@@ -90,6 +91,20 @@ pub async fn get_index(State(state): State<AppState>) -> Response {
         html,
     )
         .into_response()
+}
+
+/// Rewrite bare `/static/…` URLs to content-hashed versions so a
+/// redeploy can never serve stale cached JS/CSS against new HTML.
+/// Extracted as a pure function so it is unit-testable without `AppState`.
+fn versioned_asset_urls(html: &str) -> String {
+    html.replace(
+        "/static/index.js",
+        &super::static_files::asset_url("index.js"),
+    )
+    .replace(
+        "/static/index.css",
+        &super::static_files::asset_url("index.css"),
+    )
 }
 
 /// Render voice names as `<option>` elements. Model metadata is still
@@ -107,9 +122,9 @@ fn voice_options_html(voices: &[String]) -> String {
 }
 
 /// Server-rendered provider summary (public metadata only: no secrets,
-/// no reference transcripts, no audio bytes). Controls for cloning
-/// providers stay disabled with a clear reason until the provider reports
-/// `ready`; this page never implies an unavailable model can synthesize.
+/// no reference transcripts, no audio bytes). Rendered as status cards
+/// (not a table) so long model lists and detail strings stay readable.
+/// This page never implies an unavailable model can synthesize.
 async fn provider_rows_html(state: &AppState) -> String {
     let config = state.config.get().await;
     let handle = {
@@ -120,25 +135,84 @@ async fn provider_rows_html(state: &AppState) -> String {
         }
     };
     let registry = crate::api::providers::build_registry(&config, handle, &state.providers);
-    let mut rows = Vec::new();
+    let mut cards = Vec::new();
     for status in registry.statuses() {
-        let capabilities = registry.get(&status.provider_id).map(|p| p.capabilities());
-        let models = capabilities
-            .map(|c| c.models.join(", "))
-            .unwrap_or_default();
-        let device = status.effective_device.as_deref().unwrap_or("—");
-        let reason = status.detail.as_deref().unwrap_or("");
-        rows.push(format!(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-            html_escape(&status.provider_id),
-            html_escape(&models),
-            html_escape(status.state.as_str()),
-            html_escape(device),
-            html_escape(&status.active_model.unwrap_or_default()),
-            html_escape(reason),
+        cards.push(provider_card_html(
+            &status.provider_id,
+            status.state.as_str(),
+            status.effective_device.as_deref().unwrap_or("—"),
+            &registry
+                .get(&status.provider_id)
+                .map(|p| p.capabilities().models.join(", "))
+                .unwrap_or_default(),
+            status.active_model.as_deref().unwrap_or(""),
+            status.detail.as_deref().unwrap_or(""),
         ));
     }
-    rows.join("\n")
+    cards.join("\n")
+}
+
+/// One provider status card. All interpolated strings are escaped for
+/// both element and attribute contexts so provider metadata can never
+/// break out of the markup.
+/// Badge class for a provider lifecycle state.
+fn provider_badge_class(state: &str) -> &'static str {
+    match state {
+        "ready" => "badge-ready",
+        "loading" => "badge-loading",
+        "disabled" => "badge-disabled",
+        _ => "badge-not_installed",
+    }
+}
+
+/// Human-readable label for a provider lifecycle state (`not_installed` → `not installed`).
+fn provider_state_label(state: &str) -> String {
+    state.replace('_', " ")
+}
+
+/// One escaped card paragraph; the shared wrapper keeps every
+/// optional provider line in a single component.
+fn card_para(class: &str, body: String) -> String {
+    format!("<p class=\"{class}\">{body}</p>")
+}
+
+/// One provider status card. All interpolated strings are escaped for
+/// both element and attribute contexts so provider metadata can never
+/// break out of the markup.
+fn provider_card_html(
+    provider_id: &str,
+    state: &str,
+    device: &str,
+    models: &str,
+    active_model: &str,
+    detail: &str,
+) -> String {
+    let mut card = format!(
+        "<div class=\"provider\"><div class=\"provider-top\"><span class=\"provider-name\">{}</span> \
+         <span class=\"badge {}\">{}</span> \
+         <span class=\"device-chip\">{}</span></div>",
+        html_escape(provider_id),
+        provider_badge_class(state),
+        html_escape(&provider_state_label(state)),
+        html_escape(device),
+    );
+    if !models.is_empty() {
+        card.push_str(&card_para(
+            "provider-models",
+            format!("<span>Models:</span> {}", html_escape(models)),
+        ));
+    }
+    if !active_model.is_empty() {
+        card.push_str(&card_para(
+            "provider-active",
+            format!("Active model: <code>{}</code>", html_escape(active_model)),
+        ));
+    }
+    if !detail.is_empty() {
+        card.push_str(&card_para("provider-detail", html_escape(detail)));
+    }
+    card.push_str("</div>");
+    card
 }
 
 fn html_escape(s: &str) -> String {
@@ -151,7 +225,10 @@ fn html_escape(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{TEMPLATE, voice_options_html};
+    use super::{
+        TEMPLATE, card_para, provider_badge_class, provider_card_html, provider_state_label,
+        versioned_asset_urls, voice_options_html,
+    };
 
     #[test]
     fn index_template_has_no_inline_script_or_style() {
@@ -161,6 +238,99 @@ mod tests {
         assert!(TEMPLATE.contains(r#"<script src="/static/index.js" defer></script>"#));
         assert!(TEMPLATE.contains(r#"<link rel="stylesheet" href="/static/index.css">"#));
         assert!(TEMPLATE.contains("data-model-ready="));
+    }
+
+    #[test]
+    fn index_template_has_config_browser_hooks() {
+        for id in [
+            "configSearch",
+            "configCategory",
+            "configGroups",
+            "configRefresh",
+            "configReload",
+            "configValidate",
+            "configNotice",
+            "provider-list",
+            "charCount",
+        ] {
+            assert!(TEMPLATE.contains(id), "template missing #{id}");
+        }
+        assert!(
+            !TEMPLATE.contains("<table>"),
+            "provider table should be cards, not a table"
+        );
+    }
+
+    #[test]
+    fn language_options_live_in_js_not_in_template() {
+        // The language list exists once (LANGUAGES in index.js); the
+        // template only carries the empty select plus a pointer comment.
+        assert!(TEMPLATE.contains(r#"<select id="lang""#));
+        assert!(!TEMPLATE.contains(r#"<option value="ko">"#));
+        assert!(!TEMPLATE.contains(r#"<option value="et">"#));
+        assert!(TEMPLATE.contains("LANGUAGES const in index.js"));
+    }
+
+    #[test]
+    fn provider_badge_classes_cover_every_state() {
+        assert_eq!(provider_badge_class("ready"), "badge-ready");
+        assert_eq!(provider_badge_class("loading"), "badge-loading");
+        assert_eq!(provider_badge_class("disabled"), "badge-disabled");
+        // Unknown/future states fall back to the warning badge, never unstyled.
+        assert_eq!(provider_badge_class("not_installed"), "badge-not_installed");
+        assert_eq!(provider_badge_class("error"), "badge-not_installed");
+        assert_eq!(provider_state_label("not_installed"), "not installed");
+    }
+
+    #[test]
+    fn card_paragraph_wraps_body_in_one_component() {
+        assert_eq!(
+            card_para("provider-detail", "hi".to_string()),
+            r#"<p class="provider-detail">hi</p>"#
+        );
+    }
+
+    #[test]
+    fn rendered_assets_are_content_versioned() {
+        let html = versioned_asset_urls(TEMPLATE);
+        assert!(!html.contains(r#"src="/static/index.js""#), "{html}");
+        assert!(!html.contains(r#"href="/static/index.css""#), "{html}");
+        assert!(html.contains("/static/index.js?v="), "{html}");
+        assert!(html.contains("/static/index.css?v="), "{html}");
+    }
+
+    #[test]
+    fn provider_cards_render_status_badges() {
+        let html = provider_card_html(
+            "qwen3",
+            "disabled",
+            "—",
+            "qwen3-tts-0.6b-base",
+            "",
+            "provider disabled in configuration",
+        );
+        assert!(html.contains("provider-name"), "{html}");
+        assert!(html.contains("badge-disabled"), "{html}");
+        assert!(html.contains("qwen3-tts-0.6b-base"), "{html}");
+        assert!(!html.contains("<table"), "{html}");
+        assert!(!html.contains("<tr"), "{html}");
+    }
+
+    #[test]
+    fn provider_cards_escape_hostile_metadata() {
+        let html = provider_card_html(
+            "\"><script>alert(1)</script>",
+            "not_installed",
+            "cpu",
+            "a<b",
+            "m\"odel",
+            "d&t",
+        );
+        assert!(!html.contains("<script>"), "{html}");
+        assert!(html.contains("&quot;&gt;&lt;script&gt;"), "{html}");
+        assert!(html.contains("a&lt;b"), "{html}");
+        assert!(html.contains("m&quot;odel"), "{html}");
+        assert!(html.contains("d&amp;t"), "{html}");
     }
 
     #[test]
