@@ -34,6 +34,18 @@
           <textarea id="text" placeholder="Enter text to convert to speech..."></textarea>
         </div>
 
+        <div class="form-group">
+          <div class="label-row">
+            <label for="model">Model</label>
+            <button type="button" class="btn-inline" id="modelRefresh" title="Reload engines, voices, and languages">Refresh</button>
+          </div>
+          <!-- Options are rendered live from /api/providers in index.js. -->
+          <select id="model" VOICE_DISABLED>
+            <option value="supertonic-3">supertonic-3 (built-in voices)</option>
+          </select>
+          <p class="muted" id="modelHint"></p>
+        </div>
+
         <div class="row">
           <div class="field">
             <label for="voice">Voice</label>
@@ -59,7 +71,7 @@
           <span class="hint">Live status from the server</span>
         </div>
         <div class="provider-list">PROVIDERS_ROWS</div>
-        <p class="muted">Voice cloning (Qwen3-TTS, GPT-SoVITS) needs an API token and a reference recording uploaded via <code>POST /api/voices/clones</code>. See <code>docs/providers.md</code> for setup. Cloning controls stay off until the engine reports ready.</p>
+        <p class="muted">Voice cloning (Qwen3-TTS, GPT-SoVITS) needs an API token and a reference recording uploaded via <code>POST /api/voices/clones</code>. See <code>docs/providers.md</code> for setup. Use Enable on a card to download and start an engine — no file edits or restarts needed.</p>
       </section>
     </div>
 

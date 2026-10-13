@@ -1118,6 +1118,21 @@ mod tests {
     }
 
     #[test]
+    fn disabled_provider_never_starts_a_download() {
+        // Only Supertonic weights download by default: a disabled
+        // provider ignores kicks and stays `disabled`, never `loading`.
+        let p = QwenProvider::new(QwenConfig {
+            enabled: false,
+            ..QwenConfig::default()
+        });
+        p.kick_ensure_if_needed(None);
+        assert!(!p.is_ensuring());
+        let status = p.status();
+        assert!(!status.enabled);
+        assert_eq!(status.state, ProviderStatusState::Disabled);
+    }
+
+    #[test]
     fn required_assets_include_speech_tokenizer() {
         assert!(QWEN_REQUIRED_FILES.contains(&"speech_tokenizer/model.safetensors"));
         assert!(QWEN_REQUIRED_FILES.contains(&"model.safetensors"));

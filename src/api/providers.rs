@@ -193,8 +193,13 @@ mod tests {
         // request-scoped registry build; without installed weights the
         // provider reports `not_installed` (never a silent fallback) and
         // Supertonic keeps serving.
+        // Uses an isolated empty dir: the workspace `./models` may hold
+        // real downloaded weights, which must not flip this expectation.
+        let dir = std::env::temp_dir().join(format!("qwen-no-weights-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
         let mut config = AppConfig::default();
         config.providers.qwen3.enabled = true;
+        config.providers.qwen3.model_dir = dir.clone();
         // Built without the background kick on purpose: kicking would
         // start a real download in this test.
         let pool = sonicboom::tts::providers::ProviderPool::new();
@@ -213,5 +218,6 @@ mod tests {
         );
         assert_eq!(status.effective_device.as_deref(), Some("cpu"));
         assert!(registry.get("supertonic").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

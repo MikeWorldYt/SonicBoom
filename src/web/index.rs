@@ -137,6 +137,7 @@ async fn provider_rows_html(state: &AppState) -> String {
     let registry = crate::api::providers::build_registry(&config, handle, &state.providers);
     let mut cards = Vec::new();
     for status in registry.statuses() {
+        let toggle_path = provider_toggle_path(&status.provider_id);
         cards.push(provider_card_html(
             &status.provider_id,
             status.state.as_str(),
@@ -147,14 +148,13 @@ async fn provider_rows_html(state: &AppState) -> String {
                 .unwrap_or_default(),
             status.active_model.as_deref().unwrap_or(""),
             status.detail.as_deref().unwrap_or(""),
+            toggle_path.as_deref(),
+            status.enabled,
         ));
     }
     cards.join("\n")
 }
 
-/// One provider status card. All interpolated strings are escaped for
-/// both element and attribute contexts so provider metadata can never
-/// break out of the markup.
 /// Badge class for a provider lifecycle state.
 fn provider_badge_class(state: &str) -> &'static str {
     match state {
@@ -176,6 +176,14 @@ fn card_para(class: &str, body: String) -> String {
     format!("<p class=\"{class}\">{body}</p>")
 }
 
+/// Config path behind a provider card's enable toggle, if the schema
+/// defines one (`providers.<id>.enabled`). Only cloning providers have
+/// one; the built-in engine's card renders without a toggle.
+fn provider_toggle_path(provider_id: &str) -> Option<String> {
+    let path = format!("providers.{}.enabled", provider_id.replace('-', "_"));
+    crate::config::schema().contains_key(&path).then_some(path)
+}
+
 /// One provider status card. All interpolated strings are escaped for
 /// both element and attribute contexts so provider metadata can never
 /// break out of the markup.
@@ -186,6 +194,8 @@ fn provider_card_html(
     models: &str,
     active_model: &str,
     detail: &str,
+    toggle_path: Option<&str>,
+    enabled: bool,
 ) -> String {
     let mut card = format!(
         "<div class=\"provider\"><div class=\"provider-top\"><span class=\"provider-name\">{}</span> \
@@ -211,6 +221,20 @@ fn provider_card_html(
     if !detail.is_empty() {
         card.push_str(&card_para("provider-detail", html_escape(detail)));
     }
+    if let Some(path) = toggle_path {
+        let (class, label) = if enabled {
+            ("btn-secondary provider-toggle", "Disable")
+        } else {
+            ("btn-small provider-toggle", "Enable")
+        };
+        card.push_str(&format!(
+            "<div class=\"provider-actions\"><button type=\"button\" class=\"{}\" data-path=\"{}\" data-enabled=\"{}\">{}</button></div>",
+            class,
+            html_escape(path),
+            if enabled { "true" } else { "false" },
+            label,
+        ));
+    }
     card.push_str("</div>");
     card
 }
@@ -227,7 +251,7 @@ fn html_escape(s: &str) -> String {
 mod tests {
     use super::{
         TEMPLATE, card_para, provider_badge_class, provider_card_html, provider_state_label,
-        versioned_asset_urls, voice_options_html,
+        provider_toggle_path, versioned_asset_urls, voice_options_html,
     };
 
     #[test]
@@ -238,6 +262,19 @@ mod tests {
         assert!(TEMPLATE.contains(r#"<script src="/static/index.js" defer></script>"#));
         assert!(TEMPLATE.contains(r#"<link rel="stylesheet" href="/static/index.css">"#));
         assert!(TEMPLATE.contains("data-model-ready="));
+    }
+
+    #[test]
+    fn index_template_has_synthesis_model_hooks() {
+        // Model selector (populated live from /api/providers), its Refresh
+        // control, and the per-model hint line for the voice/language switch.
+        for id in ["model", "modelRefresh", "modelHint", "voice", "lang"] {
+            assert!(TEMPLATE.contains(id), "template missing #{id}");
+        }
+        assert!(
+            TEMPLATE.contains(r#"<option value="supertonic-3">"#),
+            "template missing the default supertonic model option"
+        );
     }
 
     #[test]
@@ -308,6 +345,8 @@ mod tests {
             "qwen3-tts-0.6b-base",
             "",
             "provider disabled in configuration",
+            None,
+            false,
         );
         assert!(html.contains("provider-name"), "{html}");
         assert!(html.contains("badge-disabled"), "{html}");
@@ -325,12 +364,68 @@ mod tests {
             "a<b",
             "m\"odel",
             "d&t",
+            Some("providers.qwen3.enabled\"><script>"),
+            false,
         );
         assert!(!html.contains("<script>"), "{html}");
         assert!(html.contains("&quot;&gt;&lt;script&gt;"), "{html}");
         assert!(html.contains("a&lt;b"), "{html}");
         assert!(html.contains("m&quot;odel"), "{html}");
         assert!(html.contains("d&amp;t"), "{html}");
+        assert!(
+            html.contains("data-path=\"providers.qwen3.enabled&quot;&gt;&lt;script&gt;\""),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn provider_toggle_paths_come_from_the_schema() {
+        assert_eq!(
+            provider_toggle_path("qwen3").as_deref(),
+            Some("providers.qwen3.enabled")
+        );
+        assert_eq!(
+            provider_toggle_path("gpt-sovits").as_deref(),
+            Some("providers.gpt_sovits.enabled")
+        );
+        // The built-in engine and unknown ids have no toggle.
+        assert_eq!(provider_toggle_path("supertonic"), None);
+        assert_eq!(provider_toggle_path("nope"), None);
+    }
+
+    #[test]
+    fn provider_toggle_button_reflects_enabled_state() {
+        let html = provider_card_html(
+            "qwen3",
+            "disabled",
+            "—",
+            "",
+            "",
+            "",
+            Some("providers.qwen3.enabled"),
+            false,
+        );
+        assert!(html.contains("provider-toggle"), "{html}");
+        assert!(
+            html.contains("data-path=\"providers.qwen3.enabled\""),
+            "{html}"
+        );
+        assert!(html.contains("data-enabled=\"false\""), "{html}");
+        assert!(html.contains(">Enable<"), "{html}");
+        let html = provider_card_html(
+            "qwen3",
+            "ready",
+            "cpu",
+            "",
+            "m",
+            "",
+            Some("providers.qwen3.enabled"),
+            true,
+        );
+        assert!(html.contains("data-enabled=\"true\""), "{html}");
+        assert!(html.contains(">Disable<"), "{html}");
+        let html = provider_card_html("supertonic", "ready", "cpu", "", "m", "", None, true);
+        assert!(!html.contains("provider-toggle"), "{html}");
     }
 
     #[test]

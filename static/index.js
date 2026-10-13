@@ -29,6 +29,8 @@ const Endpoints = Object.freeze({
   configAction: action => `/api/config/${action}`,
   configOpen: '/api/config/open',
   providers: '/api/providers',
+  voices: '/api/voices',
+  voicePreview: id => `/api/voices/${encodeURIComponent(id)}/preview`,
 });
 
 const SettingType = Object.freeze({
@@ -392,7 +394,68 @@ function providerCard(status, models) {
   if (status.detail) {
     card.append(el('p', { cls: 'provider-detail', text: status.detail }));
   }
+  const togglePath = providerTogglePath(status.provider_id);
+  if (togglePath) {
+    const actions = el('div', { cls: 'provider-actions' });
+    const toggle = el('button', {
+      cls: `${status.enabled ? 'btn-secondary' : 'btn-small'} provider-toggle`,
+      text: status.enabled ? 'Disable' : 'Enable',
+    });
+    toggle.type = 'button';
+    toggle.dataset.path = togglePath;
+    toggle.dataset.enabled = status.enabled ? 'true' : 'false';
+    actions.append(toggle);
+    card.append(actions);
+  }
   return card;
+}
+
+/**
+ * Config path behind a provider's enable toggle, derived from the live
+ * schema (`providers.<id>.enabled`). Unknown ids and the built-in engine
+ * have none, so their cards render without a toggle.
+ */
+function providerTogglePath(providerId) {
+  const path = `providers.${providerId.replace(/-/g, '_')}.enabled`;
+  return Object.hasOwn(configSchema, path) ? path : null;
+}
+
+async function patchConfig(changes) {
+  return configRequest(Endpoints.config, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expected_revision: configSnapshot.revision, changes }),
+  });
+}
+
+/** Flip a provider's enabled flag via the config API (persisted, hot-apply,
+ *  no file edits or restarts). Enabling kicks off the model download;
+ *  progress shows on the card through the regular status polling. */
+async function setProviderEnabled(path, enabled, button) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = enabled ? 'Starting…' : 'Stopping…';
+  try {
+    configSnapshot = await configRequest(Endpoints.config);
+    const changes = {};
+    setNestedValue(changes, path, enabled);
+    try {
+      await patchConfig(changes);
+    } catch (error) {
+      if (!/conflict/i.test(error.message)) throw error;
+      configSnapshot = await configRequest(Endpoints.config);
+      await patchConfig(changes);
+    }
+    providerSignature = null;
+    await refreshConfiguration();
+    await refreshProviders();
+    setNotice('ok', `${path} ${enabled ? 'enabled — the engine will download and start.' : 'disabled.'}`);
+  } catch (error) {
+    setNotice('error', error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
 }
 
 let providerSignature = null;
@@ -416,19 +479,129 @@ async function refreshProviders() {
     for (const status of body.providers || []) {
       list.append(providerCard(status, modelsById.get(status.provider_id) || ''));
     }
+    lastProviders = body;
+    await renderModelOptions();
   } catch {
     // Network or auth failure: leave the server-rendered cards in place.
   }
 }
 
+// --- Model, voice, and language selection -----------------------------------
+// Supertonic aliases (tts-1, tts-1-hd) synthesize byte-identically on one
+// engine, so the form offers a single Supertonic entry; every *ready*
+// cloning engine adds its own models, voiced by your uploaded profiles.
+
+const SUPERTONIC_PROVIDER = 'supertonic';
+const SUPERTONIC_MODEL = 'supertonic-3';
+
+const modelSelect = document.getElementById('model');
+const modelHint = document.getElementById('modelHint');
+
+let builtinVoiceOptions = [];
+let voiceProfiles = [];
+let lastProviders = null;
+
+function snapshotBuiltinVoices() {
+  builtinVoiceOptions = [...voiceSelect.options].map(o => ({ value: o.value, text: o.textContent }));
+}
+
+/** Models of providers reporting `ready`, excluding the Supertonic engine. */
+function readyCloningModels() {
+  if (!lastProviders) return [];
+  const caps = new Map(
+    (lastProviders.capabilities || []).filter(Boolean).map(c => [c.provider_id, c]),
+  );
+  const out = [];
+  for (const status of lastProviders.providers || []) {
+    if (status.state !== 'ready' || status.provider_id === SUPERTONIC_PROVIDER) continue;
+    const capability = caps.get(status.provider_id);
+    for (const model of capability?.models || []) {
+      out.push({ model, provider: status.provider_id, languages: capability?.languages || [] });
+    }
+  }
+  return out;
+}
+
+function selectedModelMeta() {
+  const model = modelSelect.value || SUPERTONIC_MODEL;
+  if (model === SUPERTONIC_MODEL) return { kind: 'supertonic', model };
+  const found = readyCloningModels().find(m => m.model === model);
+  if (!found) return { kind: 'supertonic', model: SUPERTONIC_MODEL };
+  return { kind: 'cloning', ...found };
+}
+
+async function renderModelOptions() {
+  const previous = modelSelect.value || SUPERTONIC_MODEL;
+  const options = [optionEl(SUPERTONIC_MODEL, `${SUPERTONIC_MODEL} (built-in voices)`)];
+  for (const { model, provider } of readyCloningModels()) {
+    options.push(optionEl(model, `${model} (${provider})`));
+  }
+  modelSelect.innerHTML = '';
+  for (const option of options) modelSelect.append(option);
+  modelSelect.value = options.some(o => o.value === previous) ? previous : SUPERTONIC_MODEL;
+  if (modelSelect.value !== previous) await syncVoicesToModel();
+}
+
+/** Rebuild the voice and language dropdowns for the selected model:
+ *  built-in styles for Supertonic, your uploaded profiles (plus the
+ *  provider's languages) for cloning engines. */
+async function syncVoicesToModel() {
+  const meta = selectedModelMeta();
+  if (meta.kind === 'supertonic') {
+    voiceSelect.innerHTML = '';
+    for (const { value, text } of builtinVoiceOptions) voiceSelect.append(optionEl(value, text));
+    populateLanguages(null, 'en');
+    modelHint.textContent = '';
+    return;
+  }
+  modelHint.textContent = `Cloned voice: synthesizes with your uploaded reference for ${meta.model}.`;
+  const needToken = serverInfo?.auth?.required && !apiTokenInput.value.trim();
+  let profiles = [];
+  if (!needToken) {
+    try {
+      const body = await configRequest(Endpoints.voices);
+      profiles = body.data || [];
+    } catch {
+      profiles = [];
+    }
+  }
+  voiceProfiles = profiles;
+  const matches = profiles.filter(p => p.model === meta.model);
+  voiceSelect.innerHTML = '';
+  if (matches.length === 0) {
+    const empty = optionEl('', needToken ? 'Enter your API token to load voices' : 'No voice profiles for this model yet');
+    empty.disabled = true;
+    voiceSelect.append(empty);
+    setStatus(
+      needToken
+        ? 'Enter your API token to load voice profiles.'
+        : 'No voice profiles for this model yet — create one with POST /api/voices/clones.',
+      true,
+    );
+  } else {
+    const seen = new Set();
+    for (const profile of matches) {
+      let text = profile.name;
+      if (seen.has(profile.name)) text = `${profile.name} (${String(profile.id).slice(0, 8)})`;
+      seen.add(profile.name);
+      voiceSelect.append(optionEl(profile.id, text));
+    }
+    setStatus('');
+  }
+  populateLanguages(meta.languages.length > 0 ? meta.languages : null, matches[0]?.language);
+}
+
 // --- 3. TTS synthesis -------------------------------------------------------
 
-function populateLanguages() {
+function populateLanguages(allowed = null, preferred = 'en') {
+  const list = allowed && allowed.length > 0
+    ? LANGUAGES.filter(l => allowed.includes(l.code))
+    : [...LANGUAGES];
   langSelect.innerHTML = '';
-  for (const { code, label } of LANGUAGES) {
+  for (const { code, label } of list) {
     langSelect.append(optionEl(code, label));
   }
-  langSelect.value = 'en';
+  langSelect.value = list.some(l => l.code === preferred) ? preferred : (list[0]?.code ?? 'en');
 }
 
 async function loadServerInfo() {
@@ -450,10 +623,41 @@ async function loadServerInfo() {
 }
 
 // Initialize Event Listeners
+snapshotBuiltinVoices();
 populateLanguages();
 loadServerInfo().then(() => {
   refreshConfiguration();
   refreshProviders();
+});
+modelSelect.addEventListener('change', () => void syncVoicesToModel());
+voiceSelect.addEventListener('change', () => {
+  const meta = selectedModelMeta();
+  if (meta.kind !== 'cloning') return;
+  const profile = voiceProfiles.find(p => String(p.id) === voiceSelect.value);
+  if (profile?.language) {
+    populateLanguages(meta.languages.length > 0 ? meta.languages : null, profile.language);
+  }
+});
+document.getElementById('modelRefresh').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    providerSignature = null;
+    await refreshProviders();
+    await syncVoicesToModel();
+    if (!statusDiv.classList.contains('error')) {
+      setStatus('Engines, voices, and languages refreshed.', false);
+    }
+  } finally {
+    button.disabled = false;
+  }
+});
+// One delegated listener covers the server-rendered cards and every
+// live re-render: toggles are identified by their data attributes.
+document.querySelector('.provider-list').addEventListener('click', event => {
+  const button = event.target.closest('.provider-toggle');
+  if (!button || button.disabled) return;
+  void setProviderEnabled(button.dataset.path, button.dataset.enabled !== 'true', button);
 });
 generateBtn.addEventListener('click', synthesize);
 textInput.addEventListener('input', updateCharCount);
@@ -481,6 +685,7 @@ async function synthesize() {
 
   const voice = voiceSelect.value;
   const lang = langSelect.value;
+  const meta = selectedModelMeta();
 
   // Set UI Loading State
   generateBtn.disabled = true;
@@ -489,14 +694,31 @@ async function synthesize() {
   setStatus('');
 
   try {
-    const params = new URLSearchParams({ voice, lang });
-    const resp = await apiFetch(`${Endpoints.tts}?${params.toString()}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain',
-      },
-      body: text,
-    });
+    let resp;
+    if (meta.kind === 'cloning') {
+      // Cloned voices synthesize through their own profile: same
+      // text/plain body as /api/tts, routed by profile id.
+      if (!voice) {
+        throw new Error('Create a voice profile for this model first (POST /api/voices/clones).');
+      }
+      const params = new URLSearchParams({ language: lang });
+      resp = await apiFetch(`${Endpoints.voicePreview(voice)}?${params.toString()}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain',
+        },
+        body: text,
+      });
+    } else {
+      const params = new URLSearchParams({ voice, lang });
+      resp = await apiFetch(`${Endpoints.tts}?${params.toString()}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain',
+        },
+        body: text,
+      });
+    }
 
     if (!resp.ok) {
       const msg = await resp.text().catch(() => resp.statusText);
@@ -762,6 +984,10 @@ async function refreshConfiguration() {
           ? Object.fromEntries(schema.settings.map(s => [s.path, s]))
           : schema;
         buildCategoryOptions();
+        // Provider toggles are schema-gated: cards rendered before the
+        // schema arrived have none, so force one re-render to add them.
+        providerSignature = null;
+        await refreshProviders();
       }
       if (previous) setNotice('ok', 'Configuration changed — list refreshed.');
       renderConfigGroups();

@@ -14,7 +14,10 @@ path = "src/lib.rs"
 [features]
 # Standalone server build (default). The TikTools process plugin deliberately
 # enables neither the server nor playback feature.
-default = ["server", "playback"]
+# Native voice-cloning backends ship in default builds so every engine works
+# without a rebuild; providers stay disabled by default, so only the
+# Supertonic weights download until an engine is enabled.
+default = ["server", "playback", "qwen", "gpt-sovits"]
 server = [
     "dep:axum",
     "dep:tower",
@@ -45,8 +48,9 @@ cuda = ["ort/cuda"]
 rocm = ["ort/rocm"]
 # NOTE: `coreml`, `cuda`, and `rocm` are mutually exclusive per platform.
 # Enable at most one of them when building, e.g. `cargo build --release --features cuda`.
-# Optional native voice-cloning providers (disabled by default; Supertonic 3
-# stays the default provider). Both run in-process with no Python/PyTorch.
+# Optional native voice-cloning providers (compiled into default builds but
+# disabled by default; Supertonic 3 stays the default provider). Both run
+# in-process with no Python/PyTorch.
 # `qwen` enables the Qwen3-TTS (Candle) provider on CPU; `qwen-cuda` additionally
 # enables NVIDIA CUDA for Qwen (implies `qwen`; never implies `ort/cuda`).
 # `gpt-sovits` enables the GPT-SoVITS ONNX provider (CPU execution provider

@@ -197,6 +197,23 @@ button {
 .btn-small:hover:not(:disabled) { background: var(--primary-hover); }
 .btn-small:disabled { background: var(--primary-disabled); cursor: not-allowed; }
 
+.btn-inline {
+  padding: 0.25rem 0.65rem;
+  background: #fff;
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  font-size: 0.78rem;
+  font-weight: 600;
+  width: auto;
+}
+
+.btn-inline:hover:not(:disabled) { background: var(--bg-inset); border-color: #c4c9d0; }
+.btn-inline:disabled { opacity: 0.55; cursor: not-allowed; }
+
+#modelHint:empty { display: none; }
+#modelHint { margin-top: 0.4rem; }
+
 #status {
   margin-top: 0.9rem;
   font-size: 0.85rem;
@@ -267,10 +284,11 @@ audio { margin-top: 1rem; width: 100%; display: none; }
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-.provider-models { font-size: 0.82rem; color: var(--text-primary); margin-top: 0.45rem; }
+.provider-models { font-size: 0.82rem; color: var(--text-primary); margin-top: 0.45rem; overflow-wrap: break-word; }
 .provider-models span { color: var(--text-secondary); }
 .provider-detail { font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.3rem; line-height: 1.5; word-break: break-word; }
-.provider-active { font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.3rem; }
+.provider-actions { margin-top: 0.6rem; }
+.provider-active { font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.3rem; overflow-wrap: break-word; }
 .provider-active code { color: var(--text-primary); }
 
 /* Config */

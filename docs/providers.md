@@ -82,9 +82,10 @@ supported, and the effective device is always reported.
 
 ## Qwen3-TTS setup (CPU smoke test)
 
-1. Build with the provider: `cargo build --features qwen` (default
-   Cargo features stay on for the server).
-2. Set `enabled = true` and hot-reload (or restart): the server downloads
+1. No special build: the Qwen backend ships in default builds (lean
+   `--no-default-features` builds add `--features qwen`).
+2. Press Enable on the qwen3 card (or set `enabled = true` and hot-reload):
+   the server downloads
    the pinned bundle into `[providers.qwen3] model_dir`
    (`./models/qwen3-tts`) in parallel with serving, verifying every file
    against the manifest below. For **Qwen3-TTS-12Hz-0.6B-Base** the bundle
@@ -159,7 +160,8 @@ GPT-SoVITS v2Pro (`mikv39/gpt-sovits-onnx-custom`
    rejected with export guidance; never place them in the bundle directory
    expecting them to load. Only `gpt-sovits-v2pro-onnx` has a verified
    manifest today; v2/v2ProPlus fail with explicit guidance.
-2. Build: `cargo build --features gpt-sovits`. CPU execution provider
+2. No special build: the GPT-SoVITS backend ships in default builds (lean
+   builds add `--features gpt-sovits`). CPU execution provider
    only; GPU EPs are experimental/unsupported for this provider.
 3. Watch `/api/providers/gpt-sovits/status` until `ready`.
 4. Create a profile — reference WAV **and exact transcript are required**:
