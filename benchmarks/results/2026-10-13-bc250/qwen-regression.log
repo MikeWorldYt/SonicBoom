@@ -12,4 +12,3 @@ qwen x_vector (en): 63360 samples @ 24000 Hz (2.6s)
 ok
 
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 178.94s
-

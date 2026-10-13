@@ -1006,12 +1006,12 @@ async function synthesize(options = {}) {
     else params.set('voice', voice);
     let job = { id: activeJobId };
     if (!activeJobId) {
-    const created = await apiFetch(`/api/tts/jobs?${params}`, {
-      method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text,
-    });
-    if (!created.ok) throw new Error(`HTTP ${created.status}: ${await created.text()}`);
-    job = await created.json();
-    activeJobId = job.id;
+      const created = await apiFetch(`/api/tts/jobs?${params}`, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text,
+      });
+      if (!created.ok) throw new Error(`HTTP ${created.status}: ${await created.text()}`);
+      job = await created.json();
+      activeJobId = job.id;
     }
     cancelGeneration.hidden = false;
     cancelGeneration.disabled = false;
