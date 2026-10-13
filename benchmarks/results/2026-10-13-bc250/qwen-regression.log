@@ -1,0 +1,15 @@
+
+running 3 tests
+test qwen_cpu_icl_generates_audible_wav ... qwen load: 26.8s
+qwen icl synth: 79.1s
+qwen icl (ja): 84480 samples @ 24000 Hz (3.5s)
+ok
+test qwen_cpu_load_reports_ready ... qwen load-only: 28.6s
+ok
+test qwen_cpu_x_vector_generates_without_transcript ... qwen load: 7.3s
+qwen x_vector synth: 35.6s
+qwen x_vector (en): 63360 samples @ 24000 Hz (2.6s)
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 178.94s
+

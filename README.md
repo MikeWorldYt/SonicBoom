@@ -290,3 +290,10 @@ Images run as non-root, use digest-pinned bases, and harden the container
 - Upstream project: [daramkun/SonicBoom](https://github.com/daramkun/SonicBoom)
   (this repository, [nglmercer/SonicBoom](https://github.com/nglmercer/SonicBoom),
   is a hardened fork)
+
+## Reliable native synthesis jobs
+
+Use the authenticated [background job API](docs/inference-jobs.md) for long CPU
+inference, with progress and cooperative cancellation. The synchronous routes
+remain supported. See [ownership/cache architecture](docs/inference-architecture.md)
+for model residency, integrity verification, reloads and cache bounds.

@@ -252,3 +252,22 @@ last healthy state and surface actionable status via
   GPT-SoVITS, V5 bundles, GPU EPs for GPT-SoVITS, ROCm/CUDA on BC-250,
   and FLAC/MP3 reference uploads are explicitly unsupported and rejected
   with actionable errors.
+
+## Reliable native synthesis jobs
+
+Use the authenticated [background job API](inference-jobs.md) for long CPU
+inference, with progress and cooperative cancellation. The synchronous routes
+remain supported. See [ownership/cache architecture](inference-architecture.md)
+for model residency, integrity verification, reloads and cache bounds.
+
+Qwen `device=auto` selects CUDA only when `qwen-cuda` is compiled and CUDA can
+initialize; otherwise it reports CPU. Explicit `cuda` fails with an actionable
+error if build/runtime support is unavailable. `cpu` remains supported on AMD
+BC-250. ROCm acceleration for Qwen is not implemented or advertised. RTX 3060
+runtime/VRAM benchmarks remain pending on this runner.
+
+Provider concurrency settings must be 1. Sampling, frame-limit and cache-only
+changes retain weights; genuine model/device changes coordinate with active work.
+Qwen CPU can remain substantially slower than real-time; use jobs rather than
+raising an HTTP timeout alone. Measured resident/peak RAM can be several GB per
+model; see the current benchmark rows before enabling multiple backends.
