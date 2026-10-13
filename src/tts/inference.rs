@@ -163,6 +163,12 @@ fn synthesize_chunk(
     // 4. Flow matching loop
     // Reference: assign denoised_latent directly to xt (not Euler step)
     for step in 0..inference_steps {
+        if let Some(control) = crate::tts::control::current() {
+            anyhow::ensure!(
+                control.update("generating", step),
+                "inference cancelled or deadline exceeded"
+            );
+        }
         let current_step_tensor = Tensor::from_array(Array::from_elem(1, step as f32))?;
 
         let (vel_dims, vel_vec): (Vec<usize>, Vec<f32>) = {

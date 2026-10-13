@@ -61,6 +61,7 @@ impl RateLimiterManager {
 /// Hot-swappable inference admission gate.
 #[derive(Debug, Clone)]
 pub struct InferenceGateManager {
+    pub jobs: Arc<crate::api::jobs::JobStore>,
     current: Arc<RwLock<Arc<InferenceGate>>>,
 }
 
@@ -68,6 +69,7 @@ impl InferenceGateManager {
     pub fn new(gate: InferenceGate) -> Self {
         Self {
             current: Arc::new(RwLock::new(Arc::new(gate))),
+            jobs: Arc::new(crate::api::jobs::JobStore::default()),
         }
         // Note: std RwLock would suffice, but the gate is
         // awaited across .await points, so the tokio-free

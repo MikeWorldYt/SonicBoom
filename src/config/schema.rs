@@ -321,6 +321,36 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
             allowed_values_source: None,
         });
     }
+    for (path, description, max) in [
+        (
+            "inference.generation_deadline_secs",
+            "Cooperative inference deadline, independent of HTTP timeout",
+            86400.0,
+        ),
+        (
+            "inference.job_retention_secs",
+            "Completed job and private audio retention in seconds",
+            86400.0,
+        ),
+        (
+            "inference.max_retained_jobs",
+            "Bound on retained synthesis job metadata",
+            1024.0,
+        ),
+    ] {
+        add(SettingSchema {
+            path: path.into(),
+            description: description.into(),
+            type_name: "integer",
+            apply: ApplyStrategy::Hot,
+            min: Some(1.0),
+            max: Some(max),
+            allowed_values: None,
+            nullable: false,
+            secret: false,
+            allowed_values_source: None,
+        });
+    }
     add(SettingSchema {
         path: "inference.max_concurrent".to_string(),
         description: "Maximum concurrent model inferences".to_string(),

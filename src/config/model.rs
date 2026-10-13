@@ -216,6 +216,13 @@ pub struct TtsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InferenceConfig {
+    /// Deadline for queued and executing jobs, independent of HTTP response timeout.
+    #[serde(default = "default_generation_deadline_secs")]
+    pub generation_deadline_secs: u64,
+    #[serde(default = "default_job_retention_secs")]
+    pub job_retention_secs: u64,
+    #[serde(default = "default_max_retained_jobs")]
+    pub max_retained_jobs: usize,
     /// Maximum concurrent model inferences.
     #[serde(default = "default_max_concurrent_inference")]
     pub max_concurrent: usize,
@@ -503,6 +510,15 @@ fn default_queue_max_body_bytes() -> usize {
 fn default_admin_max_body_bytes() -> usize {
     16_384
 }
+fn default_generation_deadline_secs() -> u64 {
+    1800
+}
+fn default_job_retention_secs() -> u64 {
+    600
+}
+fn default_max_retained_jobs() -> usize {
+    64
+}
 fn default_max_concurrent_inference() -> usize {
     1
 }
@@ -626,6 +642,9 @@ impl Default for AppConfig {
             inference: InferenceConfig {
                 max_concurrent: default_max_concurrent_inference(),
                 max_pending: default_max_pending_inference(),
+                generation_deadline_secs: default_generation_deadline_secs(),
+                job_retention_secs: default_job_retention_secs(),
+                max_retained_jobs: default_max_retained_jobs(),
             },
             rate_limit: RateLimitConfig {
                 requests: default_rate_limit_requests(),
@@ -756,6 +775,9 @@ impl Default for InferenceConfig {
         Self {
             max_concurrent: default_max_concurrent_inference(),
             max_pending: default_max_pending_inference(),
+            generation_deadline_secs: default_generation_deadline_secs(),
+            job_retention_secs: default_job_retention_secs(),
+            max_retained_jobs: default_max_retained_jobs(),
         }
     }
 }

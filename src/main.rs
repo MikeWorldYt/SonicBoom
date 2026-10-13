@@ -867,6 +867,7 @@ async fn run_server(config_path: std::path::PathBuf) -> anyhow::Result<()> {
 
     // Wait for Ctrl+C / SIGTERM, then stop the listener.
     shutdown_signal().await;
+    app_state.inference_gate.jobs.cancel_all();
     server.stop().await?;
 
     tracing::info!("Server shut down gracefully.");

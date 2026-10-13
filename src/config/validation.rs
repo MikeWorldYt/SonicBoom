@@ -192,6 +192,15 @@ fn validate_tts(config: &AppConfig) -> Result<(), String> {
 
 fn validate_inference(config: &AppConfig) -> Result<(), String> {
     let inference = &config.inference;
+    if !(1..=86400).contains(&inference.generation_deadline_secs)
+        || !(1..=86400).contains(&inference.job_retention_secs)
+        || !(1..=1024).contains(&inference.max_retained_jobs)
+    {
+        return Err(
+            "inference deadline/retention must be 1..=86400 seconds and max_retained_jobs 1..=1024"
+                .into(),
+        );
+    }
     if !(1..=MAX_CONCURRENT_INFERENCE_LIMIT).contains(&inference.max_concurrent) {
         return Err(format!(
             "inference.max_concurrent must be between 1 and {MAX_CONCURRENT_INFERENCE_LIMIT}"

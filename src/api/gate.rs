@@ -35,6 +35,7 @@ pub enum RunBoundedError {
     Saturated,
     /// The blocking task panicked or was otherwise lost.
     JoinFailed(String),
+    Cancelled,
 }
 
 impl InferenceGate {
@@ -82,13 +83,56 @@ impl InferenceGate {
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
-        let permit = self.admit().await.ok_or(RunBoundedError::Saturated)?;
-        tokio::task::spawn_blocking(move || {
+        let control = crate::api::jobs::active_control().unwrap_or_else(|| {
+            sonicboom::tts::control::InferenceControl::new(std::time::Duration::from_secs(1800))
+        });
+        struct CancelOnDrop(Option<Arc<sonicboom::tts::control::InferenceControl>>);
+        impl Drop for CancelOnDrop {
+            fn drop(&mut self) {
+                if let Some(c) = &self.0 {
+                    c.cancel();
+                }
+            }
+        }
+        let mut cancel = CancelOnDrop(Some(control.clone()));
+        let admitted = self
+            .admitted
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| RunBoundedError::Saturated)?;
+        let running = loop {
+            if control.stopped() {
+                return Err(RunBoundedError::Cancelled);
+            }
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                self.running.clone().acquire_owned(),
+            )
+            .await
+            {
+                Ok(Ok(p)) => break p,
+                Ok(Err(_)) => return Err(RunBoundedError::Cancelled),
+                Err(_) => {}
+            }
+        };
+        let permit = InferencePermit {
+            _running: running,
+            _admitted: admitted,
+        };
+        let worker_control = control.clone();
+        let result = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            work()
+            worker_control.update("preparing", 0);
+            sonicboom::tts::control::scope(worker_control, work)
         })
         .await
-        .map_err(|e| RunBoundedError::JoinFailed(e.to_string()))
+        .map_err(|e| RunBoundedError::JoinFailed(e.to_string()))?;
+        cancel.0 = None;
+        if control.stopped() {
+            Err(RunBoundedError::Cancelled)
+        } else {
+            Ok(result)
+        }
     }
 
     #[cfg(test)]

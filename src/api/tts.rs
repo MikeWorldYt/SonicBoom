@@ -50,6 +50,9 @@ pub(super) async fn synthesize_bounded(
             RunBoundedError::Saturated => AppError::TooManyRequests(
                 "Server is busy. Too many pending inference requests.".to_string(),
             ),
+            RunBoundedError::Cancelled => {
+                AppError::ServiceUnavailable("Inference cancelled or deadline exceeded".into())
+            }
             RunBoundedError::JoinFailed(detail) => {
                 AppError::internal(format!("inference task failed: {detail}"))
             }
@@ -135,6 +138,9 @@ pub(crate) async fn synthesize_provider_bounded(
             RunBoundedError::Saturated => ProviderError::busy(
                 "Server is busy. Too many pending inference requests.".to_string(),
             ),
+            RunBoundedError::Cancelled => {
+                ProviderError::inference_failed("Inference cancelled or deadline exceeded")
+            }
             RunBoundedError::JoinFailed(detail) => {
                 ProviderError::inference_failed(format!("inference task failed: {detail}"))
             }
@@ -150,6 +156,9 @@ pub(crate) fn check_rate_limit(
     state: &crate::AppState,
     token: &AuthenticatedToken,
 ) -> Result<(), AppError> {
+    if super::jobs::active_control().is_some() {
+        return Ok(());
+    }
     let decision = state.rate_limiter.check(&token.rate_limit_key());
     if decision.allowed {
         return Ok(());

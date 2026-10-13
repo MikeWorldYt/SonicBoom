@@ -3,6 +3,7 @@ pub mod audio;
 pub mod config_api;
 pub mod gate;
 pub mod info;
+pub mod jobs;
 pub mod openai;
 pub mod providers;
 #[cfg(feature = "playback")]
@@ -51,6 +52,14 @@ pub async fn router(state: AppState) -> Router {
             "/api/tts",
             post(tts::post_tts).route_layer(DefaultBodyLimit::max(tts_body_limit)),
         )
+        .route(
+            "/api/tts/jobs",
+            post(jobs::create).route_layer(DefaultBodyLimit::max(tts_body_limit)),
+        )
+        .route("/api/tts/jobs/{id}", get(jobs::status))
+        .route("/api/tts/jobs/{id}/events", get(jobs::events))
+        .route("/api/tts/jobs/{id}/cancel", post(jobs::cancel))
+        .route("/api/tts/jobs/{id}/audio", get(jobs::audio))
         .route("/api/status", get(tts::get_status))
         // OpenAI-compatible endpoints
         .route(
