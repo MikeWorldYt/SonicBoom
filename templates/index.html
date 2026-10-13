@@ -73,6 +73,60 @@
         <div class="provider-list">PROVIDERS_ROWS</div>
         <p class="muted">Voice cloning (Qwen3-TTS, GPT-SoVITS) needs an API token and a reference recording uploaded via <code>POST /api/voices/clones</code>. See <code>docs/providers.md</code> for setup. Use Enable on a card to download and start an engine — no file edits or restarts needed.</p>
       </section>
+
+      <section class="card" aria-labelledby="cloning-heading">
+        <div class="section-head">
+          <h2 id="cloning-heading">Voice cloning</h2>
+          <span class="hint">Your uploaded reference voices</span>
+        </div>
+        <div class="voice-list" id="voicesList">
+          <p class="muted">Loading voices…</p>
+        </div>
+
+        <h3 class="subhead">Clone a new voice</h3>
+        <form id="cloneForm">
+          <div class="row">
+            <div class="field">
+              <label for="cloneName">Name</label>
+              <input type="text" id="cloneName" maxlength="64" placeholder="e.g. narrator" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="cloneProvider">Engine</label>
+              <select id="cloneProvider"></select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="cloneModel">Model</label>
+              <select id="cloneModel"></select>
+            </div>
+            <div class="field">
+              <label for="cloneLang">Language</label>
+              <select id="cloneLang"></select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="cloneMode">Mode</label>
+              <select id="cloneMode"></select>
+            </div>
+            <div class="field">
+              <label for="cloneConsent">Consent basis</label>
+              <input type="text" id="cloneConsent" placeholder="owner" autocomplete="off">
+            </div>
+          </div>
+          <div class="form-group" id="cloneTranscriptGroup">
+            <label for="cloneTranscript">Reference transcript (exact words in the recording)</label>
+            <textarea id="cloneTranscript" class="compact-area" placeholder="Type exactly what the reference audio says"></textarea>
+          </div>
+          <div class="form-group">
+            <label for="cloneFile">Reference recording (WAV, 3–10 s recommended)</label>
+            <input type="file" id="cloneFile" accept="audio/wav,.wav">
+          </div>
+          <button type="submit" class="primary" id="cloneSubmit">Clone voice</button>
+          <div id="cloneStatus" role="status"></div>
+        </form>
+      </section>
     </div>
 
     <div class="col-side">

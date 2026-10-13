@@ -54,12 +54,15 @@ fn hex_sha256_file(path: &Path) -> Result<String, String> {
 ///
 /// `on_progress` receives overall 0.0–1.0 progress and is safe to call
 /// often; cancellation is cooperative via `cancelled()`.
+/// `on_download_start` fires once per actually-fetched file so callers can
+/// tell real downloads apart from cache verification (both advance progress).
 pub async fn ensure_pinned_files(
     provider: &str,
     model_dir: &Path,
     files: &[PinnedFile],
     hf_token: Option<&str>,
     on_progress: impl Fn(f32) + Send + Sync,
+    on_download_start: impl Fn() + Send + Sync,
     cancelled: impl Fn() -> bool + Send + Sync,
 ) -> Result<(), ProviderError> {
     let total: u64 = files.iter().map(|f| f.size).sum::<u64>().max(1);
@@ -90,6 +93,7 @@ pub async fn ensure_pinned_files(
             }
         }
         if valid {
+            tracing::info!("{provider} already cached (verified): '{}'", file.path);
             done += file.size;
             on_progress(done as f32 / total as f32);
             continue;
@@ -105,6 +109,7 @@ pub async fn ensure_pinned_files(
             file.path,
             file.size
         );
+        on_download_start();
         let mut request = client.get(&file.url);
         if let Some(token) = hf_token {
             request = request.bearer_auth(token);
@@ -209,6 +214,7 @@ mod tests {
             |p| {
                 progress.lock().map(|mut v| v.push(p)).ok();
             },
+            || {},
             || false,
         )
         .await
@@ -221,9 +227,47 @@ mod tests {
                 .unwrap_or(false)
         );
         // Second run skips the verified file (no re-fetch).
-        ensure_pinned_files("test", &dir, &files, None, |_| {}, || false)
+        ensure_pinned_files("test", &dir, &files, None, |_| {}, || {}, || false)
             .await
             .expect("skip-if-verified");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn warm_cache_never_reports_a_download() {
+        // A fully cached bundle must verify silently: progress advances but
+        // `on_download_start` never fires, so status lines can honestly say
+        // "verifying" instead of "downloading".
+        let dir = std::env::temp_dir().join(format!("sb-warm-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let content = b"pinned-bytes";
+        std::fs::write(dir.join("weight.bin"), content).unwrap();
+        let digest = hex::encode(sha2::Sha256::digest(content));
+        let files = [PinnedFile {
+            path: "weight.bin",
+            url: "https://example.invalid/weight.bin".to_string(),
+            sha256: Box::leak(digest.into_boxed_str()),
+            size: content.len() as u64,
+        }];
+        let started = std::sync::Mutex::new(false);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime
+            .block_on(ensure_pinned_files(
+                "test",
+                &dir,
+                &files,
+                None,
+                |_| {},
+                || {
+                    *started.lock().unwrap() = true;
+                },
+                || false,
+            ))
+            .expect("warm cache verifies without fetching");
+        assert!(!*started.lock().unwrap(), "no download must start");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

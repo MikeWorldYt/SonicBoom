@@ -278,6 +278,28 @@ mod tests {
     }
 
     #[test]
+    fn index_template_has_cloning_hooks() {
+        // Voice-cloning card: profile list plus the upload form. The form
+        // mirrors POST /api/voices/clones (raw WAV body, query parameters).
+        for id in [
+            "voicesList",
+            "cloneForm",
+            "cloneName",
+            "cloneProvider",
+            "cloneModel",
+            "cloneLang",
+            "cloneMode",
+            "cloneTranscript",
+            "cloneConsent",
+            "cloneFile",
+            "cloneSubmit",
+            "cloneStatus",
+        ] {
+            assert!(TEMPLATE.contains(id), "template missing #{id}");
+        }
+    }
+
+    #[test]
     fn index_template_has_config_browser_hooks() {
         for id in [
             "configSearch",

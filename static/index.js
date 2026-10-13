@@ -481,6 +481,7 @@ async function refreshProviders() {
     }
     lastProviders = body;
     await renderModelOptions();
+    refreshCloneForm();
   } catch {
     // Network or auth failure: leave the server-rendered cards in place.
   }
@@ -591,6 +592,228 @@ async function syncVoicesToModel() {
   populateLanguages(meta.languages.length > 0 ? meta.languages : null, matches[0]?.language);
 }
 
+// --- Voice cloning ----------------------------------------------------------
+// Create and manage cloning voice profiles in-page: the same endpoints the
+// API exposes (GET/POST/DELETE /api/voices), driven by live capabilities
+// so models, languages, and modes are never hardcoded per provider.
+
+const voicesList = document.getElementById('voicesList');
+const cloneForm = document.getElementById('cloneForm');
+const cloneName = document.getElementById('cloneName');
+const cloneProvider = document.getElementById('cloneProvider');
+const cloneModel = document.getElementById('cloneModel');
+const cloneLang = document.getElementById('cloneLang');
+const cloneMode = document.getElementById('cloneMode');
+const cloneTranscriptGroup = document.getElementById('cloneTranscriptGroup');
+const cloneTranscript = document.getElementById('cloneTranscript');
+const cloneConsent = document.getElementById('cloneConsent');
+const cloneFile = document.getElementById('cloneFile');
+const cloneSubmit = document.getElementById('cloneSubmit');
+const cloneStatus = document.getElementById('cloneStatus');
+
+function setCloneStatus(text, kind) {
+  cloneStatus.textContent = text;
+  cloneStatus.className = kind || '';
+}
+
+async function apiErrorMessage(resp) {
+  try {
+    const body = await resp.json();
+    if (body && body.message) return body.message;
+  } catch {
+    // Fall through to the status line below.
+  }
+  return `HTTP ${resp.status}`;
+}
+
+/** Cloning-capable engines from live capabilities (never hardcoded). */
+function cloningCapabilities() {
+  if (!lastProviders) return [];
+  return (lastProviders.capabilities || []).filter(c => c && c.requires_reference_audio);
+}
+
+function cloneCapability() {
+  return cloningCapabilities().find(c => c.provider_id === cloneProvider.value) || null;
+}
+
+function refreshCloneForm() {
+  const ids = cloningCapabilities().map(c => c.provider_id);
+  const previous = cloneProvider.value;
+  cloneProvider.innerHTML = '';
+  if (ids.length === 0) cloneProvider.append(optionEl('', 'No cloning engines available'));
+  for (const id of ids) cloneProvider.append(optionEl(id));
+  if (ids.includes(previous)) cloneProvider.value = previous;
+  refreshCloneDependents();
+}
+
+function refreshCloneDependents() {
+  const cap = cloneCapability();
+  const prevModel = cloneModel.value;
+  cloneModel.innerHTML = '';
+  for (const model of cap?.models || []) cloneModel.append(optionEl(model));
+  if ([...cloneModel.options].some(o => o.value === prevModel)) cloneModel.value = prevModel;
+  const prevLang = cloneLang.value;
+  cloneLang.innerHTML = '';
+  for (const code of cap?.languages || []) {
+    const known = LANGUAGES.find(l => l.code === code);
+    cloneLang.append(optionEl(code, known ? known.label : code));
+  }
+  if ([...cloneLang.options].some(o => o.value === prevLang)) cloneLang.value = prevLang;
+  const prevMode = cloneMode.value;
+  cloneMode.innerHTML = '';
+  for (const mode of cap?.clone_modes?.length > 0 ? cap.clone_modes : ['icl']) {
+    cloneMode.append(optionEl(mode));
+  }
+  if ([...cloneMode.options].some(o => o.value === prevMode)) cloneMode.value = prevMode;
+  updateTranscriptVisibility();
+}
+
+function updateTranscriptVisibility() {
+  const icl = cloneMode.value === 'icl';
+  cloneTranscriptGroup.hidden = !icl;
+  if (!icl) cloneTranscript.value = '';
+}
+
+async function refreshVoiceList() {
+  voicesList.innerHTML = '';
+  let profiles = [];
+  try {
+    const body = await configRequest(Endpoints.voices);
+    profiles = body.data || [];
+  } catch {
+    voicesList.append(el('p', { cls: 'muted', text: 'Enter your API token to see your voices.' }));
+    return;
+  }
+  if (profiles.length === 0) {
+    voicesList.append(el('p', { cls: 'muted', text: 'No cloned voices yet — upload a reference below.' }));
+    return;
+  }
+  for (const profile of profiles) voicesList.append(voiceRow(profile));
+}
+
+function voiceRow(profile) {
+  const row = el('div', { cls: 'voice-row' });
+  row.dataset.id = profile.id;
+  const main = el('div');
+  main.append(
+    el('div', { cls: 'voice-name', text: profile.name }),
+    el('div', {
+      cls: 'voice-meta',
+      text: `${profile.provider} · ${profile.model} · ${profile.language} · ${profile.clone_mode}`,
+    }),
+  );
+  const actions = el('div', { cls: 'voice-actions' });
+  const use = el('button', { cls: 'btn-inline', text: 'Use', attrs: { type: 'button', 'data-action': 'use' } });
+  const del = el('button', { cls: 'btn-inline', text: 'Delete', attrs: { type: 'button', 'data-action': 'delete' } });
+  actions.append(use, del);
+  row.append(main, actions);
+  return row;
+}
+
+/** A WAV file starts with RIFF....WAVE; catches renamed MP3s before upload. */
+async function isWavFile(file) {
+  try {
+    const head = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+    const tag = o => String.fromCharCode(head[o], head[o + 1], head[o + 2], head[o + 3]);
+    return tag(0) === 'RIFF' && tag(8) === 'WAVE';
+  } catch {
+    return false;
+  }
+}
+
+voicesList.addEventListener('click', async event => {
+  const button = event.target.closest('button[data-action]');
+  if (!button || button.disabled) return;
+  const id = button.closest('.voice-row')?.dataset.id;
+  if (!id) return;
+  if (button.dataset.action === 'delete') {
+    if (!confirm('Delete this cloned voice? Its reference audio is removed too.')) return;
+    button.disabled = true;
+    try {
+      const resp = await apiFetch(`${Endpoints.voices}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!resp.ok) throw new Error(await apiErrorMessage(resp));
+      await refreshVoiceList();
+      await syncVoicesToModel();
+    } catch (error) {
+      setCloneStatus(error.message, 'error');
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
+  try {
+    const body = await configRequest(Endpoints.voices);
+    const profile = (body.data || []).find(p => String(p.id) === id);
+    if (!profile) throw new Error('Voice profile is no longer available.');
+    if (![...modelSelect.options].some(o => o.value === profile.model)) {
+      throw new Error(`Model ${profile.model} is not ready — enable its engine first.`);
+    }
+    modelSelect.value = profile.model;
+    await syncVoicesToModel();
+    voiceSelect.value = profile.id;
+    voiceSelect.dispatchEvent(new Event('change'));
+    document.getElementById('tts-heading').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setStatus(`Using cloned voice “${profile.name}”.`, false);
+  } catch (error) {
+    setCloneStatus(error.message, 'error');
+  }
+});
+
+cloneProvider.addEventListener('change', refreshCloneDependents);
+cloneMode.addEventListener('change', updateTranscriptVisibility);
+
+cloneForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  setCloneStatus('', '');
+  const name = cloneName.value.trim();
+  const provider = cloneProvider.value;
+  const model = cloneModel.value;
+  const language = cloneLang.value;
+  const mode = cloneMode.value || 'icl';
+  const transcript = cloneTranscript.value.trim();
+  const consent = cloneConsent.value.trim();
+  const file = cloneFile.files[0];
+  try {
+    if (!provider) throw new Error('No cloning engine is available right now.');
+    if (name.length < 1 || name.length > 64) throw new Error('Name must be 1–64 characters.');
+    if (!model) throw new Error('Pick a model.');
+    if (!language) throw new Error('Pick a language.');
+    if (mode === 'icl' && !transcript) throw new Error('ICL mode needs the exact reference transcript.');
+    if (!consent) throw new Error('Consent basis is required (e.g. owner).');
+    if (!file) throw new Error('Choose a WAV reference recording.');
+    if (file.size === 0) throw new Error('The selected file is empty.');
+    if (!await isWavFile(file)) throw new Error('The selected file is not a WAV recording.');
+    const params = new URLSearchParams({
+      name, provider, model, language, mode, consent_basis: consent,
+    });
+    if (mode === 'icl') params.set('transcript', transcript);
+    cloneSubmit.disabled = true;
+    cloneSubmit.textContent = 'Cloning…';
+    const resp = await apiFetch(`${Endpoints.voices}/clones?${params.toString()}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'audio/wav' },
+      body: file,
+    });
+    if (!resp.ok) throw new Error(await apiErrorMessage(resp));
+    const profile = await resp.json();
+    cloneForm.reset();
+    refreshCloneDependents();
+    await refreshVoiceList();
+    setCloneStatus(`Cloned “${profile.name}” — ready in the Model voice list.`, 'ok');
+    if ([...modelSelect.options].some(o => o.value === profile.model)) {
+      modelSelect.value = profile.model;
+      await syncVoicesToModel();
+      voiceSelect.value = profile.id;
+      voiceSelect.dispatchEvent(new Event('change'));
+    }
+  } catch (error) {
+    setCloneStatus(error.message, 'error');
+  } finally {
+    cloneSubmit.disabled = false;
+    cloneSubmit.textContent = 'Clone voice';
+  }
+});
+
 // --- 3. TTS synthesis -------------------------------------------------------
 
 function populateLanguages(allowed = null, preferred = 'en') {
@@ -628,6 +851,7 @@ populateLanguages();
 loadServerInfo().then(() => {
   refreshConfiguration();
   refreshProviders();
+  refreshVoiceList();
 });
 modelSelect.addEventListener('change', () => void syncVoicesToModel());
 voiceSelect.addEventListener('change', () => {
@@ -645,6 +869,7 @@ document.getElementById('modelRefresh').addEventListener('click', async event =>
     providerSignature = null;
     await refreshProviders();
     await syncVoicesToModel();
+    await refreshVoiceList();
     if (!statusDiv.classList.contains('error')) {
       setStatus('Engines, voices, and languages refreshed.', false);
     }

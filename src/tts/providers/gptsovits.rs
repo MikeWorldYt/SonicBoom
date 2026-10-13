@@ -207,6 +207,11 @@ struct GptState {
     load_error: Option<String>,
     ensuring: bool,
     download_progress: f32,
+    /// A real network fetch started during this ensure pass. Hash
+    /// verification alone advances `download_progress` too, so status
+    /// lines consult this flag to say "verifying" instead of lying
+    /// about "downloading" on warm boots.
+    downloading: bool,
 }
 
 /// Native GPT-SoVITS ONNX provider.
@@ -236,6 +241,7 @@ impl GptSovitsProvider {
                 load_error: None,
                 ensuring: false,
                 download_progress: 0.0,
+                downloading: false,
             }),
             #[cfg(feature = "gpt-sovits")]
             model: Mutex::new(None),
@@ -456,12 +462,14 @@ impl GptSovitsProvider {
             }
             state.ensuring = true;
             state.download_progress = 0.0;
+            state.downloading = false;
         }
         let this = Arc::clone(self);
         tokio::spawn(async move {
             let result = this.ensure_async(hf_token).await;
             if let Ok(mut state) = this.state.lock() {
                 state.ensuring = false;
+                state.downloading = false;
                 match &result {
                     Ok(()) => state.load_error = None,
                     Err(error) => state.load_error = Some(error.message().to_string()),
@@ -482,6 +490,7 @@ impl GptSovitsProvider {
         }
         let manifest = gptsovits_manifest(&config.model_id)?;
         let progress_self = Arc::clone(self);
+        let download_self = Arc::clone(self);
         super::assets::ensure_pinned_files(
             "gpt-sovits",
             &config.model_dir,
@@ -490,6 +499,11 @@ impl GptSovitsProvider {
             move |p| {
                 if let Ok(mut state) = progress_self.state.lock() {
                     state.download_progress = p;
+                }
+            },
+            move || {
+                if let Ok(mut state) = download_self.state.lock() {
+                    state.downloading = true;
                 }
             },
             || false,
@@ -593,8 +607,14 @@ impl GptSovitsProvider {
         }
         let state = self.state.lock().ok();
         match state {
+            Some(state) if state.ensuring && state.downloading => {
+                Err(ProviderError::loading(format!(
+                    "gpt-sovits bundle is downloading ({:.0}% complete)",
+                    state.download_progress * 100.0
+                )))
+            }
             Some(state) if state.ensuring => Err(ProviderError::loading(format!(
-                "gpt-sovits bundle is downloading ({:.0}% complete)",
+                "gpt-sovits bundle is verifying cache ({:.0}% complete)",
                 state.download_progress * 100.0
             ))),
             Some(state) if let Some(detail) = state.load_error.clone() => Err(
@@ -643,6 +663,7 @@ impl TtsProvider for GptSovitsProvider {
         let loaded = state.as_ref().and_then(|s| s.loaded_model.clone());
         let error = state.as_ref().and_then(|s| s.load_error.clone());
         let ensuring = state.as_ref().is_some_and(|s| s.ensuring);
+        let downloading = state.as_ref().is_some_and(|s| s.downloading);
         let progress = state.as_ref().map(|s| s.download_progress).unwrap_or(0.0);
         drop(state);
         #[cfg(not(feature = "gpt-sovits"))]
@@ -662,9 +683,14 @@ impl TtsProvider for GptSovitsProvider {
         let mut detail = error.or_else(|| {
             if loaded.is_some() {
                 None
-            } else if ensuring {
+            } else if ensuring && downloading {
                 Some(format!(
                     "gpt-sovits bundle downloading ({:.0}% complete)",
+                    progress * 100.0
+                ))
+            } else if ensuring {
+                Some(format!(
+                    "gpt-sovits bundle verifying cache ({:.0}% complete)",
                     progress * 100.0
                 ))
             } else if !native {

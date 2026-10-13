@@ -163,6 +163,11 @@ struct QwenState {
     load_error: Option<String>,
     ensuring: bool,
     download_progress: f32,
+    /// A real network fetch started during this ensure pass. Hash
+    /// verification alone advances `download_progress` too, so status
+    /// lines consult this flag to say "verifying" instead of lying
+    /// about "downloading" on warm boots.
+    downloading: bool,
 }
 
 /// Dedicated in-process worker owning the non-`Sync` native model.
@@ -425,6 +430,7 @@ impl QwenProvider {
                 load_error: None,
                 ensuring: false,
                 download_progress: 0.0,
+                downloading: false,
             }),
             #[cfg(feature = "qwen")]
             worker: Mutex::new(None),
@@ -693,12 +699,14 @@ impl QwenProvider {
             }
             state.ensuring = true;
             state.download_progress = 0.0;
+            state.downloading = false;
         }
         let this = Arc::clone(self);
         tokio::spawn(async move {
             let result = this.ensure_async(hf_token).await;
             if let Ok(mut state) = this.state.lock() {
                 state.ensuring = false;
+                state.downloading = false;
                 match &result {
                     Ok(()) => state.load_error = None,
                     Err(error) => state.load_error = Some(error.message().to_string()),
@@ -719,6 +727,7 @@ impl QwenProvider {
         }
         let manifest = qwen_manifest(&config.model_id)?;
         let progress_self = Arc::clone(self);
+        let download_self = Arc::clone(self);
         super::assets::ensure_pinned_files(
             "qwen3",
             &config.model_dir,
@@ -727,6 +736,11 @@ impl QwenProvider {
             move |p| {
                 if let Ok(mut state) = progress_self.state.lock() {
                     state.download_progress = p;
+                }
+            },
+            move || {
+                if let Ok(mut state) = download_self.state.lock() {
+                    state.downloading = true;
                 }
             },
             || false,
@@ -788,8 +802,12 @@ impl QwenProvider {
     fn not_loaded_error(&self) -> ProviderError {
         let state = self.state.lock().ok();
         match state {
-            Some(state) if state.ensuring => ProviderError::loading(format!(
+            Some(state) if state.ensuring && state.downloading => ProviderError::loading(format!(
                 "qwen3 model is downloading ({:.0}% complete)",
+                state.download_progress * 100.0
+            )),
+            Some(state) if state.ensuring => ProviderError::loading(format!(
+                "qwen3 model is verifying cache ({:.0}% complete)",
                 state.download_progress * 100.0
             )),
             Some(state) if let Some(detail) = state.load_error.clone() => {
@@ -868,6 +886,7 @@ impl TtsProvider for QwenProvider {
         let loaded = state.as_ref().and_then(|s| s.loaded_model.clone());
         let error = state.as_ref().and_then(|s| s.load_error.clone());
         let ensuring = state.as_ref().is_some_and(|s| s.ensuring);
+        let downloading = state.as_ref().is_some_and(|s| s.downloading);
         let progress = state.as_ref().map(|s| s.download_progress).unwrap_or(0.0);
         drop(state);
         #[cfg(not(feature = "qwen"))]
@@ -891,9 +910,14 @@ impl TtsProvider for QwenProvider {
         let detail = error.or_else(|| {
             if ready {
                 None
-            } else if ensuring {
+            } else if ensuring && downloading {
                 Some(format!(
                     "qwen3 weights downloading ({:.0}% complete)",
+                    progress * 100.0
+                ))
+            } else if ensuring {
+                Some(format!(
+                    "qwen3 weights verifying cache ({:.0}% complete)",
                     progress * 100.0
                 ))
             } else if !native {
@@ -1115,6 +1139,29 @@ mod tests {
         let error = qwen_manifest("qwen3-tts-1.7b-base").unwrap_err();
         assert_eq!(error.code(), "model_missing");
         assert!(qwen_manifest("qwen3-tts-0.6b-base").is_ok());
+    }
+
+    #[test]
+    fn warm_cache_reports_verifying_not_downloading() {
+        // An ensure pass that verified cache without fetching must never
+        // claim a download: warm boots show "verifying", not "downloading".
+        let p = QwenProvider::new(QwenConfig {
+            enabled: true,
+            ..QwenConfig::default()
+        });
+        if let Ok(mut state) = p.state.lock() {
+            state.ensuring = true;
+            state.downloading = false;
+            state.download_progress = 0.5;
+        }
+        let status = p.status();
+        assert!(status.enabled);
+        let detail = status.detail.unwrap_or_default();
+        assert!(detail.contains("verifying"), "{detail}");
+        assert!(!detail.contains("downloading"), "{detail}");
+        if let Ok(mut state) = p.state.lock() {
+            state.ensuring = false;
+        }
     }
 
     #[test]
