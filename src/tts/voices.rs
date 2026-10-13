@@ -64,6 +64,17 @@ impl NewVoiceProfile {
         if self.name.trim().is_empty() || self.name.chars().count() > 64 {
             return Err("profile name must be 1-64 characters".to_string());
         }
+        if self
+            .transcript
+            .as_ref()
+            .is_some_and(|t| t.chars().count() > 10_000)
+            || self.consent_note.len() > 4096
+        {
+            return Err("reference transcript or consent note exceeds its bound".into());
+        }
+        if self.reference_pcm.iter().any(|s| !s.is_finite()) {
+            return Err("reference samples must be finite".into());
+        }
         if self.provider.trim().is_empty() || self.provider.len() > 32 {
             return Err("provider must be a known provider id".to_string());
         }

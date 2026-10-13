@@ -32,9 +32,13 @@ impl ConditioningCache {
         transcript: Option<&str>,
         mode: &str,
     ) -> String {
+        use sha2::Digest;
+        let identity =
+            serde_json::to_vec(&(provider, model_revision, reference_hash, transcript, mode))
+                .expect("string identity serializes");
         format!(
-            "{provider}|{model_revision}|{reference_hash}|{}|{mode}",
-            transcript.unwrap_or("")
+            "{provider}|{model_revision}|{}",
+            hex::encode(sha2::Sha256::digest(identity))
         )
     }
 

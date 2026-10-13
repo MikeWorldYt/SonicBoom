@@ -21,6 +21,12 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 pub struct InferenceGate {
     running: Arc<Semaphore>,
     admitted: Arc<Semaphore>,
+    total: usize,
+}
+
+pub struct InferenceAdmission {
+    admitted: OwnedSemaphorePermit,
+    running: Arc<Semaphore>,
 }
 
 pub struct InferencePermit {
@@ -50,6 +56,7 @@ impl InferenceGate {
         Self {
             running: Arc::new(Semaphore::new(max_concurrent.min(Semaphore::MAX_PERMITS))),
             admitted: Arc::new(Semaphore::new(total)),
+            total,
         }
     }
 
@@ -94,19 +101,18 @@ impl InferenceGate {
                 }
             }
         }
+        let admission = match crate::api::jobs::take_admission() {
+            Some(admission) => admission,
+            None => self.reserve()?,
+        };
         let mut cancel = CancelOnDrop(Some(control.clone()));
-        let admitted = self
-            .admitted
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| RunBoundedError::Saturated)?;
         let running = loop {
             if control.stopped() {
                 return Err(RunBoundedError::Cancelled);
             }
             match tokio::time::timeout(
                 std::time::Duration::from_millis(100),
-                self.running.clone().acquire_owned(),
+                admission.running.clone().acquire_owned(),
             )
             .await
             {
@@ -117,24 +123,41 @@ impl InferenceGate {
         };
         let permit = InferencePermit {
             _running: running,
-            _admitted: admitted,
+            _admitted: admission.admitted,
         };
         let worker_control = control.clone();
         let result = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            worker_control.update("preparing", 0);
-            sonicboom::tts::control::scope(worker_control, work)
+            if !worker_control.update("preparing", 0) {
+                return None;
+            }
+            Some(sonicboom::tts::control::scope(worker_control, work))
         })
-        .await
-        .map_err(|e| RunBoundedError::JoinFailed(e.to_string()))?;
+        .await;
         cancel.0 = None;
+        let result = result.map_err(|e| RunBoundedError::JoinFailed(e.to_string()))?;
         if control.stopped() {
             Err(RunBoundedError::Cancelled)
         } else {
-            Ok(result)
+            result.ok_or(RunBoundedError::Cancelled)
         }
     }
 
+    /// Reserve bounded admission synchronously before accepting a background
+    /// job. The running semaphore is captured from this exact gate version.
+    pub fn reserve(&self) -> Result<InferenceAdmission, RunBoundedError> {
+        Ok(InferenceAdmission {
+            admitted: self
+                .admitted
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| RunBoundedError::Saturated)?,
+            running: self.running.clone(),
+        })
+    }
+    pub fn is_idle(&self) -> bool {
+        self.admitted.available_permits() == self.total
+    }
     #[cfg(test)]
     pub fn available_admissions(&self) -> usize {
         self.admitted.available_permits()
@@ -146,6 +169,46 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    #[tokio::test]
+    async fn cooperative_work_stops_after_http_disconnect() {
+        let gate = InferenceGate::new(1, 0);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let request = tokio::spawn({
+            let gate = gate.clone();
+            async move {
+                gate.run_bounded(move || {
+                    let c = sonicboom::tts::control::current().unwrap();
+                    let _ = started_tx.send(());
+                    while c.update("generating", 1) {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                })
+                .await
+            }
+        });
+        started_rx.await.unwrap();
+        request.abort();
+        let _ = request.await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while gate.available_admissions() == 0 {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .expect("cooperative computation actually stopped");
+        assert_eq!(gate.run_bounded(|| 42).await, Ok(42));
+    }
+    #[tokio::test]
+    async fn cancelled_queued_job_never_executes() {
+        let gate = InferenceGate::new(1, 1);
+        let _held = gate.admit().await.unwrap();
+        let result = super::super::jobs::with_deadline(
+            0,
+            gate.run_bounded(|| panic!("cancelled queued work must not execute")),
+        )
+        .await;
+        assert_eq!(result, Err(RunBoundedError::Cancelled));
+    }
     #[tokio::test]
     async fn admits_up_to_capacity_then_rejects() {
         let gate = InferenceGate::new(1, 1);

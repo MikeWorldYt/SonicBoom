@@ -44,10 +44,157 @@ fn safe_join(model_dir: &Path, rel: &str) -> Result<PathBuf, ProviderError> {
     Ok(model_dir.join(rel_path))
 }
 
-fn hex_sha256_file(path: &Path) -> Result<String, String> {
-    let bytes =
-        std::fs::read(path).map_err(|e| format!("could not read {}: {e}", path.display()))?;
-    Ok(hex::encode(sha2::Sha256::digest(&bytes)))
+fn hex_sha256_file(path: &Path, on_bytes: impl Fn(u64)) -> Result<String, String> {
+    use std::io::Read;
+    let mut input = std::io::BufReader::with_capacity(
+        256 * 1024,
+        std::fs::File::open(path).map_err(|e| format!("could not open {}: {e}", path.display()))?,
+    );
+    let mut hasher = sha2::Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut hashed = 0u64;
+    loop {
+        let count = input.read(&mut buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+        hashed += count as u64;
+        if hashed.is_multiple_of(16 * 1024 * 1024) {
+            on_bytes(hashed);
+        }
+    }
+    on_bytes(hashed);
+    Ok(hex::encode(hasher.finalize()))
+}
+
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+struct Verification {
+    version: u32,
+    source: String,
+    digest: String,
+    size: u64,
+    identity: Vec<u64>,
+}
+fn identity(path: &Path) -> Option<Vec<u64>> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    // Unix ctime + inode prevents trusting a replaced file or a changed
+    // file whose mtime was restored. Other platforms conservatively rehash.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(vec![
+            metadata.dev(),
+            metadata.ino(),
+            metadata.len(),
+            metadata.mtime() as u64,
+            metadata.mtime_nsec() as u64,
+            metadata.ctime() as u64,
+            metadata.ctime_nsec() as u64,
+        ])
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+fn metadata_path(path: &Path) -> PathBuf {
+    path.with_extension("verified.json")
+}
+fn verify_cached(path: &Path, file: &PinnedFile) -> Result<bool, String> {
+    verify_cached_progress(path, file, |_| {})
+}
+fn verify_cached_progress(
+    path: &Path,
+    file: &PinnedFile,
+    on_bytes: impl Fn(u64),
+) -> Result<bool, String> {
+    let before = identity(path);
+    let record = Verification {
+        version: 1,
+        source: file.url.clone(),
+        digest: file.sha256.to_ascii_lowercase(),
+        size: file.size,
+        identity: before.clone().unwrap_or_default(),
+    };
+    let metadata_path = metadata_path(path);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Some(_), Ok(meta), Ok(parent)) = (
+            &before,
+            std::fs::symlink_metadata(&metadata_path),
+            std::fs::metadata(path.parent().unwrap_or(Path::new("."))),
+        ) && meta.is_file()
+            && meta.len() < 4096
+            && meta.mode() & 0o077 == 0
+            && meta.uid() == parent.uid()
+            && std::fs::read(&metadata_path)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Verification>(&b).ok())
+                .as_ref()
+                == Some(&record)
+        {
+            tracing::debug!(
+                asset = file.path,
+                cache_hit = true,
+                "trusted verification identity unchanged"
+            );
+            return Ok(true);
+        }
+    }
+    if std::fs::metadata(path).map_err(|e| e.to_string())?.len() != file.size {
+        return Ok(false);
+    }
+    let valid = hex_sha256_file(path, on_bytes)?.eq_ignore_ascii_case(file.sha256);
+    if valid && before.is_some() && identity(path) == before {
+        let tmp = metadata_path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
+        use std::io::Write;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        if let Ok(mut out) = options.open(&tmp) {
+            if out
+                .write_all(&serde_json::to_vec(&record).map_err(|e| e.to_string())?)
+                .is_ok()
+                && out.sync_all().is_ok()
+            {
+                let _ = std::fs::rename(&tmp, &metadata_path);
+            }
+            let _ = std::fs::remove_file(tmp);
+        }
+    }
+    Ok(valid && (before.is_none() || identity(path) == before))
+}
+
+/// Verify an offline/native load against the same trust root as downloads.
+/// Call only from blocking inference/loading threads.
+pub fn verify_local_files(model_dir: &Path, files: &[PinnedFile]) -> Result<(), ProviderError> {
+    for file in files {
+        let path = safe_join(model_dir, file.path)?;
+        if !verify_cached(&path, file).unwrap_or(false) {
+            return Err(ProviderError::model_missing(format!(
+                "pinned integrity verification failed for '{}'",
+                file.path
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Staging files are removed on every error, cancellation and dropped future.
+struct StagedFile(PathBuf);
+impl Drop for StagedFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 /// Download every missing or corrupt file, verifying hashes.
@@ -69,6 +216,7 @@ pub async fn ensure_pinned_files(
     let mut done: u64 = 0;
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(1800))
         .build()
         .map_err(|e| ProviderError::inference_failed(format!("http client failed: {e}")))?;
     for file in files {
@@ -80,15 +228,31 @@ pub async fn ensure_pinned_files(
         let dest = safe_join(model_dir, file.path)?;
         let mut valid = false;
         if dest.is_file() {
-            match hex_sha256_file(&dest) {
-                Ok(hash) if hash.eq_ignore_ascii_case(file.sha256) => valid = true,
+            let check_path = dest.clone();
+            let check_file = file.clone();
+            let (progress_tx, mut progress_rx) = tokio::sync::watch::channel(0u64);
+            let mut check = tokio::task::spawn_blocking(move || {
+                verify_cached_progress(&check_path, &check_file, |n| {
+                    progress_tx.send_replace(n);
+                })
+            });
+            let result = loop {
+                tokio::select! {
+                    result = &mut check => break result,
+                    changed = progress_rx.changed() => {
+                        if changed.is_ok() { on_progress((done + (*progress_rx.borrow()).min(file.size)) as f32 / total as f32); }
+                    }
+                }
+            };
+            match result {
+                Ok(Ok(true)) => valid = true,
                 _ => {
                     tracing::warn!(
                         "{} has unexpected hash, re-downloading '{}'",
                         provider,
                         file.path
                     );
-                    let _ = std::fs::remove_file(&dest);
+                    let _ = tokio::fs::remove_file(&dest).await;
                 }
             }
         }
@@ -99,7 +263,7 @@ pub async fn ensure_pinned_files(
             continue;
         }
         if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 ProviderError::model_missing(format!("could not create {}: {e}", parent.display()))
             })?;
         }
@@ -128,7 +292,8 @@ pub async fn ensure_pinned_files(
             )));
         }
         let tmp = dest.with_extension(format!("{}.part", uuid::Uuid::new_v4().simple()));
-        let mut out = std::fs::File::create(&tmp).map_err(|e| {
+        let _staging = StagedFile(tmp.clone());
+        let mut out = tokio::fs::File::create(&tmp).await.map_err(|e| {
             ProviderError::model_missing(format!("could not stage '{}': {e}", file.path))
         })?;
         // Restrict staged weights while downloading (defense in depth;
@@ -141,7 +306,7 @@ pub async fn ensure_pinned_files(
         let mut hasher = sha2::Sha256::new();
         let mut stream = response.bytes_stream();
         use futures_util::StreamExt;
-        use std::io::Write;
+        use tokio::io::AsyncWriteExt;
         let mut file_done: u64 = 0;
         while let Some(chunk) = stream.next().await {
             if cancelled() {
@@ -157,17 +322,26 @@ pub async fn ensure_pinned_files(
                 ))
             })?;
             hasher.update(&chunk);
-            out.write_all(&chunk).map_err(|e| {
+            out.write_all(&chunk).await.map_err(|e| {
                 ProviderError::model_missing(format!("could not stage '{}': {e}", file.path))
             })?;
             file_done += chunk.len() as u64;
+            if file_done > file.size {
+                return Err(ProviderError::model_missing("asset exceeds pinned size"));
+            }
             // Progress counts verified-completed files fully plus the
             // in-flight file proportionally (capped at its manifest size).
             on_progress((done + file_done.min(file.size)) as f32 / total as f32);
         }
+        out.flush()
+            .await
+            .map_err(|e| ProviderError::model_missing(e.to_string()))?;
+        out.sync_all()
+            .await
+            .map_err(|e| ProviderError::model_missing(e.to_string()))?;
         drop(out);
         let hash = hex::encode(hasher.finalize());
-        if !hash.eq_ignore_ascii_case(file.sha256) {
+        if file_done != file.size || !hash.eq_ignore_ascii_case(file.sha256) {
             let _ = std::fs::remove_file(&tmp);
             return Err(ProviderError::model_missing(format!(
                 "integrity check failed for '{}' (hash mismatch); \
@@ -175,7 +349,7 @@ pub async fn ensure_pinned_files(
                 file.path
             )));
         }
-        std::fs::rename(&tmp, &dest).map_err(|e| {
+        tokio::fs::rename(&tmp, &dest).await.map_err(|e| {
             ProviderError::model_missing(format!("could not install '{}': {e}", file.path))
         })?;
         done += file.size;
@@ -188,6 +362,41 @@ pub async fn ensure_pinned_files(
 mod tests {
     use super::*;
 
+    #[test]
+    fn verification_metadata_recovers_and_detects_changed_assets() {
+        let dir = std::env::temp_dir().join(format!("sb-integrity-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("weight.bin");
+        std::fs::write(&path, b"abc").unwrap();
+        let file = PinnedFile {
+            path: "weight.bin",
+            url: "pinned/revision".into(),
+            sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            size: 3,
+        };
+        assert!(verify_cached(&path, &file).unwrap());
+        assert!(verify_cached(&path, &file).unwrap());
+        std::fs::write(metadata_path(&path), b"corrupt metadata").unwrap();
+        assert!(
+            verify_cached(&path, &file).unwrap(),
+            "corrupt metadata triggers pinned rehash"
+        );
+        std::fs::write(&path, b"abd").unwrap();
+        assert!(
+            !verify_cached(&path, &file).unwrap(),
+            "same-size modifications invalidate trust"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn interrupted_staging_is_removed_on_drop() {
+        let path = std::env::temp_dir().join(format!("sb-stage-{}.part", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"partial").unwrap();
+        {
+            let _staging = StagedFile(path.clone());
+        }
+        assert!(!path.exists());
+    }
     /// Opt-in: exercises the real download path (HTTP + SHA-256 + atomic
     /// install + skip-if-verified) against one tiny manifest file.
     /// Ignored by default (needs network).

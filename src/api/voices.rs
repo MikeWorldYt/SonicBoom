@@ -59,10 +59,6 @@ fn parse_clone_mode(raw: &str) -> Result<CloneMode, AppError> {
 
 /// Decode an uploaded WAV body to mono `f32` PCM (MIME **and** actual format
 /// are validated; anything undecodable is `400`, non-WAV media is `415`).
-pub(crate) fn decode_wav_for_synthesis(bytes: &[u8]) -> Result<(Vec<f32>, u32), AppError> {
-    decode_wav_bytes(bytes)
-}
-
 fn decode_wav_bytes(bytes: &[u8]) -> Result<(Vec<f32>, u32), AppError> {
     let mut reader = hound::WavReader::new(bytes).map_err(|_| {
         AppError::BadRequest(
@@ -114,9 +110,114 @@ fn decode_wav_bytes(bytes: &[u8]) -> Result<(Vec<f32>, u32), AppError> {
     Ok((mono, spec.sample_rate))
 }
 
-async fn open_store(state: &crate::AppState) -> Result<VoiceProfileStore, AppError> {
+/// One resident manifest and bounded decoded-reference LRU. All disk work
+/// and mutation is serialized on blocking threads, never on Tokio executors.
+#[derive(Debug, Default)]
+pub struct CachedVoices {
+    dir: String,
+    store: Option<VoiceProfileStore>,
+    references: std::collections::VecDeque<(String, ReferenceAudio)>,
+}
+pub(crate) async fn with_store<T: Send + 'static>(
+    state: &crate::AppState,
+    work: impl FnOnce(&mut VoiceProfileStore) -> Result<T, AppError> + Send + 'static,
+) -> Result<T, AppError> {
     let dir = state.config.get().await.voices.store_dir.clone();
-    VoiceProfileStore::open(std::path::PathBuf::from(dir)).map_err(AppError::internal)
+    let cache = state.inference_gate.voices.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut cached = cache
+            .lock()
+            .map_err(|_| AppError::internal("voice store lock poisoned"))?;
+        if cached.store.is_none() || cached.dir != dir {
+            cached.store = Some(
+                VoiceProfileStore::open(std::path::PathBuf::from(&dir))
+                    .map_err(AppError::internal)?,
+            );
+            cached.dir = dir;
+            cached.references.clear();
+        }
+        work(cached.store.as_mut().expect("store initialized"))
+    })
+    .await
+    .map_err(|e| AppError::internal(format!("voice store task failed: {e}")))?
+}
+/// Authorization is checked against resident metadata before looking in the
+/// decoded cache. The ID, owner and reference hash scope the cache identity.
+pub(crate) async fn owned_reference(
+    state: &crate::AppState,
+    id: String,
+    owner: String,
+) -> Result<(sonicboom::tts::voices::VoiceProfile, ReferenceAudio), AppError> {
+    let profile = with_store(state, move |store| {
+        store
+            .get(&id)
+            .filter(|p| p.owner_token_hash.as_deref() == Some(owner.as_str()))
+            .cloned()
+            .ok_or_else(|| AppError::NotFound("unknown voice profile".into()))
+    })
+    .await?;
+    let cache = state.inference_gate.voices.clone();
+    let profile_copy = profile.clone();
+    let reference = tokio::task::spawn_blocking(move || {
+        let mut cached = cache
+            .lock()
+            .map_err(|_| AppError::internal("voice cache lock poisoned"))?;
+        // Recheck after acquiring the lock: deletion or store reconfiguration
+        // may have occurred since the first authorization check.
+        let store = cached
+            .store
+            .as_ref()
+            .ok_or_else(|| AppError::NotFound("unknown voice profile".into()))?;
+        if !store.get(&profile_copy.id).is_some_and(|p| {
+            p.reference_hash == profile_copy.reference_hash
+                && p.owner_token_hash == profile_copy.owner_token_hash
+        }) {
+            return Err(AppError::NotFound("unknown voice profile".into()));
+        }
+        let key = format!(
+            "{}:{}:{}",
+            profile_copy.id,
+            profile_copy.owner_token_hash.as_deref().unwrap_or(""),
+            profile_copy.reference_hash
+        );
+        if let Some(pos) = cached.references.iter().position(|(k, _)| k == &key) {
+            let entry = cached.references.remove(pos).expect("cache index exists");
+            let result = entry.1.clone();
+            cached.references.push_back(entry);
+            return Ok(result);
+        }
+        let path = cached
+            .store
+            .as_ref()
+            .expect("store initialized")
+            .reference_path(&profile_copy.id)
+            .map_err(AppError::internal)?;
+        let bytes =
+            std::fs::read(path).map_err(|_| AppError::internal("reference audio unavailable"))?;
+        let (pcm, sample_rate) = decode_wav_bytes(&bytes)?;
+        let reference = ReferenceAudio { pcm, sample_rate };
+        let size = reference.pcm.len() * 4;
+        while cached.references.len() >= 16
+            || cached
+                .references
+                .iter()
+                .map(|(_, r)| r.pcm.len() * 4)
+                .sum::<usize>()
+                + size
+                > 64 * 1024 * 1024
+        {
+            if cached.references.pop_front().is_none() {
+                break;
+            }
+        }
+        if size <= 64 * 1024 * 1024 {
+            cached.references.push_back((key, reference.clone()));
+        }
+        Ok::<_, AppError>(reference)
+    })
+    .await
+    .map_err(|e| AppError::internal(format!("reference decoding task failed: {e}")))??;
+    Ok((profile, reference))
 }
 
 /// `POST /api/voices/clones?name=..&provider=..&model=..&language=..`: upload
@@ -224,23 +325,24 @@ pub async fn post_clones(
         )));
     }
     let (pcm, rate) = decode_wav_bytes(&body)?;
-    let mut store = open_store(&state).await?;
-    let profile = store
-        .create(NewVoiceProfile {
-            name: query.name,
-            provider: provider.clone(),
-            model: query.model.clone(),
-            model_revision: config_revision_for(&config, &provider),
-            language: query.language.clone(),
-            clone_mode: mode.as_str().to_string(),
-            reference_pcm: pcm,
-            reference_sample_rate: rate,
-            transcript: transcript.map(str::to_string),
-            owner_token_hash: Some(token.rate_limit_key()),
-            consent_basis: query.consent_basis,
-            consent_note: query.consent_note.unwrap_or_default(),
-        })
-        .map_err(AppError::BadRequest)?;
+    let input = NewVoiceProfile {
+        name: query.name,
+        provider: provider.clone(),
+        model: query.model.clone(),
+        model_revision: config_revision_for(&config, &provider),
+        language: query.language.clone(),
+        clone_mode: mode.as_str().to_string(),
+        reference_pcm: pcm,
+        reference_sample_rate: rate,
+        transcript: transcript.map(str::to_string),
+        owner_token_hash: Some(token.rate_limit_key()),
+        consent_basis: query.consent_basis,
+        consent_note: query.consent_note.unwrap_or_default(),
+    };
+    let profile = with_store(&state, move |store| {
+        store.create(input).map_err(AppError::BadRequest)
+    })
+    .await?;
     let body = serde_json::to_string(&profile).map_err(|e| AppError::internal(e.to_string()))?;
     Ok((
         StatusCode::CREATED,
@@ -262,14 +364,16 @@ pub async fn get_voices(
     token: AuthenticatedToken,
     State(state): State<crate::AppState>,
 ) -> Result<impl IntoResponse, AppError> {
-    let store = open_store(&state).await?;
     let owner = token.rate_limit_key();
-    let profiles: Vec<_> = store
-        .list()
-        .into_iter()
-        .filter(|p| p.owner_token_hash.as_deref() == Some(owner.as_str()))
-        .cloned()
-        .collect();
+    let profiles = with_store(&state, move |store| {
+        Ok(store
+            .list()
+            .into_iter()
+            .filter(|p| p.owner_token_hash.as_deref() == Some(owner.as_str()))
+            .cloned()
+            .collect::<Vec<_>>())
+    })
+    .await?;
     let body = serde_json::json!({ "object": "list", "data": profiles }).to_string();
     Ok((
         StatusCode::OK,
@@ -285,8 +389,15 @@ pub async fn get_voice(
     State(state): State<crate::AppState>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let store = open_store(&state).await?;
-    match store.get(id.trim()) {
+    let owner = token.rate_limit_key();
+    let profile = with_store(&state, move |store| {
+        Ok(store
+            .get(id.trim())
+            .filter(|p| p.owner_token_hash.as_deref() == Some(owner.as_str()))
+            .cloned())
+    })
+    .await?;
+    match profile.as_ref() {
         Some(profile)
             if profile.owner_token_hash.as_deref() == Some(token.rate_limit_key().as_str()) =>
         {
@@ -308,16 +419,25 @@ pub async fn delete_voice(
     State(state): State<crate::AppState>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let mut store = open_store(&state).await?;
-    let owned = store
-        .get(id.trim())
-        .is_some_and(|p| p.owner_token_hash.as_deref() == Some(token.rate_limit_key().as_str()));
-    if !owned {
-        return Err(AppError::NotFound("unknown voice profile".to_string()));
-    }
-    store
-        .delete(id.trim())
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let owner = token.rate_limit_key();
+    let delete_id = id.clone();
+    with_store(&state, move |store| {
+        if !store
+            .get(delete_id.trim())
+            .is_some_and(|p| p.owner_token_hash.as_deref() == Some(owner.as_str()))
+        {
+            return Err(AppError::NotFound("unknown voice profile".into()));
+        }
+        store.delete(delete_id.trim()).map_err(AppError::internal)
+    })
+    .await?;
+    state
+        .inference_gate
+        .voices
+        .lock()
+        .map_err(|_| AppError::internal("voice cache lock poisoned"))?
+        .references
+        .retain(|(key, _)| !key.starts_with(&format!("{}:", id.trim())));
     let body = serde_json::json!({ "deleted": id.trim() }).to_string();
     Ok((
         StatusCode::OK,
@@ -356,19 +476,8 @@ pub async fn post_preview(
             config.tts.max_text_length
         )));
     }
-    let store = open_store(&state).await?;
-    let profile = store
-        .get(id.trim())
-        .filter(|p| p.owner_token_hash.as_deref() == Some(token.rate_limit_key().as_str()))
-        .cloned()
-        .ok_or_else(|| AppError::NotFound("unknown voice profile".to_string()))?;
-    let reference_bytes = std::fs::read(
-        store
-            .reference_path(&profile.id)
-            .map_err(|e| AppError::internal(e.to_string()))?,
-    )
-    .map_err(|_| AppError::internal("reference audio unavailable"))?;
-    let (pcm, rate) = decode_wav_bytes(&reference_bytes)?;
+    let (profile, reference) =
+        owned_reference(&state, id.trim().to_string(), token.rate_limit_key()).await?;
     let language = query.language.unwrap_or(profile.language.clone());
     let mode = parse_clone_mode(&profile.clone_mode)?;
     let format = query
@@ -382,10 +491,7 @@ pub async fn post_preview(
     request.device = DevicePreference::Auto;
     request.clone_mode = Some(mode);
     request.reference_transcript = profile.transcript.clone();
-    request.reference_audio = Some(ReferenceAudio {
-        pcm,
-        sample_rate: rate,
-    });
+    request.reference_audio = Some(reference);
     let registry = build_registry(&config, supertonic_handle(&state).await, &state.providers);
     let provider = registry
         .resolve_model(&profile.model)
@@ -403,8 +509,7 @@ pub async fn post_preview(
     let audio = synthesize_provider_bounded(&state, provider, request)
         .await
         .map_err(provider_error_to_app)?;
-    let bytes = sonicboom::tts::audio::encode_audio(&audio.samples, audio.sample_rate, format)
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let bytes = super::tts::encode_output(audio.samples, audio.sample_rate, format).await?;
     Ok((
         StatusCode::OK,
         [(header::CONTENT_TYPE, format.content_type())],

@@ -217,6 +217,7 @@ struct GptState {
 /// Native GPT-SoVITS ONNX provider.
 pub struct GptSovitsProvider {
     config: Mutex<GptSovitsConfig>,
+    lifecycle: Mutex<()>,
     state: Mutex<GptState>,
     /// The native model. `TTSModel` requires `&mut self` for reference and
     /// synthesis, so every `(prepare_reference + synthesize)` unit runs
@@ -236,6 +237,7 @@ impl GptSovitsProvider {
     pub fn new(config: GptSovitsConfig) -> Arc<Self> {
         Arc::new(Self {
             config: Mutex::new(config),
+            lifecycle: Mutex::new(()),
             state: Mutex::new(GptState {
                 loaded_model: None,
                 load_error: None,
@@ -249,6 +251,21 @@ impl GptSovitsProvider {
     }
 
     pub fn reconfigure(&self, config: GptSovitsConfig) {
+        let Ok(_lifecycle) = self.lifecycle.try_lock() else {
+            return;
+        };
+        let old = self.config_snapshot();
+        let reload = old.enabled != config.enabled
+            || old.model_dir != config.model_dir
+            || old.model_id != config.model_id
+            || old.revision != config.revision
+            || old.device != config.device;
+        if !reload {
+            if let Ok(mut current) = self.config.lock() {
+                *current = config;
+            }
+            return;
+        }
         if let Ok(mut current) = self.config.lock() {
             *current = config;
         }
@@ -385,6 +402,29 @@ impl GptSovitsProvider {
     /// performed here. Without the `gpt-sovits` Cargo feature this reports
     /// the rebuild diagnostic instead of touching weights.
     fn load_native(&self, model_id: &str) -> Result<(), ProviderError> {
+        let config = self.config_snapshot();
+        self.load_expected(model_id, &config)
+    }
+    fn load_expected(
+        &self,
+        model_id: &str,
+        expected: &GptSovitsConfig,
+    ) -> Result<(), ProviderError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| ProviderError::inference_failed("GPT lifecycle lock poisoned"))?;
+        if &self.config_snapshot() != expected {
+            return Err(ProviderError::loading("obsolete GPT load discarded"));
+        }
+        if self
+            .state
+            .lock()
+            .map(|s| s.loaded_model.is_some())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
         Self::check_model(model_id)?;
         gptsovits_manifest(model_id)?;
         let config = self.config_snapshot();
@@ -457,7 +497,7 @@ impl GptSovitsProvider {
                 return;
             }
             #[cfg(feature = "gpt-sovits")]
-            if self.model.lock().map(|m| m.is_some()).unwrap_or(false) {
+            if state.loaded_model.is_some() {
                 return;
             }
             state.ensuring = true;
@@ -472,6 +512,7 @@ impl GptSovitsProvider {
                 state.downloading = false;
                 match &result {
                     Ok(()) => state.load_error = None,
+                    Err(error) if error.message().contains("obsolete") => state.load_error = None,
                     Err(error) => state.load_error = Some(error.message().to_string()),
                 }
             }
@@ -511,7 +552,7 @@ impl GptSovitsProvider {
         .await?;
         let loader = Arc::clone(self);
         let model_id = config.model_id.clone();
-        tokio::task::spawn_blocking(move || loader.load_native(&model_id))
+        tokio::task::spawn_blocking(move || loader.load_expected(&model_id, &config))
             .await
             .map_err(|e| {
                 ProviderError::inference_failed(format!("gpt-sovits load task failed: {e}"))
@@ -527,7 +568,6 @@ impl GptSovitsProvider {
             .lock()
             .map(|s| s.loaded_model.is_some())
             .unwrap_or(false)
-            && self.model.lock().map(|m| m.is_some()).unwrap_or(false)
     }
 
     /// Trigger a background ensure when the provider is enabled but has no
@@ -746,6 +786,9 @@ impl TtsProvider for GptSovitsProvider {
     }
 
     fn unload(&self) {
+        let Ok(_lifecycle) = self.lifecycle.lock() else {
+            return;
+        };
         #[cfg(feature = "gpt-sovits")]
         if let Ok(mut model) = self.model.lock() {
             *model = None;
@@ -868,7 +911,13 @@ impl TtsProvider for GptSovitsProvider {
         }
         #[cfg(feature = "gpt-sovits")]
         {
+            let _lifecycle = crate::tts::control::lock_cancellable(&self.lifecycle)
+                .map_err(ProviderError::inference_failed)?;
             self.require_loaded()?;
+            let config = self.config_snapshot();
+            if !config.enabled {
+                return Err(ProviderError::model_missing("GPT provider disabled"));
+            }
             // One atomic unit under a single acquisition: this request's
             // reference is prepared and synthesized before any other
             // request can touch the model. Staged audio is owner-only and
@@ -900,17 +949,37 @@ impl TtsProvider for GptSovitsProvider {
                 if let Some(seed) = request.seed {
                     sampling = sampling.seed(seed);
                 }
-                let (spec, samples) = slot
-                    .synthesize_sync(
-                        request.text.trim(),
-                        sampling.build(),
-                        LangId::Auto,
-                        PostprocessParams::default(),
-                    )
-                    .map_err(|e| {
-                        ProviderError::inference_failed(format!("gpt-sovits synthesis failed: {e}"))
-                    })?;
-                Ok::<_, ProviderError>((spec.sample_rate, samples))
+                let control = crate::tts::control::current();
+                let mut samples = Vec::new();
+                let mut rate = 0;
+                slot.synthesize_sentences_sync(
+                    request.text.trim(),
+                    sampling.build(),
+                    LangId::Auto,
+                    PostprocessParams::default(),
+                    |spec, chunk| {
+                        rate = spec.sample_rate;
+                        if control.as_ref().is_some_and(|c| !c.update("generating", 0)) {
+                            return false;
+                        }
+                        samples.extend(chunk);
+                        samples.len() <= 32_000 * 600
+                    },
+                )
+                .map_err(|e| {
+                    ProviderError::inference_failed(format!("gpt-sovits synthesis failed: {e}"))
+                })?;
+                if control.as_ref().is_some_and(|c| c.stopped()) {
+                    return Err(ProviderError::inference_failed(
+                        "inference cancelled or deadline exceeded",
+                    ));
+                }
+                if samples.len() > 32_000 * 600 {
+                    return Err(ProviderError::inference_failed(
+                        "GPT output exceeds ten-minute bound",
+                    ));
+                }
+                Ok::<_, ProviderError>((rate, samples))
             })();
             let _ = std::fs::remove_file(&staged);
             let (sample_rate, samples) = outcome?;
@@ -919,11 +988,11 @@ impl TtsProvider for GptSovitsProvider {
                     "gpt-sovits synthesis produced no audio",
                 ));
             }
-            return Ok(PcmAudio {
+            Ok(PcmAudio {
                 samples,
                 sample_rate,
                 channels: 1,
-            });
+            })
         }
     }
 }

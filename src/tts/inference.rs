@@ -37,6 +37,12 @@ pub fn synthesize(
     let mut all_samples: Vec<f32> = Vec::new();
 
     for (i, chunk) in chunks.iter().enumerate() {
+        if let Some(control) = crate::tts::control::current() {
+            anyhow::ensure!(
+                !control.stopped(),
+                "inference cancelled or deadline exceeded"
+            );
+        }
         if i > 0 {
             // 0.2 seconds of silence between chunks
             all_samples.extend(vec![0.0f32; (sample_rate * 0.2) as usize]);
@@ -165,7 +171,7 @@ fn synthesize_chunk(
     for step in 0..inference_steps {
         if let Some(control) = crate::tts::control::current() {
             anyhow::ensure!(
-                control.update("generating", step),
+                control.update("generating", 0),
                 "inference cancelled or deadline exceeded"
             );
         }
@@ -192,6 +198,12 @@ fn synthesize_chunk(
 
     // 5. Vocoder
     let wav_vec: Vec<f32> = {
+        if let Some(control) = crate::tts::control::current() {
+            anyhow::ensure!(
+                control.update("decoding", 0),
+                "inference cancelled or deadline exceeded"
+            );
+        }
         let outputs = sessions.vocoder.run(ort::inputs![
             "latent" => Tensor::from_array(xt)?,
         ])?;

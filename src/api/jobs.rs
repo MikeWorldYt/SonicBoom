@@ -18,7 +18,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-tokio::task_local! { static ACTIVE: Arc<InferenceControl>; }
+tokio::task_local! {
+    static ACTIVE: Arc<InferenceControl>;
+    static ADMISSION: std::cell::RefCell<Option<super::gate::InferenceAdmission>>;
+}
+pub fn take_admission() -> Option<super::gate::InferenceAdmission> {
+    ADMISSION.try_with(|a| a.borrow_mut().take()).ok().flatten()
+}
+pub async fn with_deadline<T>(secs: u64, work: impl std::future::Future<Output = T>) -> T {
+    let control =
+        active_control().unwrap_or_else(|| InferenceControl::new(Duration::from_secs(secs)));
+    ACTIVE.scope(control, work).await
+}
 pub fn active_control() -> Option<Arc<InferenceControl>> {
     ACTIVE.try_with(Arc::clone).ok()
 }
@@ -32,6 +43,7 @@ pub struct JobStatus {
     pub frames: usize,
     pub elapsed_secs: f64,
     pub error: Option<String>,
+    pub stage_secs: std::collections::BTreeMap<String, f64>,
 }
 impl JobStatus {
     fn terminal(&self) -> bool {
@@ -66,6 +78,8 @@ impl JobStore {
             status.stage = p.stage;
             status.frames = p.frames;
             status.elapsed_secs = p.elapsed_secs;
+            status.updated_at = p.updated_at;
+            status.stage_secs = p.stage_secs;
         }
         Ok(status)
     }
@@ -105,11 +119,15 @@ pub async fn create(
             "text is empty or exceeds configured length".into(),
         ));
     }
+    let admission = state
+        .inference_gate
+        .reserve()
+        .map_err(|_| AppError::TooManyRequests("Inference admission is full".into()))?;
     let retention = Duration::from_secs(config.inference.job_retention_secs);
     let control = InferenceControl::new(Duration::from_secs(
         config.inference.generation_deadline_secs,
     ));
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = control.id.clone();
     let now = chrono::Utc::now();
     let status = JobStatus {
         id: id.clone(),
@@ -119,6 +137,7 @@ pub async fn create(
         frames: 0,
         elapsed_secs: 0.0,
         error: None,
+        stage_secs: std::collections::BTreeMap::new(),
     };
     let store = state.inference_gate.jobs.clone();
     {
@@ -148,47 +167,50 @@ pub async fn create(
     }
     tokio::spawn(async move {
         let job_id = id.clone();
-        let execution = tokio::spawn(ACTIVE.scope(control.clone(), async move {
-            let response = if let Some(profile) = query.profile {
-                super::voices::post_preview(
-                    token,
-                    State(state),
-                    Path(profile),
-                    Query(super::voices::PreviewQuery {
-                        format: query.format,
-                        language: query.lang,
-                    }),
-                    body,
-                )
-                .await
-                .map(IntoResponse::into_response)
-            } else {
-                super::tts::post_tts(
-                    token,
-                    State(state),
-                    Query(super::tts::TtsQuery {
-                        voice: query.voice,
-                        lang: query.lang,
-                        format: query.format,
-                        #[cfg(feature = "playback")]
-                        play_now: None,
-                    }),
-                    body,
-                )
-                .await
-            }?;
-            let content_type = response
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .and_then(|h| h.to_str().ok())
-                .unwrap_or("application/octet-stream")
-                .to_owned();
-            control.update("encoding", control.snapshot().frames);
-            let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
-                .await
-                .map_err(|_| AppError::internal("job audio exceeds 16 MiB"))?;
-            Ok::<_, AppError>((content_type, bytes.to_vec()))
-        }))
+        let execution = tokio::spawn(ADMISSION.scope(
+            std::cell::RefCell::new(Some(admission)),
+            ACTIVE.scope(control.clone(), async move {
+                let response = if let Some(profile) = query.profile {
+                    super::voices::post_preview(
+                        token,
+                        State(state),
+                        Path(profile),
+                        Query(super::voices::PreviewQuery {
+                            format: query.format,
+                            language: query.lang,
+                        }),
+                        body,
+                    )
+                    .await
+                    .map(IntoResponse::into_response)
+                } else {
+                    super::tts::post_tts(
+                        token,
+                        State(state),
+                        Query(super::tts::TtsQuery {
+                            voice: query.voice,
+                            lang: query.lang,
+                            format: query.format,
+                            #[cfg(feature = "playback")]
+                            play_now: None,
+                        }),
+                        body,
+                    )
+                    .await
+                }?;
+                let content_type = response
+                    .headers()
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|h| h.to_str().ok())
+                    .unwrap_or("application/octet-stream")
+                    .to_owned();
+                control.update("encoding", control.snapshot().frames);
+                let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
+                    .await
+                    .map_err(|_| AppError::internal("job audio exceeds 16 MiB"))?;
+                Ok::<_, AppError>((content_type, bytes.to_vec()))
+            }),
+        ))
         .await;
         {
             let mut entries = store.entries.lock().unwrap_or_else(|e| e.into_inner());
@@ -201,6 +223,7 @@ pub async fn create(
                 let p = j.control.snapshot();
                 j.status.frames = p.frames;
                 j.status.elapsed_secs = p.elapsed_secs;
+                j.status.stage_secs = p.stage_secs;
                 if j.control.stopped() {
                     j.status.stage = "cancelled".into();
                 } else {
@@ -257,15 +280,14 @@ pub async fn cancel(
 ) -> Result<Json<JobStatus>, AppError> {
     let store = &state.inference_gate.jobs;
     let status = store.snapshot(&id, &token.rate_limit_key())?;
-    if !status.terminal() {
-        if let Some(j) = store
+    if !status.terminal()
+        && let Some(j) = store
             .entries
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&id)
-        {
-            j.control.cancel();
-        }
+    {
+        j.control.cancel();
     }
     // Cancellation is acknowledged here; terminal state is published only after computation ends.
     Ok(Json(status))
@@ -328,4 +350,41 @@ pub async fn events(
         },
     );
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn snapshots_enforce_owner_and_retention() {
+        let store = JobStore::default();
+        let control = InferenceControl::new(Duration::from_secs(1));
+        let now = chrono::Utc::now();
+        store.entries.lock().unwrap().insert(
+            "id".into(),
+            Job {
+                owner: "alice".into(),
+                control,
+                status: JobStatus {
+                    id: "id".into(),
+                    created_at: now,
+                    updated_at: now,
+                    stage: "failed".into(),
+                    frames: 0,
+                    elapsed_secs: 0.0,
+                    error: Some("test failure".into()),
+                    stage_secs: Default::default(),
+                },
+                finished: Some(Instant::now()),
+                audio: None,
+            },
+        );
+        assert!(matches!(
+            store.snapshot("id", "bob"),
+            Err(AppError::NotFound(_))
+        ));
+        assert_eq!(store.snapshot("id", "alice").unwrap().stage, "failed");
+        JobStore::reap(&mut store.entries.lock().unwrap(), Duration::ZERO);
+        assert!(store.snapshot("id", "alice").is_err());
+    }
 }
