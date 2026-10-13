@@ -756,7 +756,10 @@ voicesList.addEventListener('click', async event => {
     voiceSelect.value = profile.id;
     voiceSelect.dispatchEvent(new Event('change'));
     document.getElementById('tts-heading').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    if (button.dataset.action === 'preview') await synthesize({ previewText: 'Hi there. This is a voice preview.' });
+    if (button.dataset.action === 'preview') {
+      await synthesize({ previewText: 'Hi there. This is a voice preview.' });
+      return;
+    }
     setStatus(`Using cloned voice “${profile.name}”.`, false);
   } catch (error) {
     setCloneStatus(error.message, 'error');
@@ -930,7 +933,11 @@ async function watchSynthesisJob(id) {
     let statusResponse;
     try { statusResponse = await apiFetch(endpoint, { signal: AbortSignal.timeout(15000) }); }
     catch (_) { failures++; await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
-    if (!statusResponse.ok) throw new Error(`Job status unavailable (HTTP ${statusResponse.status}).`);
+    if (!statusResponse.ok) {
+      const error = new Error(`Job status unavailable (HTTP ${statusResponse.status}).`);
+      error.terminalJob = statusResponse.status === 404;
+      throw error;
+    }
     if (terminal(await statusResponse.json())) return;
     let response;
     try { response = await apiFetch(`${endpoint}/events`, { signal: AbortSignal.timeout(30000) }); }
@@ -964,7 +971,7 @@ async function watchSynthesisJob(id) {
 async function synthesize(options = {}) {
   if (generateBtn.disabled) return;
   const text = typeof options.previewText === 'string' ? options.previewText : textInput.value.trim();
-  if (!text) {
+  if (!text && !activeJobId) {
     setStatus('Please enter some text.', true);
     return;
   }
@@ -989,22 +996,27 @@ async function synthesize(options = {}) {
   const selectedDevice = providerStatus?.effective_device || 'unknown';
   setStatus(`${modelSelect.value} · ${voice} · ${selectedDevice}${selectedDevice === 'cpu' && meta.kind === 'cloning' ? ' · CPU inference may be slow; no completion time estimate is available.' : ''}`);
 
+  let terminalReached = false;
   try {
-    if (meta.kind === 'cloning' && !voice) {
+    if (meta.kind === 'cloning' && !voice && !activeJobId) {
       throw new Error('Create a voice profile for this model first.');
     }
     const params = new URLSearchParams({ lang, format: 'wav' });
     if (meta.kind === 'cloning') params.set('profile', voice);
     else params.set('voice', voice);
+    let job = { id: activeJobId };
+    if (!activeJobId) {
     const created = await apiFetch(`/api/tts/jobs?${params}`, {
       method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text,
     });
     if (!created.ok) throw new Error(`HTTP ${created.status}: ${await created.text()}`);
-    const job = await created.json();
+    job = await created.json();
     activeJobId = job.id;
+    }
     cancelGeneration.hidden = false;
     cancelGeneration.disabled = false;
     await watchSynthesisJob(job.id);
+    terminalReached = true;
     const resp = await apiFetch(`/api/tts/jobs/${encodeURIComponent(job.id)}/audio`);
 
     if (!resp.ok) {
@@ -1030,17 +1042,18 @@ async function synthesize(options = {}) {
       console.log("Audio waiting for user interaction to play: ", err);
     });
 
-    setStatus('');
+    setStatus('Completed. Audio is ready to play or download.');
   } catch (e) {
-    setStatus(e.message, true);
+    terminalReached ||= Boolean(e.terminalJob);
+    setStatus(e.message + (activeJobId && !terminalReached ? ' Use Resume monitoring or Cancel generation.' : ''), true);
   } finally {
-    activeJobId = null;
-    cancelGeneration.hidden = true;
+    if (terminalReached) activeJobId = null;
+    cancelGeneration.hidden = !activeJobId;
     cancelGeneration.disabled = false;
     // Reset UI State
     generateBtn.disabled = false;
     generateBtn.classList.remove('loading');
-    generateBtn.textContent = 'Generate speech';
+    generateBtn.textContent = activeJobId ? 'Resume monitoring' : 'Generate speech';
   }
 }
 
