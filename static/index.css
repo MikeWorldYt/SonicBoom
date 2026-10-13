@@ -459,3 +459,11 @@ audio { margin-top: 1rem; width: 100%; display: none; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none; animation: none; }
 }
+
+#cancelGeneration { margin-top: .6rem; }
+#downloadAudio { display: inline-block; margin-top: .6rem; }
+#downloadAudio[hidden], #cancelGeneration[hidden] { display: none; }
+#status { overflow-wrap: anywhere; }
+@media (max-width: 600px) { #cancelGeneration { width: 100%; min-height: 44px; } }
+
+#inferenceDiagnostics { max-height: 16rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; }
