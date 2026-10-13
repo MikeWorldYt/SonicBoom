@@ -230,6 +230,7 @@ mod tests {
             model_status: status.clone(),
             audio_manager: Arc::new(None),
             model_service: Arc::new(crate::runtime::ModelService::new(status)),
+            providers: Arc::new(sonicboom::tts::providers::ProviderPool::new()),
             rate_limiter: Arc::new(crate::runtime::subsystems::RateLimiterManager::new(
                 crate::api::rate_limit::RateLimiter::new(0, 60),
             )),

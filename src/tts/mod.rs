@@ -4,9 +4,11 @@ pub mod devices;
 pub mod download;
 pub mod inference;
 pub mod model;
+pub mod providers;
 #[cfg(feature = "playback")]
 pub mod queue;
 pub mod text;
+pub mod voices;
 
 use model::ModelHandle;
 

@@ -88,6 +88,8 @@ pub fn parse_toml(text: &str) -> Result<AppConfig, ConfigError> {
                     | "logging"
                     | "paths"
                     | "security"
+                    | "providers"
+                    | "voices"
             );
             if !known {
                 return Err(ConfigError::invalid(
@@ -154,6 +156,27 @@ pub const ALL_CONFIG_PATHS: &[&str] = &[
     "security.cookie_secure",
     "security.enable_hsts",
     "security.allow_insecure_remote",
+    "providers.qwen3.enabled",
+    "providers.qwen3.model_dir",
+    "providers.qwen3.model_id",
+    "providers.qwen3.revision",
+    "providers.qwen3.device",
+    "providers.qwen3.max_concurrent",
+    "providers.qwen3.cache_entries",
+    "providers.qwen3.max_tokens",
+    "providers.gpt_sovits.enabled",
+    "providers.gpt_sovits.model_dir",
+    "providers.gpt_sovits.model_id",
+    "providers.gpt_sovits.revision",
+    "providers.gpt_sovits.device",
+    "providers.gpt_sovits.max_concurrent",
+    "providers.gpt_sovits.cache_entries",
+    "providers.gpt_sovits.top_k",
+    "providers.gpt_sovits.top_p",
+    "providers.gpt_sovits.temperature",
+    "providers.gpt_sovits.repetition_penalty",
+    "voices.store_dir",
+    "voices.max_upload_bytes",
 ];
 
 // ---------------------------------------------------------------------------

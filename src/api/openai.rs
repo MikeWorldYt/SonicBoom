@@ -19,10 +19,27 @@ use crate::{
     tts::{ModelStatus, audio},
 };
 
-/// Model identifiers accepted by `/v1/audio/speech`. All currently select
-/// the local Supertonic 3 model; unknown identifiers are rejected with
-/// `400` instead of silently using another model.
-pub const SUPPORTED_OPENAI_MODELS: &[&str] = &["tts-1", "tts-1-hd", "supertonic-3"];
+/// Model identifiers accepted by `/v1/audio/speech`. Legacy aliases select
+/// the local Supertonic 3 model; cloning models route to their native
+/// provider. Unknown identifiers are rejected with `400` instead of
+/// silently using another model.
+pub const SUPPORTED_OPENAI_MODELS: &[&str] = &[
+    "tts-1",
+    "tts-1-hd",
+    "supertonic-3",
+    "qwen3-tts-0.6b-base",
+    "qwen3-tts-1.7b-base",
+    "gpt-sovits-v2-onnx",
+    "gpt-sovits-v2pro-onnx",
+    "gpt-sovits-v2proplus-onnx",
+];
+
+/// Whether `model` selects a voice-cloning provider (voice must be an
+/// authorized profile ID) rather than Supertonic built-in voices.
+pub fn is_cloning_model(model: &str) -> bool {
+    sonicboom::tts::providers::qwen::QWEN_MODELS.contains(&model)
+        || sonicboom::tts::providers::gptsovits::GPTSOVITS_MODELS.contains(&model)
+}
 
 /// OpenAI-compatible TTS request body
 #[derive(Deserialize)]
@@ -32,7 +49,8 @@ pub struct SpeechRequest {
     pub model: String,
     /// The text to synthesize
     pub input: String,
-    /// The voice to use
+    /// The voice to use: a Supertonic voice name/alias, or (for cloning
+    /// models) an authorized voice-profile ID from `POST /api/voices/clones`.
     #[serde(default = "default_voice")]
     pub voice: String,
     /// The output format
@@ -42,6 +60,14 @@ pub struct SpeechRequest {
     /// rejected explicitly instead of silently ignored.
     #[serde(default)]
     pub speed: Option<f32>,
+    /// Synthesis language (BCP-47 tag). Legacy Supertonic requests ignore
+    /// this and synthesize English; cloning providers validate it against
+    /// their supported languages without changing old defaults.
+    #[serde(default)]
+    pub language: Option<String>,
+    /// Deterministic seed for cloning providers, when supported.
+    #[serde(default)]
+    pub seed: Option<u64>,
 }
 
 fn default_model() -> String {
@@ -122,13 +148,111 @@ pub fn map_voice(openai_voice: &str) -> Result<String, AppError> {
     }
 }
 
+/// Synthesize speech with a cloning provider for `POST /v1/audio/speech`
+/// when `model` selects Qwen3-TTS or GPT-SoVITS. `voice` must be an
+/// authorized voice-profile ID owned by the calling token; the stored
+/// reference audio and transcript travel with the request.
+async fn post_speech_cloning(
+    token: &AuthenticatedToken,
+    state: &crate::AppState,
+    request: &SpeechRequest,
+    format: sonicboom::tts::audio::AudioFormat,
+) -> Result<axum::response::Response, AppError> {
+    use super::providers::{build_registry, provider_error_to_app, supertonic_handle};
+    use super::tts::synthesize_provider_bounded;
+    use sonicboom::tts::providers::types::{DevicePreference, ProviderRequest, ReferenceAudio};
+
+    let config = state.config.get().await;
+    sonicboom::engine::validate_tts_input(
+        &request.input,
+        request.language.as_deref().unwrap_or("en"),
+        "clone",
+        config.model.inference_steps,
+        config.tts.max_text_length,
+    )
+    .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let profile_id = request.voice.trim();
+    sonicboom::tts::voices::validate_profile_id(profile_id).map_err(|_| {
+        AppError::BadRequest(format!(
+            "model '{}' requires an authorized voice-profile ID as voice \
+             (create one with POST /api/voices/clones); '{}' is not a profile ID",
+            request.model, request.voice
+        ))
+    })?;
+    let store = sonicboom::tts::voices::VoiceProfileStore::open(std::path::PathBuf::from(
+        config.voices.store_dir.clone(),
+    ))
+    .map_err(AppError::internal)?;
+    let profile = store
+        .get(profile_id)
+        .filter(|p| p.owner_token_hash.as_deref() == Some(token.rate_limit_key().as_str()))
+        .cloned()
+        .ok_or_else(|| {
+            AppError::BadRequest(format!(
+                "unknown voice profile for model '{}' (profiles are scoped to the owning token)",
+                request.model
+            ))
+        })?;
+    if profile.model != request.model {
+        return Err(AppError::BadRequest(format!(
+            "voice profile '{}' is bound to model '{}' and cannot be used with '{}'",
+            profile.id, profile.model, request.model
+        )));
+    }
+    let reference_bytes = std::fs::read(
+        store
+            .reference_path(&profile.id)
+            .map_err(AppError::internal)?,
+    )
+    .map_err(|_| AppError::internal("reference audio unavailable"))?;
+    let (pcm, rate) = super::voices::decode_wav_for_synthesis(&reference_bytes)?;
+    let mut provider_request = ProviderRequest::new(
+        &profile.model,
+        &profile.id,
+        request.input.trim(),
+        request.language.clone().unwrap_or(profile.language.clone()),
+    );
+    provider_request.device = DevicePreference::Auto;
+    provider_request.clone_mode =
+        Some(super::voices::parse_clone_mode_public(&profile.clone_mode)?);
+    provider_request.reference_transcript = profile.transcript.clone();
+    provider_request.reference_audio = Some(ReferenceAudio {
+        pcm,
+        sample_rate: rate,
+    });
+    provider_request.seed = request.seed;
+    let registry = build_registry(&config, supertonic_handle(state).await, &state.providers);
+    let provider = registry
+        .resolve_model(&request.model)
+        .map_err(provider_error_to_app)?;
+    if provider.id() != profile.provider {
+        return Err(AppError::BadRequest(format!(
+            "voice profile '{}' belongs to provider '{}' and cannot be used as '{}'",
+            profile.id,
+            profile.provider,
+            provider.id()
+        )));
+    }
+    let audio = synthesize_provider_bounded(state, provider, provider_request)
+        .await
+        .map_err(provider_error_to_app)?;
+    let audio_bytes =
+        sonicboom::tts::audio::encode_audio(&audio.samples, audio.sample_rate, format)
+            .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, format.content_type())],
+        Body::from(audio_bytes),
+    )
+        .into_response())
+}
+
 /// Synthesize speech using OpenAI-compatible API
-#[allow(clippy::unused_async)]
 pub async fn post_speech(
     token: AuthenticatedToken,
     State(state): State<crate::AppState>,
     body: String,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<axum::response::Response, AppError> {
     check_rate_limit(&state, &token)?;
 
     let request: SpeechRequest = serde_json::from_str(&body)
@@ -136,9 +260,16 @@ pub async fn post_speech(
 
     validate_model(&request.model)?;
     validate_speed(request.speed)?;
-    let voice_name = map_voice(&request.voice)?;
     let format = audio::AudioFormat::parse(&request.response_format)
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    // Cloning models route to their native provider with an authorized
+    // voice profile; legacy aliases keep the exact Supertonic path below.
+    if is_cloning_model(&request.model) {
+        check_rate_limit(&state, &token)?;
+        return post_speech_cloning(&token, &state, &request, format).await;
+    }
+    let voice_name = map_voice(&request.voice)?;
 
     // TTS limits are read per request (spec §46).
     let config = state.config.get().await;
@@ -202,29 +333,41 @@ pub async fn post_speech(
         StatusCode::OK,
         [(header::CONTENT_TYPE, format.content_type())],
         Body::from(audio_bytes),
-    ))
+    )
+        .into_response())
 }
 
 /// List available models (OpenAI-compatible endpoint)
 ///
 /// Public metadata endpoint: exposes only non-sensitive model identifiers
-/// (see docs). Authentication is intentionally not required.
+/// (see docs). Authentication is intentionally not required. Built from
+/// registry metadata rather than a fixed array: legacy aliases plus the
+/// installed-cloning models are always listed with their provider owner.
 pub async fn get_models() -> impl IntoResponse {
-    let body = serde_json::json!({
-        "object": "list",
-        "data": [
-            {
-                "id": "supertonic-3",
+    let data: Vec<serde_json::Value> = SUPPORTED_OPENAI_MODELS
+        .iter()
+        .map(|id| {
+            let owned_by = if is_cloning_model(id) {
+                if sonicboom::tts::providers::qwen::QWEN_MODELS.contains(id) {
+                    "local:qwen3"
+                } else {
+                    "local:gpt-sovits"
+                }
+            } else {
+                "local"
+            };
+            serde_json::json!({
+                "id": id,
                 "object": "model",
                 "created": 1704067200,
-                "owned_by": "local",
+                "owned_by": owned_by,
                 "permission": [],
-                "root": "supertonic-3",
+                "root": id,
                 "parent": null,
-            }
-        ]
-    });
-    let body = body.to_string();
+            })
+        })
+        .collect();
+    let body = serde_json::json!({ "object": "list", "data": data }).to_string();
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
@@ -272,8 +415,24 @@ mod tests {
 
     #[test]
     fn supported_models_are_accepted() {
-        for model in ["tts-1", "tts-1-hd", "supertonic-3"] {
+        for model in SUPPORTED_OPENAI_MODELS {
             assert!(validate_model(model).is_ok(), "model {model} rejected");
+        }
+        // Legacy aliases stay Supertonic; new IDs route to cloning providers.
+        for model in ["tts-1", "tts-1-hd", "supertonic-3"] {
+            assert!(!is_cloning_model(model), "{model} must stay supertonic");
+        }
+        for model in [
+            "qwen3-tts-0.6b-base",
+            "qwen3-tts-1.7b-base",
+            "gpt-sovits-v2-onnx",
+            "gpt-sovits-v2pro-onnx",
+            "gpt-sovits-v2proplus-onnx",
+        ] {
+            assert!(
+                is_cloning_model(model),
+                "{model} must route to a cloning provider"
+            );
         }
     }
 
@@ -349,5 +508,8 @@ mod tests {
         assert_eq!(request.response_format, "opus");
         assert_eq!(request.speed, None);
         assert!(validate_speed(request.speed).is_ok());
+        // New optional fields default to absent without changing old defaults.
+        assert_eq!(request.language, None);
+        assert_eq!(request.seed, None);
     }
 }

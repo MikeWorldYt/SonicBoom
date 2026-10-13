@@ -1,0 +1,62 @@
+//! Native TTS provider framework.
+//!
+//! Object-safe provider contract shared by Supertonic 3 (default), Qwen3-TTS
+//! (Candle) and GPT-SoVITS (ONNX). All inference runs in the SonicBoom
+//! process: non-`Send` model internals are encapsulated in dedicated
+//! in-process worker threads with bounded channels, never subprocesses.
+
+pub mod assets;
+pub mod error;
+pub mod gptsovits;
+pub mod pool;
+pub mod qwen;
+pub mod registry;
+pub mod supertonic;
+pub mod types;
+pub mod worker;
+
+pub use error::{ProviderError, ProviderErrorKind};
+pub use pool::ProviderPool;
+pub use registry::TtsProviderRegistry;
+pub use types::{
+    CloneMode, DevicePreference, EffectiveDevice, PcmAudio, ProviderCapabilities, ProviderRequest,
+    ProviderStatus, ProviderStatusState,
+};
+
+/// Object-safe voice-cloning provider contract.
+///
+/// Implementations must be `Send + Sync`. Model internals that are not
+/// `Sync` (e.g. GPT-SoVITS mutable reference conditioning) are serialized
+/// inside the provider behind a worker/mutex so concurrent callers can
+/// never observe or corrupt each other's reference data.
+pub trait TtsProvider: Send + Sync {
+    /// Stable provider identifier, e.g. `supertonic`, `qwen3`, `gpt-sovits`.
+    fn id(&self) -> &'static str;
+    /// Static capability metadata (models, languages, modes, devices).
+    fn capabilities(&self) -> ProviderCapabilities;
+    /// Current lifecycle status (enabled, readiness, effective device).
+    fn status(&self) -> ProviderStatus;
+    /// Load model assets for `model_id` (validates variant + files first).
+    fn load(&self, model_id: &str) -> Result<(), ProviderError>;
+    /// Unload model assets, freeing memory but keeping configuration.
+    fn unload(&self);
+    /// Blocking synthesis returning normalized PCM. Called with an
+    /// admission-gate permit held by the blocking task itself.
+    fn synthesize(&self, request: &ProviderRequest) -> Result<PcmAudio, ProviderError>;
+    /// Cache a voice-conditioning reference, if the provider supports it.
+    /// Default: providers without reference support reject explicitly.
+    fn prepare_reference(
+        &self,
+        _model_id: &str,
+        _reference_pcm: &[f32],
+        _reference_rate: u32,
+        _transcript: Option<&str>,
+        _mode: CloneMode,
+    ) -> Result<String, ProviderError> {
+        Err(ProviderError::unsupported_model(
+            self.id(),
+            "<reference>",
+            "this provider does not support reference conditioning",
+        ))
+    }
+}

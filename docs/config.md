@@ -136,6 +136,27 @@ and empty assignments are rejected.
 | `MODEL_DOWNLOAD_CONNECT_TIMEOUT_SECS` | `10` | Per-file connect timeout for model downloads (1–300) |
 | `MODEL_DOWNLOAD_TIMEOUT_SECS` | `1800` | Per-file total timeout for model downloads (1–86400) |
 
+### Voice-Cloning Providers (TOML only, no environment secrets)
+
+```toml
+[providers.qwen3]
+enabled = false            # Qwen3-TTS (Candle), CPU via device cpu|auto
+model_id = "qwen3-tts-0.6b-base"
+device = "auto"            # cpu | auto | cuda (cuda needs qwen-cuda)
+
+[providers.gpt_sovits]
+enabled = false            # GPT-SoVITS ONNX, CPU only (cpu|auto)
+model_id = "gpt-sovits-v2pro-onnx"
+
+[voices]
+store_dir = "./voices"
+max_upload_bytes = 8388608
+```
+
+Both providers default to `enabled = false`: existing builds boot
+Supertonic exactly as before and fetch no extra weights. See
+[providers.md](providers.md).
+
 ### Security
 
 | Variable | Default | Description |

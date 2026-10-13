@@ -508,8 +508,9 @@ curl -X POST http://localhost:17842/v1/audio/speech \
 | `400`       | Bad request (invalid input)                         |
 | `401`       | Unauthorized (invalid/missing token)                |
 | `403`       | Forbidden (queue path outside allowed directory)    |
-| `404`       | Not found                                           |
+| `404`       | Not found (unknown voice profile IDs report `404` without disclosing ownership) |
 | `413`       | Payload too large (body limit exceeded)             |
+| `415`       | Unsupported media type (non-WAV reference uploads)  |
 | `422`       | Unprocessable entity                                |
 | `429`       | Too many requests (rate limit / inference saturated / playback queue full)|
 | `500`       | Internal server error (generic message + `request_id`) |

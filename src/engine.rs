@@ -84,6 +84,23 @@ impl SynthesisRequest {
             MAX_TEXT_CHARS,
         )
     }
+
+    /// Adapt a legacy request to the extensible provider contract without
+    /// changing legacy validation or defaults. The returned request targets
+    /// `model` (a Supertonic alias by default) and carries no reference
+    /// audio: cloning providers reject it explicitly until a voice profile
+    /// supplies authorized reference material.
+    pub fn to_provider_request(
+        &self,
+        model: impl Into<String>,
+    ) -> crate::tts::providers::types::ProviderRequest {
+        crate::tts::providers::types::ProviderRequest::new(
+            model,
+            self.voice.clone(),
+            self.text.clone(),
+            self.language.clone(),
+        )
+    }
 }
 
 pub struct SynthesisResult {
@@ -135,6 +152,14 @@ impl SonicBoomEngine {
         self.model.voice_styles.keys().map(String::as_str)
     }
 
+    /// Provider identity of this engine in the native registry
+    /// (`supertonic`). The engine itself is unchanged: model download,
+    /// voice styles, inference steps and output encoding behave exactly as
+    /// before; the registry adapter only routes requests to it.
+    pub fn provider_id(&self) -> &'static str {
+        "supertonic"
+    }
+
     pub fn synthesize(&self, request: &SynthesisRequest) -> Result<SynthesisResult> {
         request.validate()?;
         if !self.model.voice_styles.contains_key(&request.voice) {
@@ -169,6 +194,16 @@ mod tests {
             voice: "F1".to_owned(),
             inference_steps: 5,
         }
+    }
+
+    #[test]
+    fn legacy_requests_adapt_to_the_provider_contract() {
+        let adapted = request().to_provider_request("supertonic-3");
+        assert_eq!(adapted.model, "supertonic-3");
+        assert_eq!(adapted.voice, "F1");
+        assert_eq!(adapted.text, "hello");
+        assert_eq!(adapted.language, "en");
+        assert!(adapted.reference_audio.is_none());
     }
 
     #[test]

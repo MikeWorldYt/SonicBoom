@@ -117,12 +117,36 @@ pub async fn get_status(State(state): State<crate::AppState>) -> impl IntoRespon
     )
 }
 
+/// Run provider synthesis with the admission permit owned by the blocking
+/// task itself (same cancellation safety as [`synthesize_bounded`]): an HTTP
+/// timeout/cancellation can never release the concurrency slot while
+/// inference still runs, and queued jobs are bounded by the shared gate.
+pub(crate) async fn synthesize_provider_bounded(
+    state: &crate::AppState,
+    provider: std::sync::Arc<dyn sonicboom::tts::providers::TtsProvider>,
+    request: sonicboom::tts::providers::types::ProviderRequest,
+) -> Result<sonicboom::tts::providers::types::PcmAudio, sonicboom::tts::providers::ProviderError> {
+    use sonicboom::tts::providers::ProviderError;
+    state
+        .inference_gate
+        .run_bounded(move || provider.synthesize(&request))
+        .await
+        .map_err(|e| match e {
+            RunBoundedError::Saturated => ProviderError::busy(
+                "Server is busy. Too many pending inference requests.".to_string(),
+            ),
+            RunBoundedError::JoinFailed(detail) => {
+                ProviderError::inference_failed(format!("inference task failed: {detail}"))
+            }
+        })?
+}
+
 /// Shared pre-inference pipeline: rate limit -> validate -> admission control.
 ///
 /// Token-bucket rejections become [`AppError::RateLimited`] (same `429` JSON
 /// shape plus live `Retry-After` / `X-RateLimit-*` headers); inference and
 /// playback saturation keep their own headerless `429` messages.
-pub(super) fn check_rate_limit(
+pub(crate) fn check_rate_limit(
     state: &crate::AppState,
     token: &AuthenticatedToken,
 ) -> Result<(), AppError> {

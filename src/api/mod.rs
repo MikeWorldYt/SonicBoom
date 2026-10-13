@@ -4,10 +4,12 @@ pub mod config_api;
 pub mod gate;
 pub mod info;
 pub mod openai;
+pub mod providers;
 #[cfg(feature = "playback")]
 pub mod queue;
 pub mod rate_limit;
 pub mod tts;
+pub mod voices;
 
 use crate::AppState;
 use axum::{
@@ -22,6 +24,7 @@ use axum::{
 pub async fn router(state: AppState) -> Router {
     let tts_body_limit = state.config.get().await.tts.max_body_bytes;
     let openai_body_limit = state.config.get().await.tts.openai_max_body_bytes;
+    let voices_body_limit = state.config.get().await.voices.max_upload_bytes;
     #[cfg(feature = "playback")]
     let queue_body_limit = state.config.get().await.tts.queue_max_body_bytes;
 
@@ -56,7 +59,27 @@ pub async fn router(state: AppState) -> Router {
         )
         .route("/v1/models", get(openai::get_models))
         .route("/v1/models/list", get(openai::get_models))
-        .route("/v1/voices", get(openai::get_voices));
+        .route("/v1/voices", get(openai::get_voices))
+        // Native provider discovery and lifecycle status.
+        .route("/api/providers", get(providers::get_providers))
+        .route(
+            "/api/providers/{id}/status",
+            get(providers::get_provider_status),
+        )
+        // Managed cloning voice profiles (reference upload + preview).
+        .route(
+            "/api/voices/clones",
+            post(voices::post_clones).route_layer(DefaultBodyLimit::max(voices_body_limit)),
+        )
+        .route("/api/voices", get(voices::get_voices))
+        .route(
+            "/api/voices/{id}",
+            get(voices::get_voice).delete(voices::delete_voice),
+        )
+        .route(
+            "/api/voices/{id}/preview",
+            post(voices::post_preview).route_layer(DefaultBodyLimit::max(tts_body_limit)),
+        );
 
     #[cfg(feature = "playback")]
     {
@@ -131,6 +154,7 @@ mod tests {
             inference_gate: Arc::new(InferenceGateManager::new(gate::InferenceGate::new(1, 8))),
             rate_limiter: Arc::new(RateLimiterManager::new(rate_limit::RateLimiter::new(0, 60))),
             model_service: Arc::new(ModelService::new(Arc::new(RwLock::new(ModelStatus::Idle)))),
+            providers: Arc::new(sonicboom::tts::providers::ProviderPool::new()),
             secrets: Arc::new(MemorySecretStore::default()),
         }
     }
@@ -414,6 +438,7 @@ mod tests {
             inference_gate: Arc::new(InferenceGateManager::new(gate::InferenceGate::new(1, 8))),
             rate_limiter: Arc::new(RateLimiterManager::new(rate_limit::RateLimiter::new(2, 60))),
             model_service: Arc::new(ModelService::new(Arc::new(RwLock::new(ModelStatus::Idle)))),
+            providers: Arc::new(sonicboom::tts::providers::ProviderPool::new()),
             secrets: Arc::new(MemorySecretStore::default()),
         };
         let _ = std::fs::remove_file(&path);
@@ -590,6 +615,209 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    fn voices_test_config() -> AppConfig {
+        let mut config = test_config();
+        config.voices.store_dir = std::env::temp_dir()
+            .join(format!("sonicboom-voices-test-{}", uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .to_string();
+        config
+    }
+
+    async fn voices_test_app() -> (Router, String, String) {
+        let path = std::env::temp_dir().join(format!(
+            "sonicboom-voices-auth-test-{}-{}.json",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let store = TokenStore::load(path.to_str().unwrap()).await.unwrap();
+        let (_token, raw) = store.create(None).await.unwrap();
+        let config = voices_test_config();
+        let store_dir = config.voices.store_dir.clone();
+        let state = test_state(config, Arc::new(store), Arc::new(None));
+        let _ = std::fs::remove_file(&path);
+        (router(state).await, raw, store_dir)
+    }
+
+    fn raw_request(
+        method: &str,
+        uri: &str,
+        token: Option<&str>,
+        content_type: &str,
+        body: &[u8],
+    ) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", content_type);
+        if let Some(token) = token {
+            builder = builder.header("authorization", format!("Bearer {token}"));
+        }
+        builder.body(Body::from(body.to_vec())).unwrap()
+    }
+
+    #[tokio::test]
+    async fn provider_and_voice_endpoints_require_token_authentication() {
+        let (app, _, _) = voices_test_app().await;
+        for (method, uri, content_type, body) in [
+            ("GET", "/api/providers", "application/json", ""),
+            ("GET", "/api/providers/qwen3/status", "application/json", ""),
+            ("GET", "/api/voices", "application/json", ""),
+            (
+                "POST",
+                "/api/voices/clones?name=t&provider=qwen3&model=qwen3-tts-0.6b-base&language=ja&mode=x_vector&consent_basis=owner",
+                "audio/wav",
+                "",
+            ),
+            (
+                "GET",
+                "/api/voices/123e4567-e89b-12d3-a456-426614174000",
+                "application/json",
+                "",
+            ),
+            (
+                "DELETE",
+                "/api/voices/123e4567-e89b-12d3-a456-426614174000",
+                "application/json",
+                "",
+            ),
+            (
+                "POST",
+                "/api/voices/123e4567-e89b-12d3-a456-426614174000/preview",
+                "text/plain",
+                "hello",
+            ),
+        ] {
+            let request = raw_request(method, uri, None, content_type, body.as_bytes());
+            assert_eq!(
+                app.clone().oneshot(request).await.unwrap().status(),
+                StatusCode::UNAUTHORIZED,
+                "{method} {uri} must require authentication"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn providers_list_reports_all_three_providers() {
+        let (app, valid, store_dir) = voices_test_app().await;
+        let request = raw_request(
+            "GET",
+            "/api/providers",
+            Some(&valid),
+            "application/json",
+            b"",
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 256 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let ids: Vec<_> = body["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["provider_id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(ids, vec!["gpt-sovits", "qwen3", "supertonic"]);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    #[tokio::test]
+    async fn unknown_provider_status_is_rejected_not_defaulted() {
+        let (app, valid, store_dir) = voices_test_app().await;
+        let request = raw_request(
+            "GET",
+            "/api/providers/nope/status",
+            Some(&valid),
+            "application/json",
+            b"",
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    #[tokio::test]
+    async fn voice_upload_with_wrong_media_is_415() {
+        let (app, valid, store_dir) = voices_test_app().await;
+        let request = raw_request(
+            "POST",
+            "/api/voices/clones?name=t&provider=qwen3&model=qwen3-tts-0.6b-base&language=ja&mode=x_vector&consent_basis=owner",
+            Some(&valid),
+            "application/json",
+            b"{}",
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    #[tokio::test]
+    async fn voice_upload_with_undecodable_bytes_is_400() {
+        let (app, valid, store_dir) = voices_test_app().await;
+        let request = raw_request(
+            "POST",
+            "/api/voices/clones?name=t&provider=qwen3&model=qwen3-tts-0.6b-base&language=ja&mode=x_vector&consent_basis=owner",
+            Some(&valid),
+            "audio/wav",
+            b"not-a-wav-file",
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    #[tokio::test]
+    async fn missing_voice_profiles_are_404_without_disclosure() {
+        let (app, valid, store_dir) = voices_test_app().await;
+        let missing = format!("/api/voices/{}", uuid::Uuid::new_v4());
+        for (method, uri, content_type, body) in [
+            ("GET", missing.clone(), "application/json", ""),
+            ("DELETE", missing.clone(), "application/json", ""),
+            ("POST", format!("{missing}/preview"), "text/plain", "hello"),
+        ] {
+            let request = raw_request(method, &uri, Some(&valid), content_type, body.as_bytes());
+            assert_eq!(
+                app.clone().oneshot(request).await.unwrap().status(),
+                StatusCode::NOT_FOUND,
+                "{method} {uri} must be 404"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    #[tokio::test]
+    async fn models_list_includes_cloning_models_with_owners() {
+        let (app, _, store_dir) = voices_test_app().await;
+        let request = Request::get("/v1/models").body(Body::empty()).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 256 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let ids: Vec<_> = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap().to_string())
+            .collect();
+        for expected in [
+            "tts-1",
+            "tts-1-hd",
+            "supertonic-3",
+            "qwen3-tts-0.6b-base",
+            "gpt-sovits-v2pro-onnx",
+        ] {
+            assert!(
+                ids.contains(&expected.to_string()),
+                "models list missing {expected}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&store_dir);
     }
 
     #[cfg(feature = "playback")]

@@ -132,6 +132,21 @@ The server will:
 | `GET`  | `/v1/models/list`         | List models (alias)          |
 | `GET`  | `/v1/voices`              | List voices                  |
 
+### Voice Cloning (optional native providers)
+
+| Method   | Endpoint                      | Description                              |
+| -------- | ----------------------------- | ---------------------------------------- |
+| `GET`    | `/api/providers`              | List providers, capabilities, and status |
+| `GET`    | `/api/providers/{id}/status`  | One provider's lifecycle status          |
+| `POST`   | `/api/voices/clones`          | Upload reference WAV, create a profile   |
+| `GET`    | `/api/voices`                 | List your voice profiles                 |
+| `GET`    | `/api/voices/{id}`            | One voice profile                        |
+| `DELETE` | `/api/voices/{id}`            | Delete a profile and its reference audio |
+| `POST`   | `/api/voices/{id}/preview`    | Synthesize text with a profile           |
+
+See [docs/providers.md](docs/providers.md) for Qwen3-TTS and GPT-SoVITS
+setup (disabled by default; CPU works without GPU).
+
 ### Admin Panel
 
 | Method   | Endpoint                       | Description      |

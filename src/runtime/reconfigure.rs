@@ -483,6 +483,7 @@ mod tests {
             model_status: status,
             token_store: tokens.clone(),
             model_service: model.clone(),
+            providers: Arc::new(sonicboom::tts::providers::ProviderPool::new()),
             secrets: secrets.clone(),
             rate_limiter: rate_limit.clone(),
             inference_gate: inference.clone(),

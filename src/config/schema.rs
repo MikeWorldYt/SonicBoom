@@ -536,6 +536,194 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
         allowed_values_source: None,
     });
 
+    for (path, desc) in [
+        (
+            "providers.qwen3.enabled",
+            "Enable the Qwen3-TTS voice-cloning provider (default false)",
+        ),
+        (
+            "providers.gpt_sovits.enabled",
+            "Enable the GPT-SoVITS voice-cloning provider (default false)",
+        ),
+    ] {
+        add(SettingSchema {
+            path: path.to_string(),
+            description: desc.to_string(),
+            type_name: "boolean",
+            apply: ApplyStrategy::Hot,
+            min: None,
+            max: None,
+            allowed_values: None,
+            nullable: false,
+            secret: false,
+            allowed_values_source: None,
+        });
+    }
+    for (path, desc) in [
+        (
+            "providers.qwen3.model_dir",
+            "Directory holding the verified Qwen3-TTS model bundle",
+        ),
+        (
+            "providers.qwen3.model_id",
+            "Qwen3-TTS model identifier (Base variants support cloning)",
+        ),
+        (
+            "providers.qwen3.revision",
+            "Pinned Qwen3-TTS model revision",
+        ),
+        (
+            "providers.gpt_sovits.model_dir",
+            "Directory holding the exported GPT-SoVITS ONNX bundle",
+        ),
+        (
+            "providers.gpt_sovits.model_id",
+            "GPT-SoVITS model identifier (v2/v2Pro/v2ProPlus ONNX bundles)",
+        ),
+        (
+            "providers.gpt_sovits.revision",
+            "Pinned GPT-SoVITS bundle revision",
+        ),
+        (
+            "voices.store_dir",
+            "Directory for voice profiles and reference audio",
+        ),
+    ] {
+        add(SettingSchema {
+            path: path.to_string(),
+            description: desc.to_string(),
+            type_name: "string",
+            apply: ApplyStrategy::Hot,
+            min: None,
+            max: None,
+            allowed_values: None,
+            nullable: false,
+            secret: false,
+            allowed_values_source: None,
+        });
+    }
+    add(SettingSchema {
+        path: "providers.qwen3.device".to_string(),
+        description:
+            "Qwen3-TTS device: cpu, auto, or cuda (cuda requires the qwen-cuda build feature)"
+                .to_string(),
+        type_name: "string",
+        apply: ApplyStrategy::Hot,
+        min: None,
+        max: None,
+        allowed_values: Some(vec![
+            "cpu".to_string(),
+            "auto".to_string(),
+            "cuda".to_string(),
+        ]),
+        nullable: false,
+        secret: false,
+        allowed_values_source: None,
+    });
+    add(SettingSchema {
+        path: "providers.gpt_sovits.device".to_string(),
+        description: "GPT-SoVITS device: cpu or auto (GPU is unsupported for this provider)"
+            .to_string(),
+        type_name: "string",
+        apply: ApplyStrategy::Hot,
+        min: None,
+        max: None,
+        allowed_values: Some(vec!["cpu".to_string(), "auto".to_string()]),
+        nullable: false,
+        secret: false,
+        allowed_values_source: None,
+    });
+    for (path, desc, min, max) in [
+        (
+            "providers.qwen3.max_concurrent",
+            "Maximum concurrent Qwen3-TTS syntheses",
+            1.0,
+            64.0,
+        ),
+        (
+            "providers.qwen3.cache_entries",
+            "Qwen3-TTS voice-conditioning cache entries",
+            1.0,
+            1024.0,
+        ),
+        (
+            "providers.gpt_sovits.max_concurrent",
+            "Maximum concurrent GPT-SoVITS syntheses",
+            1.0,
+            64.0,
+        ),
+        (
+            "providers.qwen3.max_tokens",
+            "Maximum Qwen3-TTS codec frames per synthesis",
+            128.0,
+            4096.0,
+        ),
+        (
+            "providers.gpt_sovits.cache_entries",
+            "GPT-SoVITS voice-conditioning cache entries",
+            1.0,
+            1024.0,
+        ),
+        (
+            "providers.gpt_sovits.top_k",
+            "GPT-SoVITS sampling top-k (0 disables)",
+            0.0,
+            100.0,
+        ),
+        (
+            "voices.max_upload_bytes",
+            "Maximum voice reference upload size in bytes",
+            1.0,
+            67_108_864.0,
+        ),
+    ] {
+        add(SettingSchema {
+            path: path.to_string(),
+            description: desc.to_string(),
+            type_name: "integer",
+            apply: ApplyStrategy::Hot,
+            min: Some(min),
+            max: Some(max),
+            allowed_values: None,
+            nullable: false,
+            secret: false,
+            allowed_values_source: None,
+        });
+    }
+    for (path, desc, min, max) in [
+        (
+            "providers.gpt_sovits.top_p",
+            "GPT-SoVITS sampling top-p (0.0 disables)",
+            0.0,
+            1.0,
+        ),
+        (
+            "providers.gpt_sovits.temperature",
+            "GPT-SoVITS sampling temperature",
+            0.0,
+            2.0,
+        ),
+        (
+            "providers.gpt_sovits.repetition_penalty",
+            "GPT-SoVITS repetition penalty (1.0 disables)",
+            0.1,
+            2.0,
+        ),
+    ] {
+        add(SettingSchema {
+            path: path.to_string(),
+            description: desc.to_string(),
+            type_name: "number",
+            apply: ApplyStrategy::Hot,
+            min: Some(min),
+            max: Some(max),
+            allowed_values: None,
+            nullable: false,
+            secret: false,
+            allowed_values_source: None,
+        });
+    }
+
     // Secrets (stored in the secret store, never in config.toml).
     add(SettingSchema {
         path: "secrets.admin_password".to_string(),

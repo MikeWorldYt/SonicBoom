@@ -64,7 +64,7 @@ pub fn encode_audio(samples: &[f32], sample_rate: u32, format: AudioFormat) -> R
 
 pub fn encode_opus(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>> {
     // Upsample to 48000Hz (linear interpolation)
-    let resampled = upsample_linear(samples, sample_rate, OUTPUT_SAMPLE_RATE);
+    let resampled = resample_pcm_linear(samples, sample_rate, OUTPUT_SAMPLE_RATE);
 
     let mut encoder = Encoder::new(OUTPUT_SAMPLE_RATE, Channels::Mono, Application::Audio)?;
 
@@ -94,8 +94,11 @@ pub fn encode_opus(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>> {
     encode_ogg_opus(&opus_packets, OUTPUT_SAMPLE_RATE)
 }
 
-/// Linear interpolation upsampling
-fn upsample_linear(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+/// Linear-interpolation resampling between arbitrary sample rates
+/// (up or down). Used to stage reference audio at the rate each provider
+/// pipeline requires. Empty input and a zero source rate yield silence-safe
+/// empty output; callers validate durations separately.
+pub fn resample_pcm_linear(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
     if from_rate == to_rate || samples.is_empty() {
         return samples.to_vec();
     }
@@ -321,6 +324,20 @@ mod tests {
             bytes.windows(8).any(|w| w == b"OpusHead"),
             "missing OpusHead header"
         );
+    }
+
+    #[test]
+    fn resampling_is_identity_at_equal_rates_and_scales_length() {
+        let samples: Vec<f32> = (0..2400).map(|i| i as f32 / 2400.0).collect();
+        assert_eq!(resample_pcm_linear(&samples, 24000, 24000), samples);
+        let up = resample_pcm_linear(&samples, 24000, 48000);
+        assert_eq!(up.len(), 4800);
+        let down = resample_pcm_linear(&samples, 24000, 16000);
+        assert_eq!(down.len(), 1600);
+        // Endpoints are preserved by linear interpolation.
+        assert!((up[0] - samples[0]).abs() < 1e-6);
+        assert!((down[0] - samples[0]).abs() < 1e-6);
+        assert!(resample_pcm_linear(&[], 24000, 16000).is_empty());
     }
 
     #[test]

@@ -123,6 +123,7 @@ mod tests {
             inference_gate: Arc::new(InferenceGateManager::new(InferenceGate::new(1, 8))),
             rate_limiter: Arc::new(RateLimiterManager::new(RateLimiter::new(0, 60))),
             model_service: Arc::new(ModelService::new(Arc::new(RwLock::new(ModelStatus::Idle)))),
+            providers: Arc::new(sonicboom::tts::providers::ProviderPool::new()),
             secrets: Arc::new(MemorySecretStore::default()),
         }
     }
