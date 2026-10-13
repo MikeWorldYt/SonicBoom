@@ -69,3 +69,13 @@ audioadapter-buffers = "2.0.0"
 tracing-chrome = { version = "0.7", optional = true }
 half = "2.7.1"
 
+
+[[bin]]
+name = "generate_audio"
+path = "src/bin/generate_audio.rs"
+required-features = ["cli"]
+
+[package.metadata.sonicboom-vendor]
+upstream = "https://github.com/TrevorS/qwen3-tts-rs"
+revision = "711ceee07cad92673f86de8997bdf54c30caa49f"
+patch = "README.sonicboom.md"

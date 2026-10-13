@@ -453,6 +453,7 @@ impl SpeakerEncoder {
         let mut se_outputs = Vec::with_capacity(3);
         let mut h = x;
         for block in &self.se_res2net_blocks {
+            crate::control::checkpoint("preparing", 0)?;
             h = block.forward(&h)?;
             se_outputs.push(h.clone());
         }

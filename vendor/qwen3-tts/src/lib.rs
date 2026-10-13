@@ -572,11 +572,15 @@ impl Qwen3TTS {
 
         // Accumulate frames as GPU tensors: Vec of [16] U32 tensors
         // Deferred to_vec1 at the end eliminates per-frame acoustic code sync.
-        let mut gpu_frames: Vec<Tensor> = Vec::new();
+        let mut gpu_frames: Vec<Tensor> = Vec::with_capacity(gen_config.max_new_tokens);
 
         #[cfg(feature = "profiling")]
         let _gen_span = tracing::info_span!("generate_frames").entered();
 
+        let generation_started = std::time::Instant::now();
+        let mut acoustic_secs = 0.0;
+        let mut talker_secs = 0.0;
+        let mut sampling_secs = 0.0;
         for frame_idx in 0..gen_config.max_new_tokens {
             control::checkpoint("generating", frame_idx)?;
             if let Some(eos_id) = gen_config.eos_token_id {
@@ -593,12 +597,14 @@ impl Qwen3TTS {
             #[cfg(feature = "profiling")]
             let _cp_span = tracing::info_span!("code_predictor", frame = frame_idx).entered();
 
+            let acoustic_started = std::time::Instant::now();
             let acoustic_codes_tensor = self.code_predictor.generate_acoustic_codes(
                 &last_hidden,
                 &semantic_embed,
                 &mut cp_kv_caches,
             )?;
 
+            acoustic_secs += acoustic_started.elapsed().as_secs_f64();
             #[cfg(feature = "profiling")]
             drop(_cp_span);
 
@@ -625,9 +631,11 @@ impl Qwen3TTS {
             #[cfg(feature = "profiling")]
             let _talker_span = tracing::info_span!("talker_step", frame = frame_idx).entered();
 
+            let talker_started = std::time::Instant::now();
             let (h, new_logits) =
                 self.talker
                     .generate_step_with_embed(&step_input, kv_caches, offset)?;
+            talker_secs += talker_started.elapsed().as_secs_f64();
             offset += 1;
             last_hidden = h;
 
@@ -637,6 +645,7 @@ impl Qwen3TTS {
             #[cfg(feature = "profiling")]
             let _sample_span = tracing::info_span!("sampling", frame = frame_idx).entered();
 
+            let sampling_started = std::time::Instant::now();
             let logits_2d = new_logits.squeeze(1)?;
             let logits_2d = self.apply_generation_penalties_gpu(
                 &logits_2d,
@@ -650,13 +659,30 @@ impl Qwen3TTS {
             semantic_token = semantic_token_tensor.flatten_all()?.to_vec1::<u32>()?[0];
             Self::update_penalty_mask(&mut penalty_mask, semantic_token, vocab_size)?;
             token_count += 1;
+            sampling_secs += sampling_started.elapsed().as_secs_f64();
         }
-
-        control::checkpoint("generating", gpu_frames.len())?;
-        anyhow::ensure!(gen_config.eos_token_id == Some(semantic_token), "generation reached maximum frame limit without EOS; output withheld to avoid silent truncation");
         tracing::info!(
             frames = gpu_frames.len(),
-            termination = "eos",
+            generation_secs = generation_started.elapsed().as_secs_f64(),
+            acoustic_secs,
+            talker_secs,
+            sampling_secs,
+            mean_frame_secs =
+                generation_started.elapsed().as_secs_f64() / gpu_frames.len().max(1) as f64,
+            "Qwen generation stage timings"
+        );
+
+        control::checkpoint("generating", gpu_frames.len())?;
+        if control::installed() {
+            anyhow::ensure!(gen_config.eos_token_id == Some(semantic_token), "generation reached maximum frame limit without EOS; output withheld to avoid silent truncation");
+        }
+        tracing::info!(
+            frames = gpu_frames.len(),
+            termination = if gen_config.eos_token_id == Some(semantic_token) {
+                "eos"
+            } else {
+                "max_frames"
+            },
             "Qwen generation stopped"
         );
         // Single GPU→CPU transfer: convert all accumulated GPU frames to FrameCodes
@@ -941,7 +967,7 @@ impl Qwen3TTS {
         let speaker_embed = prompt.speaker_embedding.to_dtype(self.compute_dtype)?;
 
         // Voice clone prefill (9 positions for ICL, 10 for x_vector_only)
-        #[cfg(feature = "profiling")]
+        let prefill_started = std::time::Instant::now();
         let _prefill_span = tracing::info_span!("prefill").entered();
 
         let reference_len = prompt.ref_codes.as_ref().map(|t| t.dims()[0]).unwrap_or(0);
@@ -1011,8 +1037,11 @@ impl Qwen3TTS {
             (trailing, logits)
         };
 
-        #[cfg(feature = "profiling")]
         drop(_prefill_span);
+        tracing::info!(
+            prefill_secs = prefill_started.elapsed().as_secs_f64(),
+            "Qwen clone prefill"
+        );
 
         let trailing_text_len = trailing_text_hidden.dim(1)?;
         let tts_pad_embed = self.talker.get_tts_pad_embed()?;
@@ -1031,7 +1060,7 @@ impl Qwen3TTS {
 
         control::checkpoint("decoding", all_codes.len())?;
         // Prepend ref_codes for ICL decoder context (same fix as synthesize_voice_clone)
-        #[cfg(feature = "profiling")]
+        let decode_started = std::time::Instant::now();
         let _decode_span = tracing::info_span!("decode").entered();
 
         let audio = if let Some(ref_codes) = &prompt.ref_codes {
@@ -1058,6 +1087,11 @@ impl Qwen3TTS {
             self.decode_codes(&all_codes)?
         };
         control::checkpoint("decoding", all_codes.len())?;
+        tracing::info!(
+            decode_secs = decode_started.elapsed().as_secs_f64(),
+            audio_secs = audio.samples.len() as f64 / f64::from(audio.sample_rate),
+            "Qwen speech tokenizer decode"
+        );
         Ok((audio, all_codes))
     }
 
@@ -1181,6 +1215,7 @@ impl Qwen3TTS {
             ref_audio
         };
 
+        control::checkpoint("preparing", 0)?;
         let speaker_embedding = encoder.encode(ref_audio)?; // [enc_dim]
 
         // ICL data: encode reference audio to codes and tokenize reference text
@@ -2169,7 +2204,11 @@ pub mod control {
         let _restore = Restore(CURRENT.with(|c| c.replace(Some(hook))));
         work()
     }
-    pub(crate) fn checkpoint(stage: &str, frames: usize) -> anyhow::Result<()> {
+    pub(crate) fn installed() -> bool {
+        CURRENT.with(|c| c.borrow().is_some())
+    }
+    #[doc(hidden)]
+    pub fn checkpoint(stage: &str, frames: usize) -> anyhow::Result<()> {
         let allowed = CURRENT.with(|c| c.borrow().as_ref().is_none_or(|h| h(stage, frames)));
         anyhow::ensure!(allowed, "inference cancelled or deadline exceeded");
         Ok(())
