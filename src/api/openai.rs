@@ -158,7 +158,7 @@ async fn post_speech_cloning(
     request: &SpeechRequest,
     format: sonicboom::tts::audio::AudioFormat,
 ) -> Result<axum::response::Response, AppError> {
-    use super::providers::{build_registry, provider_error_to_app, supertonic_handle};
+    use super::providers::{build_registry_for_state, provider_error_to_app};
     use super::tts::synthesize_provider_bounded;
     use sonicboom::tts::providers::types::{DevicePreference, ProviderRequest};
 
@@ -182,6 +182,11 @@ async fn post_speech_cloning(
     let (profile, reference) =
         super::voices::owned_reference(state, profile_id.to_string(), token.rate_limit_key())
             .await?;
+    if profile.model_revision != super::voices::config_revision_for(&config, &profile.provider) {
+        return Err(AppError::BadRequest(
+            "voice profile belongs to an incompatible model revision; create a new profile".into(),
+        ));
+    }
     if profile.model != request.model {
         return Err(AppError::BadRequest(format!(
             "voice profile '{}' is bound to model '{}' and cannot be used with '{}'",
@@ -200,7 +205,7 @@ async fn post_speech_cloning(
     provider_request.reference_transcript = profile.transcript.clone();
     provider_request.reference_audio = Some(reference);
     provider_request.seed = request.seed;
-    let registry = build_registry(&config, supertonic_handle(state).await, &state.providers);
+    let registry = build_registry_for_state(state).await;
     let provider = registry
         .resolve_model(&request.model)
         .map_err(provider_error_to_app)?;
@@ -230,6 +235,14 @@ pub async fn post_speech(
     State(state): State<crate::AppState>,
     body: String,
 ) -> Result<axum::response::Response, AppError> {
+    super::jobs::with_admission(&state, post_speech_inner(token, State(state.clone()), body)).await
+}
+
+async fn post_speech_inner(
+    token: AuthenticatedToken,
+    State(state): State<crate::AppState>,
+    body: String,
+) -> Result<axum::response::Response, AppError> {
     check_rate_limit(&state, &token)?;
 
     let request: SpeechRequest = serde_json::from_str(&body)
@@ -244,7 +257,11 @@ pub async fn post_speech(
     // voice profile; legacy aliases keep the exact Supertonic path below.
     if is_cloning_model(&request.model) {
         check_rate_limit(&state, &token)?;
-        return post_speech_cloning(&token, &state, &request, format).await;
+        return super::jobs::with_reference_memory(
+            &state,
+            post_speech_cloning(&token, &state, &request, format),
+        )
+        .await;
     }
     let voice_name = map_voice(&request.voice)?;
 

@@ -36,6 +36,14 @@ pub(super) async fn synthesize_bounded(
     super::jobs::with_deadline(
         config.inference.generation_deadline_secs,
         state.inference_gate.run_bounded(move || {
+            if let Some(c) = sonicboom::tts::control::current() {
+                let device = if cfg!(any(feature = "cuda", feature = "rocm", feature = "coreml")) {
+                    "onnxruntime_placement_unknown"
+                } else {
+                    "cpu"
+                };
+                c.set_context("supertonic", "supertonic-3", &voice_name, device);
+            }
             inference::synthesize(
                 &model_handle,
                 &text,
@@ -183,6 +191,19 @@ pub async fn post_tts(
     Query(query): Query<TtsQuery>,
     body: String,
 ) -> Result<Response, AppError> {
+    super::jobs::with_admission(
+        &state,
+        post_tts_inner(token, State(state.clone()), Query(query), body),
+    )
+    .await
+}
+
+async fn post_tts_inner(
+    token: AuthenticatedToken,
+    State(state): State<crate::AppState>,
+    Query(query): Query<TtsQuery>,
+    body: String,
+) -> Result<Response, AppError> {
     check_rate_limit(&state, &token)?;
     let lang = query.lang.clone().unwrap_or_else(|| "en".to_string());
     let voice = query.voice.clone().unwrap_or_else(|| "M1".to_string());
@@ -258,6 +279,20 @@ pub async fn post_tts(
 
 #[cfg(feature = "playback")]
 pub async fn post_tts_and_play(
+    token: AuthenticatedToken,
+    State(state): State<crate::AppState>,
+    Query(query): Query<TtsQuery>,
+    body: String,
+) -> Result<Response, AppError> {
+    super::jobs::with_admission(
+        &state,
+        post_tts_and_play_inner(token, State(state.clone()), Query(query), body),
+    )
+    .await
+}
+
+#[cfg(feature = "playback")]
+async fn post_tts_and_play_inner(
     token: AuthenticatedToken,
     State(state): State<crate::AppState>,
     Query(query): Query<TtsQuery>,
@@ -421,10 +456,14 @@ pub(crate) async fn encode_output(
             "Inference cancelled or deadline exceeded".into(),
         ));
     }
-    let bytes = tokio::task::spawn_blocking(move || audio::encode_audio(&samples, rate, format))
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let lease = super::jobs::preparation_lease();
+    let bytes = tokio::task::spawn_blocking(move || {
+        let _lease = lease;
+        audio::encode_audio(&samples, rate, format)
+    })
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?
+    .map_err(|e| AppError::internal(e.to_string()))?;
     if control.is_some_and(|c| c.stopped()) {
         return Err(AppError::ServiceUnavailable(
             "Inference cancelled or deadline exceeded".into(),

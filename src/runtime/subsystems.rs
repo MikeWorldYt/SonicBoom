@@ -63,6 +63,7 @@ impl RateLimiterManager {
 pub struct InferenceGateManager {
     pub jobs: Arc<crate::api::jobs::JobStore>,
     pub voices: Arc<Mutex<crate::api::voices::CachedVoices>>,
+    pub reference_slots: Arc<tokio::sync::Semaphore>,
     current: Arc<RwLock<Arc<InferenceGate>>>,
     pending: Arc<Mutex<Option<Arc<InferenceGate>>>>,
 }
@@ -74,6 +75,7 @@ impl InferenceGateManager {
             pending: Arc::new(Mutex::new(None)),
             jobs: Arc::new(crate::api::jobs::JobStore::default()),
             voices: Arc::new(Mutex::new(crate::api::voices::CachedVoices::default())),
+            reference_slots: Arc::new(tokio::sync::Semaphore::new(16)),
         }
         // Note: std RwLock would suffice, but the gate is
         // awaited across .await points, so the tokio-free

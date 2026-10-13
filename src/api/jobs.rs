@@ -20,10 +20,55 @@ use std::{
 
 tokio::task_local! {
     static ACTIVE: Arc<InferenceControl>;
+    static REFERENCE_LEASE: Arc<tokio::sync::OwnedSemaphorePermit>;
+    static COMPLETION_LEASE: Arc<tokio::sync::OwnedSemaphorePermit>;
     static ADMISSION: std::cell::RefCell<Option<super::gate::InferenceAdmission>>;
 }
 pub fn take_admission() -> Option<super::gate::InferenceAdmission> {
     ADMISSION.try_with(|a| a.borrow_mut().take()).ok().flatten()
+}
+pub fn preparation_lease() -> Option<Arc<tokio::sync::OwnedSemaphorePermit>> {
+    ADMISSION
+        .try_with(|a| a.borrow().as_ref().map(|a| a.admitted.clone()))
+        .ok()
+        .flatten()
+        .or_else(|| COMPLETION_LEASE.try_with(Arc::clone).ok())
+}
+pub fn reference_lease() -> Option<Arc<tokio::sync::OwnedSemaphorePermit>> {
+    REFERENCE_LEASE.try_with(Arc::clone).ok()
+}
+pub async fn with_reference_memory<T>(
+    state: &AppState,
+    work: impl std::future::Future<Output = Result<T, AppError>>,
+) -> Result<T, AppError> {
+    let lease = state
+        .inference_gate
+        .reference_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| AppError::TooManyRequests("Reference preparation capacity reached".into()))?;
+    REFERENCE_LEASE.scope(Arc::new(lease), work).await
+}
+/// Reserve before cloning/decoding references, so even preparation has bounded
+/// admission. Existing background-job reservations are reused by sync handlers.
+pub async fn with_admission<T>(
+    state: &AppState,
+    work: impl std::future::Future<Output = Result<T, AppError>>,
+) -> Result<T, AppError> {
+    if let Some(lease) = preparation_lease() {
+        return COMPLETION_LEASE.scope(lease, work).await;
+    }
+    let admission = state
+        .inference_gate
+        .reserve()
+        .map_err(|_| AppError::TooManyRequests("Inference admission is full".into()))?;
+    let lease = admission.admitted.clone();
+    COMPLETION_LEASE
+        .scope(
+            lease,
+            ADMISSION.scope(std::cell::RefCell::new(Some(admission)), work),
+        )
+        .await
 }
 pub async fn with_deadline<T>(secs: u64, work: impl std::future::Future<Output = T>) -> T {
     let control =
@@ -39,9 +84,14 @@ pub struct JobStatus {
     pub id: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub context: Option<sonicboom::tts::control::ExecutionContext>,
+    pub cancellation_requested: bool,
+    pub deadline_exceeded: bool,
     pub stage: String,
     pub frames: usize,
     pub elapsed_secs: f64,
+    pub audio_secs: Option<f64>,
+    pub rtf: Option<f64>,
     pub error: Option<String>,
     pub stage_secs: std::collections::BTreeMap<String, f64>,
 }
@@ -75,9 +125,14 @@ impl JobStore {
         let mut status = j.status.clone();
         if !status.terminal() {
             let p = j.control.snapshot();
+            status.cancellation_requested = j.control.cancellation_requested();
+            status.deadline_exceeded = j.control.deadline_exceeded();
+            status.context = p.context;
             status.stage = p.stage;
             status.frames = p.frames;
             status.elapsed_secs = p.elapsed_secs;
+            status.audio_secs = p.audio_secs;
+            status.rtf = p.audio_secs.map(|audio| p.elapsed_secs / audio);
             status.updated_at = p.updated_at;
             status.stage_secs = p.stage_secs;
         }
@@ -133,9 +188,14 @@ pub async fn create(
         id: id.clone(),
         created_at: now,
         updated_at: now,
+        context: None,
+        cancellation_requested: false,
+        deadline_exceeded: false,
         stage: "queued".into(),
         frames: 0,
         elapsed_secs: 0.0,
+        audio_secs: None,
+        rtf: None,
         error: None,
         stage_secs: std::collections::BTreeMap::new(),
     };
@@ -221,8 +281,13 @@ pub async fn create(
                 .sum();
             if let Some(j) = entries.get_mut(&job_id) {
                 let p = j.control.snapshot();
+                j.status.cancellation_requested = j.control.cancellation_requested();
+                j.status.deadline_exceeded = j.control.deadline_exceeded();
+                j.status.context = p.context;
                 j.status.frames = p.frames;
                 j.status.elapsed_secs = p.elapsed_secs;
+                j.status.audio_secs = p.audio_secs;
+                j.status.rtf = p.audio_secs.map(|audio| p.elapsed_secs / audio);
                 j.status.stage_secs = p.stage_secs;
                 if j.control.stopped() {
                     j.status.stage = "cancelled".into();
@@ -286,11 +351,12 @@ pub async fn cancel(
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&id)
+        && !j.status.terminal()
     {
         j.control.cancel();
     }
     // Cancellation is acknowledged here; terminal state is published only after computation ends.
-    Ok(Json(status))
+    Ok(Json(store.snapshot(&id, &token.rate_limit_key())?))
 }
 pub async fn audio(
     token: AuthenticatedToken,
@@ -369,9 +435,14 @@ mod tests {
                     id: "id".into(),
                     created_at: now,
                     updated_at: now,
+                    context: None,
+                    cancellation_requested: false,
+                    deadline_exceeded: false,
                     stage: "failed".into(),
                     frames: 0,
                     elapsed_secs: 0.0,
+                    audio_secs: None,
+                    rtf: None,
                     error: Some("test failure".into()),
                     stage_secs: Default::default(),
                 },

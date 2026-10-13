@@ -14,9 +14,7 @@ use axum::Router;
 use tokio::sync::{Mutex, RwLock, oneshot};
 use tokio::task::JoinHandle;
 use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::{
-    DefaultMakeSpan, DefaultOnFailure, DefaultOnRequest, DefaultOnResponse, TraceLayer,
-};
+use tower_http::trace::{DefaultOnFailure, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
 
 use crate::admin::handlers::AdminState;
@@ -73,7 +71,7 @@ impl ApiServerManager {
 
         let request_timeout = config.server.request_timeout_secs;
 
-        let router = Router::new()
+        Router::new()
             .merge(web::router(self.state.clone()))
             .merge(api::router(self.state.clone()).await)
             .merge(admin::router(self.admin_state.clone()).await)
@@ -92,12 +90,11 @@ impl ApiServerManager {
             ))
             .layer(
                 TraceLayer::new_for_http()
-                    .make_span_with(DefaultMakeSpan::new())
+                    .make_span_with(|request: &axum::http::Request<axum::body::Body>| tracing::info_span!("http_request", method = %request.method(), path = request.uri().path()))
                     .on_request(DefaultOnRequest::new())
                     .on_response(DefaultOnResponse::new())
                     .on_failure(DefaultOnFailure::new()),
-            );
-        router
+            )
     }
 
     /// Start (or restart) the listener on the currently
@@ -215,8 +212,10 @@ mod tests {
         let port_probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = port_probe.local_addr().unwrap().port();
         drop(port_probe);
-        let mut config = crate::config::AppConfig::default();
-        config.setup_complete = true;
+        let mut config = crate::config::AppConfig {
+            setup_complete: true,
+            ..Default::default()
+        };
         config.server.port = port;
         config.paths.audio = Some("/tmp".into());
         let config = crate::config::ConfigManager::in_memory(config);

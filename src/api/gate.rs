@@ -25,13 +25,13 @@ pub struct InferenceGate {
 }
 
 pub struct InferenceAdmission {
-    admitted: OwnedSemaphorePermit,
+    pub(super) admitted: Arc<OwnedSemaphorePermit>,
     running: Arc<Semaphore>,
 }
 
 pub struct InferencePermit {
     _running: OwnedSemaphorePermit,
-    _admitted: OwnedSemaphorePermit,
+    _admitted: Arc<OwnedSemaphorePermit>,
 }
 
 /// Failure to run bounded inference.
@@ -73,7 +73,7 @@ impl InferenceGate {
         let running = self.running.clone().acquire_owned().await.ok()?;
         Some(InferencePermit {
             _running: running,
-            _admitted: admitted,
+            _admitted: Arc::new(admitted),
         })
     }
 
@@ -106,19 +106,15 @@ impl InferenceGate {
             None => self.reserve()?,
         };
         let mut cancel = CancelOnDrop(Some(control.clone()));
+        let acquire = admission.running.clone().acquire_owned();
+        tokio::pin!(acquire);
         let running = loop {
             if control.stopped() {
                 return Err(RunBoundedError::Cancelled);
             }
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(100),
-                admission.running.clone().acquire_owned(),
-            )
-            .await
-            {
-                Ok(Ok(p)) => break p,
-                Ok(Err(_)) => return Err(RunBoundedError::Cancelled),
-                Err(_) => {}
+            tokio::select! {
+                permit = &mut acquire => break permit.map_err(|_| RunBoundedError::Cancelled)?,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {},
             }
         };
         let permit = InferencePermit {
@@ -126,8 +122,12 @@ impl InferenceGate {
             _admitted: admission.admitted,
         };
         let worker_control = control.clone();
+        let reference_lease = crate::api::jobs::reference_lease();
         let result = tokio::task::spawn_blocking(move || {
             let _permit = permit;
+            let _reference_lease = reference_lease;
+            let span = tracing::info_span!("inference", job_id = %worker_control.id);
+            let _span = span.enter();
             if !worker_control.update("preparing", 0) {
                 return None;
             }
@@ -147,11 +147,12 @@ impl InferenceGate {
     /// job. The running semaphore is captured from this exact gate version.
     pub fn reserve(&self) -> Result<InferenceAdmission, RunBoundedError> {
         Ok(InferenceAdmission {
-            admitted: self
-                .admitted
-                .clone()
-                .try_acquire_owned()
-                .map_err(|_| RunBoundedError::Saturated)?,
+            admitted: Arc::new(
+                self.admitted
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| RunBoundedError::Saturated)?,
+            ),
             running: self.running.clone(),
         })
     }
