@@ -4871,7 +4871,6 @@ dependencies = [
 [[package]]
 name = "qwen3-tts"
 version = "0.3.0"
-source = "git+https://github.com/TrevorS/qwen3-tts-rs?rev=711ceee07cad92673f86de8997bdf54c30caa49f#711ceee07cad92673f86de8997bdf54c30caa49f"
 dependencies = [
  "anyhow",
  "audioadapter-buffers",

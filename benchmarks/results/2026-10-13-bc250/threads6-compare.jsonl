@@ -1,0 +1,4 @@
+{"case":"verified_model_load","elapsed_secs":7.15520971}
+{"audio_secs":1.36,"elapsed_secs":14.454570208,"iteration":0,"rayon_threads":"6","rtf":10.628360447058823,"sample_sha256":"0053b2c9abc2e11e23ce37c04b92a9c0a5eaf4ba9f955cc1c38e72637c7b0f34"}
+{"audio_secs":1.36,"elapsed_secs":15.226862395,"iteration":1,"rayon_threads":"6","rtf":11.196222349264705,"sample_sha256":"0053b2c9abc2e11e23ce37c04b92a9c0a5eaf4ba9f955cc1c38e72637c7b0f34"}
+{"audio_secs":1.36,"elapsed_secs":11.897137811,"iteration":2,"rayon_threads":"6","rtf":8.747895449264705,"sample_sha256":"0053b2c9abc2e11e23ce37c04b92a9c0a5eaf4ba9f955cc1c38e72637c7b0f34"}

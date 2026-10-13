@@ -12,6 +12,27 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+struct Staging(PathBuf);
+impl Drop for Staging {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|e| e.to_string())?;
+    file.write_all(bytes)
+        .and_then(|_| file.sync_all())
+        .map_err(|e| e.to_string())
+}
+
 /// Authorization/license/consent declaration stored with every profile.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoiceConsent {
@@ -63,6 +84,25 @@ impl NewVoiceProfile {
     pub fn validate(&self) -> Result<(), String> {
         if self.name.trim().is_empty() || self.name.chars().count() > 64 {
             return Err("profile name must be 1-64 characters".to_string());
+        }
+        if self
+            .transcript
+            .as_ref()
+            .is_some_and(|t| t.chars().count() > 10_000)
+            || self.consent_note.len() > 4096
+        {
+            return Err("reference transcript or consent note exceeds its bound".into());
+        }
+        if self.reference_pcm.iter().any(|s| !s.is_finite()) {
+            return Err("reference samples must be finite".into());
+        }
+        if self.clone_mode == "icl"
+            && self
+                .transcript
+                .as_deref()
+                .is_none_or(|t| t.trim().is_empty())
+        {
+            return Err("ICL requires a reference transcript".into());
         }
         if self.provider.trim().is_empty() || self.provider.len() > 32 {
             return Err("provider must be a known provider id".to_string());
@@ -122,8 +162,21 @@ impl VoiceProfileStore {
 
     pub fn open(dir: PathBuf) -> Result<Self, String> {
         std::fs::create_dir_all(&dir).map_err(|e| format!("could not create voice store: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| e.to_string())?;
+        }
         let manifest = Self::manifest_path(&dir);
         let profiles = if manifest.is_file() {
+            if std::fs::metadata(&manifest)
+                .map_err(|e| e.to_string())?
+                .len()
+                > 64 * 1024 * 1024
+            {
+                return Err("voice manifest exceeds 64 MiB bound".into());
+            }
             let text = std::fs::read_to_string(&manifest)
                 .map_err(|e| format!("could not read voice manifest: {e}"))?;
             serde_json::from_str::<HashMap<String, VoiceProfile>>(&text)
@@ -138,10 +191,15 @@ impl VoiceProfileStore {
         let manifest = Self::manifest_path(&self.dir);
         let text = serde_json::to_string_pretty(&self.profiles)
             .map_err(|e| format!("could not serialize voice manifest: {e}"))?;
+        if text.len() > 64 * 1024 * 1024 {
+            return Err("voice manifest exceeds 64 MiB bound".into());
+        }
         let tmp = self
             .dir
             .join(format!(".profiles.{}.tmp", uuid::Uuid::new_v4()));
-        std::fs::write(&tmp, text).map_err(|e| format!("could not write voice manifest: {e}"))?;
+        let _staging = Staging(tmp.clone());
+        write_private(&tmp, text.as_bytes())
+            .map_err(|e| format!("could not write voice manifest: {e}"))?;
         std::fs::rename(&tmp, &manifest)
             .map_err(|e| format!("could not finalize voice manifest: {e}"))?;
         Ok(())
@@ -194,7 +252,8 @@ impl VoiceProfileStore {
         )
         .map_err(|e| format!("could not encode reference audio: {e}"))?;
         let tmp = self.dir.join(format!(".{id}.wav.tmp"));
-        std::fs::write(&tmp, &wav).map_err(|e| format!("could not store reference audio: {e}"))?;
+        let _staging = Staging(tmp.clone());
+        write_private(&tmp, &wav).map_err(|e| format!("could not store reference audio: {e}"))?;
         std::fs::rename(&tmp, self.dir.join(format!("{id}.wav")))
             .map_err(|e| format!("could not finalize reference audio: {e}"))?;
         self.profiles.insert(id.clone(), profile.clone());

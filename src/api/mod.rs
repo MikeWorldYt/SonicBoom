@@ -3,6 +3,7 @@ pub mod audio;
 pub mod config_api;
 pub mod gate;
 pub mod info;
+pub mod jobs;
 pub mod openai;
 pub mod providers;
 #[cfg(feature = "playback")]
@@ -51,6 +52,14 @@ pub async fn router(state: AppState) -> Router {
             "/api/tts",
             post(tts::post_tts).route_layer(DefaultBodyLimit::max(tts_body_limit)),
         )
+        .route(
+            "/api/tts/jobs",
+            post(jobs::create).route_layer(DefaultBodyLimit::max(tts_body_limit)),
+        )
+        .route("/api/tts/jobs/{id}", get(jobs::status))
+        .route("/api/tts/jobs/{id}/events", get(jobs::events))
+        .route("/api/tts/jobs/{id}/cancel", post(jobs::cancel))
+        .route("/api/tts/jobs/{id}/audio", get(jobs::audio))
         .route("/api/status", get(tts::get_status))
         // OpenAI-compatible endpoints
         .route(
@@ -212,7 +221,6 @@ mod tests {
             .unwrap()
     }
 
-    #[cfg(feature = "playback")]
     async fn body_json(response: axum::response::Response) -> serde_json::Value {
         let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
             .await
@@ -658,6 +666,144 @@ mod tests {
         builder.body(Body::from(body.to_vec())).unwrap()
     }
 
+    #[tokio::test]
+    async fn job_operations_require_authentication_and_foreign_jobs_are_hidden() {
+        let (app, valid, store_dir) = voices_test_app().await;
+        for (method, uri) in [
+            ("POST", "/api/tts/jobs"),
+            ("GET", "/api/tts/jobs/missing"),
+            ("GET", "/api/tts/jobs/missing/events"),
+            ("GET", "/api/tts/jobs/missing/audio"),
+            ("POST", "/api/tts/jobs/missing/cancel"),
+        ] {
+            assert_eq!(
+                app.clone()
+                    .oneshot(raw_request(method, uri, None, "text/plain", b"hello"))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        let response = app
+            .clone()
+            .oneshot(raw_request(
+                "POST",
+                "/api/tts/jobs?format=wav",
+                Some(&valid),
+                "text/plain",
+                b"hello",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = body_json(response).await;
+        let id = body["id"].as_str().unwrap();
+        // No model is attached: this accepted job must reach failed without
+        // exposing successful audio or remaining queued indefinitely.
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let response = app
+                    .clone()
+                    .oneshot(raw_request(
+                        "GET",
+                        &format!("/api/tts/jobs/{id}"),
+                        Some(&valid),
+                        "text/plain",
+                        b"",
+                    ))
+                    .await
+                    .unwrap();
+                let snapshot = body_json(response).await;
+                if snapshot["stage"] == "failed" {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let audio = app
+            .clone()
+            .oneshot(raw_request(
+                "GET",
+                &format!("/api/tts/jobs/{id}/audio"),
+                Some(&valid),
+                "text/plain",
+                b"",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(audio.status(), StatusCode::SERVICE_UNAVAILABLE);
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(raw_request(
+                    "POST",
+                    &format!("/api/tts/jobs/{id}/cancel"),
+                    Some(&valid),
+                    "text/plain",
+                    b"",
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                body_json(response).await["stage"],
+                "failed",
+                "terminal cancellation is idempotent"
+            );
+        }
+        let _ = std::fs::remove_dir_all(store_dir);
+    }
+    #[tokio::test]
+    async fn concurrent_profile_creations_do_not_lose_manifest_updates() {
+        let config = voices_test_config();
+        let dir = config.voices.store_dir.clone();
+        let state2 = test_state(
+            config.clone(),
+            Arc::new(TokenStore::empty()),
+            Arc::new(None),
+        );
+        let state = test_state(config, Arc::new(TokenStore::empty()), Arc::new(None));
+        let mut tasks = Vec::new();
+        for i in 0..8 {
+            // Independent caches exercise the interprocess-style file lock too.
+            let state = if i % 2 == 0 {
+                state.clone()
+            } else {
+                state2.clone()
+            };
+            tasks.push(tokio::spawn(async move {
+                super::voices::with_store(&state, move |store| {
+                    store
+                        .create(sonicboom::tts::voices::NewVoiceProfile {
+                            name: format!("test-{i}"),
+                            provider: "qwen3".into(),
+                            model: "qwen3-tts-0.6b-base".into(),
+                            model_revision: "test".into(),
+                            language: "en".into(),
+                            clone_mode: "x_vector".into(),
+                            reference_pcm: vec![0.1; 24000],
+                            reference_sample_rate: 24000,
+                            transcript: None,
+                            owner_token_hash: Some("owner".into()),
+                            consent_basis: "owner".into(),
+                            consent_note: String::new(),
+                        })
+                        .map_err(crate::error::AppError::BadRequest)
+                })
+                .await
+                .unwrap();
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+        let persisted =
+            sonicboom::tts::voices::VoiceProfileStore::open(dir.clone().into()).unwrap();
+        assert_eq!(persisted.list().len(), 8);
+        let _ = std::fs::remove_dir_all(dir);
+    }
     #[tokio::test]
     async fn provider_and_voice_endpoints_require_token_authentication() {
         let (app, _, _) = voices_test_app().await;

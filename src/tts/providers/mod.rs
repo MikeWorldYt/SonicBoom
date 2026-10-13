@@ -40,6 +40,8 @@ pub trait TtsProvider: Send + Sync {
     fn load(&self, model_id: &str) -> Result<(), ProviderError>;
     /// Unload model assets, freeing memory but keeping configuration.
     fn unload(&self);
+    /// Logically invalidate conditioning after an authorized voice mutation.
+    fn invalidate_voice(&self, _voice: &str) {}
     /// Blocking synthesis returning normalized PCM. Called with an
     /// admission-gate permit held by the blocking task itself.
     fn synthesize(&self, request: &ProviderRequest) -> Result<PcmAudio, ProviderError>;

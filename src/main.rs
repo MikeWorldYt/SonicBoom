@@ -761,17 +761,17 @@ async fn run_server(config_path: std::path::PathBuf) -> anyhow::Result<()> {
     };
 
     #[cfg(feature = "playback")]
-    if let Some(audio) = audio_manager.as_ref() {
-        if let Err(error) = audio.set_volume(current.audio.volume).await {
-            config
-                .record_apply_failure(
-                    "audio.volume",
-                    serde_json::json!(current.audio.volume),
-                    serde_json::json!(1.0),
-                    &error.to_string(),
-                )
-                .await;
-        }
+    if let Some(audio) = audio_manager.as_ref()
+        && let Err(error) = audio.set_volume(current.audio.volume).await
+    {
+        config
+            .record_apply_failure(
+                "audio.volume",
+                serde_json::json!(current.audio.volume),
+                serde_json::json!(1.0),
+                &error.to_string(),
+            )
+            .await;
     }
 
     // Prepare the temp playback directory (playback builds): ensure safe
@@ -867,6 +867,7 @@ async fn run_server(config_path: std::path::PathBuf) -> anyhow::Result<()> {
 
     // Wait for Ctrl+C / SIGTERM, then stop the listener.
     shutdown_signal().await;
+    app_state.inference_gate.jobs.cancel_all();
     server.stop().await?;
 
     tracing::info!("Server shut down gracefully.");

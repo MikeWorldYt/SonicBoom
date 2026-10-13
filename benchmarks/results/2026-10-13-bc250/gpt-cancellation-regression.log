@@ -1,0 +1,10 @@
+
+running 5 tests
+test gptsovits_cpu_english_reuses_model_across_requests ... gpt-sovits load: 11.6s
+gpt-sovits synth: 88.3s
+gpt-sovits (en): 1929600 samples @ 32000 Hz (60.3s)
+gpt-sovits synth: 60.9s
+gpt-sovits (en): 1929600 samples @ 32000 Hz (60.3s)
+ok
+test qwen_active_cancellation_preserves_the_resident_model ... native cancellation acknowledgement: 44.659941ms
+ok

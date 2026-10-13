@@ -4,7 +4,7 @@
 //! so configuration changes can atomically replace the
 //! live instance without touching request paths.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::api::gate::{InferenceGate, InferencePermit, RunBoundedError};
 use crate::api::rate_limit::{RateLimitDecision, RateLimiter};
@@ -61,26 +61,50 @@ impl RateLimiterManager {
 /// Hot-swappable inference admission gate.
 #[derive(Debug, Clone)]
 pub struct InferenceGateManager {
+    pub jobs: Arc<crate::api::jobs::JobStore>,
+    pub voices: Arc<Mutex<crate::api::voices::CachedVoices>>,
+    pub reference_slots: Arc<tokio::sync::Semaphore>,
     current: Arc<RwLock<Arc<InferenceGate>>>,
+    pending: Arc<Mutex<Option<Arc<InferenceGate>>>>,
 }
 
 impl InferenceGateManager {
     pub fn new(gate: InferenceGate) -> Self {
         Self {
             current: Arc::new(RwLock::new(Arc::new(gate))),
+            pending: Arc::new(Mutex::new(None)),
+            jobs: Arc::new(crate::api::jobs::JobStore::default()),
+            voices: Arc::new(Mutex::new(crate::api::voices::CachedVoices::default())),
+            reference_slots: Arc::new(tokio::sync::Semaphore::new(16)),
         }
         // Note: std RwLock would suffice, but the gate is
         // awaited across .await points, so the tokio-free
         // std lock is only held for the clone below.
     }
 
+    fn snapshot(&self) -> Arc<InferenceGate> {
+        let mut current = self.current.write().unwrap_or_else(|e| e.into_inner());
+        // Checking under the write lock prevents a new caller cloning a
+        // retired gate after the drain check. Existing async callers keep
+        // an Arc; existing computation keeps admission permits.
+        if Arc::strong_count(&current) == 1
+            && current.is_idle()
+            && let Some(next) = self
+                .pending
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take()
+        {
+            *current = next;
+        }
+        current.clone()
+    }
+    pub fn reserve(&self) -> Result<crate::api::gate::InferenceAdmission, RunBoundedError> {
+        self.snapshot().reserve()
+    }
     /// Try to admit one request.
     pub async fn admit(&self) -> Option<InferencePermit> {
-        let gate = self
-            .current
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let gate = self.snapshot();
         gate.admit().await
     }
 
@@ -91,18 +115,19 @@ impl InferenceGateManager {
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
-        let gate = self
-            .current
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let gate = self.snapshot();
         gate.run_bounded(work).await
     }
 
     /// Replace the live gate (waiting slots reset).
     pub fn swap(&self, gate: InferenceGate) {
         let mut current = self.current.write().unwrap_or_else(|e| e.into_inner());
-        *current = Arc::new(gate);
+        if Arc::strong_count(&current) == 1 && current.is_idle() {
+            *current = Arc::new(gate);
+            *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        } else {
+            *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(gate));
+        }
     }
 }
 
@@ -128,6 +153,11 @@ mod tests {
         let _held = manager.admit().await.expect("admitted");
         assert!(manager.admit().await.is_none());
         manager.swap(InferenceGate::new(2, 0));
+        assert!(
+            manager.admit().await.is_none(),
+            "reconfiguration waits for actual computation"
+        );
+        drop(_held);
         assert!(manager.admit().await.is_some());
     }
 

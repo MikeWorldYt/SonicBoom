@@ -451,3 +451,10 @@ inference still runs.
 ### Model Cache
 
 Keep the model cache on fast storage (SSD) for faster loading on restarts.
+
+## Reliable native synthesis jobs
+
+Use the authenticated [background job API](inference-jobs.md) for long CPU
+inference, with progress and cooperative cancellation. The synchronous routes
+remain supported. See [ownership/cache architecture](inference-architecture.md)
+for model residency, integrity verification, reloads and cache bounds.

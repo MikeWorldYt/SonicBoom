@@ -467,6 +467,8 @@ async function refreshProviders() {
   if (!list) return;
   try {
     const body = await configRequest(Endpoints.providers);
+    const diagnostics = document.getElementById('inferenceDiagnostics');
+    if (diagnostics) diagnostics.textContent = JSON.stringify(body.diagnostics || {}, null, 2);
     const signature = JSON.stringify(body.providers || []);
     if (signature === providerSignature) return;
     providerSignature = signature;
@@ -699,13 +701,14 @@ function voiceRow(profile) {
     el('div', { cls: 'voice-name', text: profile.name }),
     el('div', {
       cls: 'voice-meta',
-      text: `${profile.provider} · ${profile.model} · ${profile.language} · ${profile.clone_mode}`,
+      text: `${profile.provider} · ${profile.model} · ${profile.language} · ${profile.clone_mode} · ${(profile.reference_duration_secs || 0).toFixed(1)}s reference · ${profile.reference_sample_rate || '?'} Hz`,
     }),
   );
   const actions = el('div', { cls: 'voice-actions' });
   const use = el('button', { cls: 'btn-inline', text: 'Use', attrs: { type: 'button', 'data-action': 'use' } });
+  const preview = el('button', { cls: 'btn-inline', text: 'Preview', attrs: { type: 'button', 'data-action': 'preview' } });
   const del = el('button', { cls: 'btn-inline', text: 'Delete', attrs: { type: 'button', 'data-action': 'delete' } });
-  actions.append(use, del);
+  actions.append(use, preview, del);
   row.append(main, actions);
   return row;
 }
@@ -753,6 +756,10 @@ voicesList.addEventListener('click', async event => {
     voiceSelect.value = profile.id;
     voiceSelect.dispatchEvent(new Event('change'));
     document.getElementById('tts-heading').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (button.dataset.action === 'preview') {
+      await synthesize({ previewText: 'Hi there. This is a voice preview.' });
+      return;
+    }
     setStatus(`Using cloned voice “${profile.name}”.`, false);
   } catch (error) {
     setCloneStatus(error.message, 'error');
@@ -799,7 +806,7 @@ cloneForm.addEventListener('submit', async event => {
     cloneForm.reset();
     refreshCloneDependents();
     await refreshVoiceList();
-    setCloneStatus(`Cloned “${profile.name}” — ready in the Model voice list.`, 'ok');
+    setCloneStatus(`Reference profile “${profile.name}” saved. Generate a short preview to validate voice conditioning.`, 'ok');
     if ([...modelSelect.options].some(o => o.value === profile.model)) {
       modelSelect.value = profile.model;
       await syncVoicesToModel();
@@ -893,9 +900,78 @@ function updateCharCount() {
   charCount.textContent = `${n} character${n === 1 ? '' : 's'}`;
 }
 
-async function synthesize() {
-  const text = textInput.value.trim();
-  if (!text) {
+let activeJobId = null;
+const cancelGeneration = document.getElementById('cancelGeneration');
+cancelGeneration.addEventListener('click', async () => {
+  if (!activeJobId) return;
+  cancelGeneration.disabled = true;
+  try {
+    const response = await apiFetch(`/api/tts/jobs/${encodeURIComponent(activeJobId)}/cancel`, { method: 'POST' });
+    if (!response.ok) throw new Error(`Cancellation failed (HTTP ${response.status})`);
+    setStatus('Cancellation requested. Waiting for native computation to stop…');
+  } catch (error) { setStatus(error.message, true); cancelGeneration.disabled = false; }
+});
+
+async function watchSynthesisJob(id) {
+  const endpoint = `/api/tts/jobs/${encodeURIComponent(id)}`;
+  let failures = 0;
+  const terminal = snapshot => {
+    const seconds = Math.floor(snapshot.elapsed_secs || 0);
+    const context = snapshot.context;
+    const identity = context ? `${context.model} (${context.provider}) · ${context.voice} · ${context.effective_device} · ` : '';
+    setStatus(`${identity}${snapshot.stage}${snapshot.cancellation_requested || snapshot.deadline_exceeded ? ' (stopping)' : ''} · ${seconds}s elapsed${snapshot.frames ? ` · ${snapshot.frames} generated frames` : ''}${context?.effective_device === 'cpu' && context?.provider === 'qwen3' ? ' · CPU inference can be slow.' : ''}`);
+    if (snapshot.stage === 'completed') return true;
+    if (snapshot.stage === 'failed' || snapshot.stage === 'cancelled') {
+      const error = new Error(snapshot.stage === 'failed' ? snapshot.error || 'Inference failed.' : 'Generation cancelled or its deadline expired.');
+      error.terminalJob = true; throw error;
+    }
+    return false;
+  };
+  while (failures < 5) {
+    // Reconnection always fetches a current snapshot; missed SSE events cannot
+    // strand the UI. No percentage or remaining-time estimate is invented.
+    let statusResponse;
+    try { statusResponse = await apiFetch(endpoint, { signal: AbortSignal.timeout(15000) }); }
+    catch (_) { failures++; await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
+    if (!statusResponse.ok) {
+      const error = new Error(`Job status unavailable (HTTP ${statusResponse.status}).`);
+      error.terminalJob = statusResponse.status === 404;
+      throw error;
+    }
+    if (terminal(await statusResponse.json())) return;
+    let response;
+    try { response = await apiFetch(`${endpoint}/events`, { signal: AbortSignal.timeout(30000) }); }
+    catch (_) { failures++; await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
+    if (!response.ok || !response.body) { failures++; await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let pending = '';
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        pending += decoder.decode(value, { stream: true }).replace(/\r/g, '');
+        let boundary;
+        while ((boundary = pending.indexOf('\n\n')) >= 0) {
+          const event = pending.slice(0, boundary); pending = pending.slice(boundary + 2);
+          const data = event.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
+          if (data) { failures = 0; if (terminal(JSON.parse(data))) return; }
+        }
+        if (pending.length > 65536) throw new Error('Invalid progress response.');
+      }
+    } catch (error) {
+      if (error.terminalJob) throw error;
+      failures++;
+    } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  throw new Error('Progress connection lost. The job may still be running; reconnect to check its status.');
+}
+
+async function synthesize(options = {}) {
+  if (generateBtn.disabled) return;
+  const text = typeof options.previewText === 'string' ? options.previewText : textInput.value.trim();
+  if (!text && !activeJobId) {
     setStatus('Please enter some text.', true);
     return;
   }
@@ -916,34 +992,32 @@ async function synthesize() {
   generateBtn.disabled = true;
   generateBtn.classList.add('loading');
   generateBtn.textContent = 'Generating…';
-  setStatus('');
+  const providerStatus = (lastProviders?.providers || []).find(p => p.active_model === modelSelect.value);
+  const selectedDevice = providerStatus?.effective_device || 'unknown';
+  setStatus(`${modelSelect.value} · ${voice} · ${selectedDevice}${selectedDevice === 'cpu' && meta.kind === 'cloning' ? ' · CPU inference may be slow; no completion time estimate is available.' : ''}`);
 
+  let terminalReached = false;
   try {
-    let resp;
-    if (meta.kind === 'cloning') {
-      // Cloned voices synthesize through their own profile: same
-      // text/plain body as /api/tts, routed by profile id.
-      if (!voice) {
-        throw new Error('Create a voice profile for this model first (POST /api/voices/clones).');
-      }
-      const params = new URLSearchParams({ language: lang });
-      resp = await apiFetch(`${Endpoints.voicePreview(voice)}?${params.toString()}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'text/plain',
-        },
-        body: text,
-      });
-    } else {
-      const params = new URLSearchParams({ voice, lang });
-      resp = await apiFetch(`${Endpoints.tts}?${params.toString()}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'text/plain',
-        },
-        body: text,
-      });
+    if (meta.kind === 'cloning' && !voice && !activeJobId) {
+      throw new Error('Create a voice profile for this model first.');
     }
+    const params = new URLSearchParams({ lang, format: 'wav' });
+    if (meta.kind === 'cloning') params.set('profile', voice);
+    else params.set('voice', voice);
+    let job = { id: activeJobId };
+    if (!activeJobId) {
+      const created = await apiFetch(`/api/tts/jobs?${params}`, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text,
+      });
+      if (!created.ok) throw new Error(`HTTP ${created.status}: ${await created.text()}`);
+      job = await created.json();
+      activeJobId = job.id;
+    }
+    cancelGeneration.hidden = false;
+    cancelGeneration.disabled = false;
+    await watchSynthesisJob(job.id);
+    terminalReached = true;
+    const resp = await apiFetch(`/api/tts/jobs/${encodeURIComponent(job.id)}/audio`);
 
     if (!resp.ok) {
       const msg = await resp.text().catch(() => resp.statusText);
@@ -960,20 +1034,26 @@ async function synthesize() {
     currentAudioUrl = URL.createObjectURL(blob);
     audioPlayer.src = currentAudioUrl;
     audioPlayer.style.display = 'block';
+    const download = document.getElementById('downloadAudio');
+    download.href = currentAudioUrl; download.hidden = false;
 
     // Play naturally, catching browser auto-play prevention errors
     audioPlayer.play().catch(err => {
       console.log("Audio waiting for user interaction to play: ", err);
     });
 
-    setStatus('');
+    setStatus('Completed. Audio is ready to play or download.');
   } catch (e) {
-    setStatus(e.message, true);
+    terminalReached ||= Boolean(e.terminalJob);
+    setStatus(e.message + (activeJobId && !terminalReached ? ' Use Resume monitoring or Cancel generation.' : ''), true);
   } finally {
+    if (terminalReached) activeJobId = null;
+    cancelGeneration.hidden = !activeJobId;
+    cancelGeneration.disabled = false;
     // Reset UI State
     generateBtn.disabled = false;
     generateBtn.classList.remove('loading');
-    generateBtn.textContent = 'Generate speech';
+    generateBtn.textContent = activeJobId ? 'Resume monitoring' : 'Generate speech';
   }
 }
 

@@ -216,6 +216,13 @@ pub struct TtsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InferenceConfig {
+    /// Deadline for queued and executing jobs, independent of HTTP response timeout.
+    #[serde(default = "default_generation_deadline_secs")]
+    pub generation_deadline_secs: u64,
+    #[serde(default = "default_job_retention_secs")]
+    pub job_retention_secs: u64,
+    #[serde(default = "default_max_retained_jobs")]
+    pub max_retained_jobs: usize,
     /// Maximum concurrent model inferences.
     #[serde(default = "default_max_concurrent_inference")]
     pub max_concurrent: usize,
@@ -361,6 +368,8 @@ pub struct ProvidersConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VoicesConfig {
+    #[serde(default = "default_max_voice_profiles")]
+    pub max_profiles: usize,
     /// Directory for `profiles.json` plus `<uuid>.wav` references.
     #[serde(default = "default_voices_dir")]
     pub store_dir: String,
@@ -372,6 +381,7 @@ pub struct VoicesConfig {
 /// Security-relevant settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(Default)]
 pub struct SecurityConfig {
     /// Honor forwarded headers (`X-Forwarded-For`) from trusted proxies.
     #[serde(default)]
@@ -503,6 +513,15 @@ fn default_queue_max_body_bytes() -> usize {
 fn default_admin_max_body_bytes() -> usize {
     16_384
 }
+fn default_generation_deadline_secs() -> u64 {
+    1800
+}
+fn default_job_retention_secs() -> u64 {
+    600
+}
+fn default_max_retained_jobs() -> usize {
+    64
+}
 fn default_max_concurrent_inference() -> usize {
     1
 }
@@ -578,6 +597,9 @@ fn default_gpt_temperature() -> f32 {
 fn default_gpt_repetition_penalty() -> f32 {
     1.0
 }
+fn default_max_voice_profiles() -> usize {
+    256
+}
 fn default_voices_dir() -> String {
     "./voices".to_string()
 }
@@ -626,6 +648,9 @@ impl Default for AppConfig {
             inference: InferenceConfig {
                 max_concurrent: default_max_concurrent_inference(),
                 max_pending: default_max_pending_inference(),
+                generation_deadline_secs: default_generation_deadline_secs(),
+                job_retention_secs: default_job_retention_secs(),
+                max_retained_jobs: default_max_retained_jobs(),
             },
             rate_limit: RateLimitConfig {
                 requests: default_rate_limit_requests(),
@@ -688,6 +713,7 @@ impl Default for GptSovitsConfig {
 impl Default for VoicesConfig {
     fn default() -> Self {
         Self {
+            max_profiles: default_max_voice_profiles(),
             store_dir: default_voices_dir(),
             max_upload_bytes: default_voices_max_upload_bytes(),
         }
@@ -756,6 +782,9 @@ impl Default for InferenceConfig {
         Self {
             max_concurrent: default_max_concurrent_inference(),
             max_pending: default_max_pending_inference(),
+            generation_deadline_secs: default_generation_deadline_secs(),
+            job_retention_secs: default_job_retention_secs(),
+            max_retained_jobs: default_max_retained_jobs(),
         }
     }
 }
@@ -806,18 +835,6 @@ impl Default for PathsConfig {
             audio,
             temp_audio: default_temp_audio_dir(),
             token_store: default_token_store_path(),
-        }
-    }
-}
-
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        Self {
-            trust_proxy: false,
-            trusted_proxies: Vec::new(),
-            cookie_secure: false,
-            enable_hsts: false,
-            allow_insecure_remote: false,
         }
     }
 }

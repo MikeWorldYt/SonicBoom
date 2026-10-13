@@ -88,3 +88,93 @@ nonzero, quarter-second RMS trace
 - GPT-SoVITS Chinese (`zh`) model-backed run (pipeline identical to the
   proven English path; needs an authorized Chinese reference + transcript).
 - GPT-SoVITS-only peak RSS (VmHWM capture).
+
+
+## 2026-10-13 BC-250 refactor measurements
+
+This supersedes the BC-250 and GPT-only RSS pending items above. Hardware:
+AMD BC-250, 6 physical / 12 logical CPU cores, approximately 14 GiB RAM and
+14 GiB swap; Linux, Rust 1.99, release build with `server,qwen,gpt-sovits`,
+CPU execution. Qwen upstream code revision `711ceee07cad92673f86de8997bdf54c30caa49f`
+with the vendored cancellation patch; model revision
+`5d83992436eae1d760afd27aff78a71d676296fc`. GPT model revision
+`69063da489c62f34fffc40acd10e2167623509aa`.
+Reference audio was generated locally by native Supertonic for these tests;
+no private user recordings were used. Raw results are in
+[results/2026-10-13-bc250](results/2026-10-13-bc250).
+
+| Qwen case | Wall seconds | Audio seconds | RTF | Conditioning |
+|---|---:|---:|---:|---|
+| Cold native load, verified files | 7.493 | — | — | — |
+| Resident model reuse | 0.000603 | — | — | load count remains 1 |
+| X-vector | 18.780 | 1.84 | 10.206 | miss |
+| Same voice repeated | 15.541 | 1.84 | 8.446 | hit |
+| ICL preparation | 1.593 | — | — | miss |
+| ICL synthesis | 32.551 | 1.76 | 18.495 | hit |
+| Different voice | 14.523 | 1.52 | 9.554 | miss |
+| Long text | 120.896 | 12.64 | 9.565 | hit |
+| Healthy synthesis after cancellation | 9.597 | 0.88 | 10.906 | hit |
+
+Active native cancellation was requested after frame 1 and computation
+returned 40 ms later. The resident model remained healthy, load count 1.
+All completed Qwen benchmark cases terminated with EOS and produced finite,
+nonempty audio with measurable energy. Peak process RSS across the sequence
+was 6,123,420 KiB; individual snapshots are in the raw results. This includes
+reference generation and conditioning, not a claim about weights alone.
+`time` reported 230.76 s wall / 336.53 s user / 76.15 s system,
+approximately 179% average utilization (100% = one logical CPU).
+
+For the long-text generation stage, measured time was 95.343 s for 158
+frames: acoustic prediction 60.138 s, talker 24.413 s, sampling 10.771 s,
+mean frame latency 0.603 s. Acoustic prediction is a measured CPU hotspot;
+no speculative kernel replacement or quality-reducing bypass was applied.
+
+| GPT-SoVITS CPU case | Wall seconds | Audio seconds | RTF |
+|---|---:|---:|---:|
+| Cold native load | 9.611 | — | — |
+| First English synthesis | 4.005 | 3.30 | 1.214 |
+| Same reference repeated | 2.350 | 3.30 | 0.712 |
+
+GPT-only sequence peak RSS was 3,454,240 KiB. Whole sequence: 19.53 s wall,
+62.52 s user, 4.45 s system (~343% average CPU utilization).
+
+### Controlled comparison and limits
+
+`examples/provider_compare.rs` ran the same owned reference, text, seed 42
+and CPU model against original main `0a350b1` and this refactor. All six
+outputs were exactly equal after f32 sample hashing:
+`0053b2c9abc2e11e23ce37c04b92a9c0a5eaf4ba9f955cc1c38e72637c7b0f34`
+(1.36 seconds of audio). Baseline timings were 16.536, 16.958, 12.175 s;
+patched timings 11.963, 11.847, 11.778 s. The first two baseline runs
+coincided with compilation, and the final pair is too small a sample to
+establish a speedup. Six-thread runs (14.455, 15.227, 11.897 s) did not
+establish a threading benefit either; defaults were not tuned on that basis.
+The older 2-CPU 440/962-second results are a different environment and
+must not be used to calculate a refactor speedup.
+
+For one pinned 1,829,344,272-byte asset, whole-file SHA verification peaked
+at 1,793,584 KiB RSS versus 7,944 KiB for buffered verification. Elapsed
+4.030 versus 2.652 s is a single, ordered run affected by page cache;
+the supported improvement is bounded allocation, not a universal latency
+ratio. Warm trusted metadata avoids hashing unchanged files altogether.
+
+Reproduce with the release examples `cache_benchmark`, `tts_benchmark`,
+and `provider_compare`; see [profiling instructions](../docs/inference-architecture.md).
+CUDA, RTX 3060 latency/VRAM and ROCm remain unverified: this runner has no
+NVIDIA device or CUDA toolkit. Chinese GPT references and interactive browser/keyboard
+QA also remain pending; Firefox headless mobile/desktop layouts were inspected. No real-time Qwen CPU guarantee is made.
+
+
+The separate, unseeded GPT regression also produced a 60.3-second waveform
+for a short sentence (88.3-second synthesis). Audible/finite validation alone
+is not proof of linguistic quality. Seeded benchmark results above must not
+be generalized across stochastic settings; subjective quality and EOS behavior
+for such GPT outputs warrant further upstream investigation.
+
+
+Final release HTTP job smoke test with `request_timeout_secs=1` returned
+202 in 0.792 ms, stopped generation after frame 1, and successfully completed
+a subsequent 6.605-second job despite that HTTP timeout. SSE disconnection
+preserved the job. Completed WAV was 0.72 seconds, private and non-cacheable;
+model load count remained 1. See the raw HTTP job record for polling-inclusive
+cancellation timing.

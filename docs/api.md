@@ -564,3 +564,10 @@ The admin panel includes login attempt tracking to prevent brute-force attacks.
 
 - Maximum 5 failed attempts per IP in 10 minutes
 - 15-minute lockout after threshold exceeded (expires automatically)
+
+## Reliable native synthesis jobs
+
+Use the authenticated [background job API](inference-jobs.md) for long CPU
+inference, with progress and cooperative cancellation. The synchronous routes
+remain supported. See [ownership/cache architecture](inference-architecture.md)
+for model residency, integrity verification, reloads and cache bounds.

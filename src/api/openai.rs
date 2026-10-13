@@ -158,9 +158,9 @@ async fn post_speech_cloning(
     request: &SpeechRequest,
     format: sonicboom::tts::audio::AudioFormat,
 ) -> Result<axum::response::Response, AppError> {
-    use super::providers::{build_registry, provider_error_to_app, supertonic_handle};
+    use super::providers::{build_registry_for_state, provider_error_to_app};
     use super::tts::synthesize_provider_bounded;
-    use sonicboom::tts::providers::types::{DevicePreference, ProviderRequest, ReferenceAudio};
+    use sonicboom::tts::providers::types::{DevicePreference, ProviderRequest};
 
     let config = state.config.get().await;
     sonicboom::engine::validate_tts_input(
@@ -179,33 +179,20 @@ async fn post_speech_cloning(
             request.model, request.voice
         ))
     })?;
-    let store = sonicboom::tts::voices::VoiceProfileStore::open(std::path::PathBuf::from(
-        config.voices.store_dir.clone(),
-    ))
-    .map_err(AppError::internal)?;
-    let profile = store
-        .get(profile_id)
-        .filter(|p| p.owner_token_hash.as_deref() == Some(token.rate_limit_key().as_str()))
-        .cloned()
-        .ok_or_else(|| {
-            AppError::BadRequest(format!(
-                "unknown voice profile for model '{}' (profiles are scoped to the owning token)",
-                request.model
-            ))
-        })?;
+    let (profile, reference) =
+        super::voices::owned_reference(state, profile_id.to_string(), token.rate_limit_key())
+            .await?;
+    if profile.model_revision != super::voices::config_revision_for(&config, &profile.provider) {
+        return Err(AppError::BadRequest(
+            "voice profile belongs to an incompatible model revision; create a new profile".into(),
+        ));
+    }
     if profile.model != request.model {
         return Err(AppError::BadRequest(format!(
             "voice profile '{}' is bound to model '{}' and cannot be used with '{}'",
             profile.id, profile.model, request.model
         )));
     }
-    let reference_bytes = std::fs::read(
-        store
-            .reference_path(&profile.id)
-            .map_err(AppError::internal)?,
-    )
-    .map_err(|_| AppError::internal("reference audio unavailable"))?;
-    let (pcm, rate) = super::voices::decode_wav_for_synthesis(&reference_bytes)?;
     let mut provider_request = ProviderRequest::new(
         &profile.model,
         &profile.id,
@@ -216,12 +203,9 @@ async fn post_speech_cloning(
     provider_request.clone_mode =
         Some(super::voices::parse_clone_mode_public(&profile.clone_mode)?);
     provider_request.reference_transcript = profile.transcript.clone();
-    provider_request.reference_audio = Some(ReferenceAudio {
-        pcm,
-        sample_rate: rate,
-    });
+    provider_request.reference_audio = Some(reference);
     provider_request.seed = request.seed;
-    let registry = build_registry(&config, supertonic_handle(state).await, &state.providers);
+    let registry = build_registry_for_state(state).await;
     let provider = registry
         .resolve_model(&request.model)
         .map_err(provider_error_to_app)?;
@@ -236,9 +220,7 @@ async fn post_speech_cloning(
     let audio = synthesize_provider_bounded(state, provider, provider_request)
         .await
         .map_err(provider_error_to_app)?;
-    let audio_bytes =
-        sonicboom::tts::audio::encode_audio(&audio.samples, audio.sample_rate, format)
-            .map_err(|e| AppError::internal(e.to_string()))?;
+    let audio_bytes = super::tts::encode_output(audio.samples, audio.sample_rate, format).await?;
     Ok((
         StatusCode::OK,
         [(header::CONTENT_TYPE, format.content_type())],
@@ -249,6 +231,14 @@ async fn post_speech_cloning(
 
 /// Synthesize speech using OpenAI-compatible API
 pub async fn post_speech(
+    token: AuthenticatedToken,
+    State(state): State<crate::AppState>,
+    body: String,
+) -> Result<axum::response::Response, AppError> {
+    super::jobs::with_admission(&state, post_speech_inner(token, State(state.clone()), body)).await
+}
+
+async fn post_speech_inner(
     token: AuthenticatedToken,
     State(state): State<crate::AppState>,
     body: String,
@@ -267,7 +257,11 @@ pub async fn post_speech(
     // voice profile; legacy aliases keep the exact Supertonic path below.
     if is_cloning_model(&request.model) {
         check_rate_limit(&state, &token)?;
-        return post_speech_cloning(&token, &state, &request, format).await;
+        return super::jobs::with_reference_memory(
+            &state,
+            post_speech_cloning(&token, &state, &request, format),
+        )
+        .await;
     }
     let voice_name = map_voice(&request.voice)?;
 
@@ -326,8 +320,7 @@ pub async fn post_speech(
 
     let samples = synthesize_bounded(&state, model_handle, text, lang, voice_name).await?;
 
-    let audio_bytes = audio::encode_audio(&samples, sample_rate, format)
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let audio_bytes = super::tts::encode_output(samples, sample_rate, format).await?;
 
     Ok((
         StatusCode::OK,

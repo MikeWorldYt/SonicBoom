@@ -167,8 +167,7 @@ tao = { version = "0.30", optional = true }
 # The `hub`/`cli` features stay off: SonicBoom downloads pinned model
 # files through its own verified downloader, never the upstream CLI.
 [dependencies.qwen3-tts]
-git = "https://github.com/TrevorS/qwen3-tts-rs"
-rev = "711ceee07cad92673f86de8997bdf54c30caa49f"
+path = "vendor/qwen3-tts"
 optional = true
 default-features = false
 features = ["cpu"]
@@ -207,5 +206,5 @@ required-features = ["tiktools-plugin"]
 lto = true
 opt-level = 3
 strip = true
-panic = "abort"
+panic = "unwind"
 codegen-units = 1

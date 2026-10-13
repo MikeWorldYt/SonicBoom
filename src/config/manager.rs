@@ -206,6 +206,12 @@ impl ConfigManager {
         self.effective.read().await.config.clone()
     }
 
+    /// Snapshot configuration and its revision under one read lock.
+    pub async fn versioned_snapshot(&self) -> (u64, AppConfig) {
+        let effective = self.effective.read().await;
+        (self.revision(), effective.config.clone())
+    }
+
     /// Snapshot the effective configuration (with sources).
     pub async fn get_effective(&self) -> EffectiveConfig {
         self.effective.read().await.clone()
@@ -452,13 +458,12 @@ impl ConfigManager {
         // Feedback-loop guard: if the file content exactly
         // matches our last internal write, this event is our
         // own echo — ignore it.
-        if let Some(record) = self.last_internal_write.read().await.as_ref() {
-            if let Ok(current) = std::fs::read_to_string(&self.path) {
-                if hash_str(&current) == record.content_hash {
-                    self.touch_reload_time().await;
-                    return ReloadOutcome::Unchanged;
-                }
-            }
+        if let Some(record) = self.last_internal_write.read().await.as_ref()
+            && let Ok(current) = std::fs::read_to_string(&self.path)
+            && hash_str(&current) == record.content_hash
+        {
+            self.touch_reload_time().await;
+            return ReloadOutcome::Unchanged;
         }
         self.reload_from_disk_internal(ChangeSource::Filesystem)
             .await
@@ -613,8 +618,11 @@ impl ConfigManager {
     ) {
         let old_revision = self.revision();
         let config = effective.config.clone();
-        *self.effective.write().await = effective;
-        self.revision.store(new_revision, Ordering::SeqCst);
+        {
+            let mut current = self.effective.write().await;
+            *current = effective;
+            self.revision.store(new_revision, Ordering::SeqCst);
+        }
         self.events
             .send(ConfigEvent::Updated {
                 old_revision,

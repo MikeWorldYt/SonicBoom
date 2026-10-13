@@ -296,11 +296,11 @@ pub fn apply_environment_with(
     };
 
     // --- server ---
-    if let Ok(port) = env_parse(&get, "PORT", config.server.port) {
-        if get("PORT").is_some() {
-            config.server.port = port;
-            override_value(sources, "server.port");
-        }
+    if let Ok(port) = env_parse(&get, "PORT", config.server.port)
+        && get("PORT").is_some()
+    {
+        config.server.port = port;
+        override_value(sources, "server.port");
     }
     if get("PORT").is_some() {
         // re-run to surface parse errors even when the value matches

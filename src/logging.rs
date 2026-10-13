@@ -33,8 +33,9 @@ static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 /// Type-erased log-level setter: the reload handle is
 /// generic over the (unnameable) layered subscriber
 /// type, so it is captured in a closure and erased.
+type LevelSetter = dyn Fn(&str) -> Result<(), String> + Send + Sync;
 struct LevelHandle {
-    modify: Box<dyn Fn(&str) -> Result<(), String> + Send + Sync>,
+    modify: Box<LevelSetter>,
 }
 
 static LEVEL_HANDLE: OnceLock<LevelHandle> = OnceLock::new();
@@ -72,7 +73,14 @@ pub fn init(
     let (reloadable_filter, reload_handle) = reload::Layer::new(env_filter);
 
     // Base subscriber
-    let base = tracing_subscriber::registry().with(reloadable_filter);
+    // Upstream GPT-SoVITS debug events include raw synthesis text. This
+    // privacy filter cannot be undone by a hot-reloaded verbosity setting;
+    // SonicBoom's own stage/health events remain available.
+    let base = tracing_subscriber::registry().with(reloadable_filter).with(
+        tracing_subscriber::filter::filter_fn(|metadata| {
+            !metadata.target().starts_with("gpt_sovits_onnx_rs")
+        }),
+    );
 
     if log_to_file && log_to_stdout {
         // File writer - detailed format

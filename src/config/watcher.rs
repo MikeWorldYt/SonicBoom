@@ -115,11 +115,11 @@ pub fn start_watching(manager: Arc<ConfigManager>) -> Option<ConfigWatcher> {
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
-    if let Some(watcher) = debouncer.as_mut() {
-        if let Err(error) = watcher.watch(&watch_path, notify::RecursiveMode::NonRecursive) {
-            tracing::warn!("Native config watch unavailable; using polling: {error}");
-            debouncer = None;
-        }
+    if let Some(watcher) = debouncer.as_mut()
+        && let Err(error) = watcher.watch(&watch_path, notify::RecursiveMode::NonRecursive)
+    {
+        tracing::warn!("Native config watch unavailable; using polling: {error}");
+        debouncer = None;
     }
 
     manager.set_watching(true);

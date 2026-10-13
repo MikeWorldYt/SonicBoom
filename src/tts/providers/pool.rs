@@ -14,8 +14,12 @@ use super::gptsovits::{GptSovitsConfig, GptSovitsProvider};
 use super::qwen::{QwenConfig, QwenProvider};
 use super::supertonic::SupertonicProvider;
 
+type DesiredProviders = Option<(u64, QwenConfig, GptSovitsConfig)>;
+
 /// Resident optional providers shared by all requests.
 pub struct ProviderPool {
+    desired: Arc<std::sync::Mutex<DesiredProviders>>,
+    retrying: Arc<std::sync::atomic::AtomicBool>,
     /// Qwen3-TTS singleton (model loads once, prompts cached per profile).
     pub qwen: Arc<QwenProvider>,
     /// GPT-SoVITS singleton (model + reference state behind one lock).
@@ -25,6 +29,8 @@ pub struct ProviderPool {
 impl Default for ProviderPool {
     fn default() -> Self {
         Self {
+            desired: Arc::new(std::sync::Mutex::new(None)),
+            retrying: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             qwen: QwenProvider::new(QwenConfig::default()),
             gpt: GptSovitsProvider::new(GptSovitsConfig::default()),
         }
@@ -42,6 +48,66 @@ impl ProviderPool {
     pub fn sync_from(&self, qwen: QwenConfig, gpt: GptSovitsConfig) {
         self.qwen.sync_config(qwen);
         self.gpt.sync_config(gpt);
+    }
+
+    /// Reject request-scoped snapshots older than the most recently adopted
+    /// server configuration. Equal versions retry deferred busy-model changes.
+    pub fn sync_versioned(&self, generation: u64, qwen: QwenConfig, gpt: GptSovitsConfig) {
+        let mut current = self.desired.lock().unwrap_or_else(|e| e.into_inner());
+        if current
+            .as_ref()
+            .is_some_and(|(current, _, _)| generation < *current)
+        {
+            return;
+        }
+        *current = Some((generation, qwen.clone(), gpt.clone()));
+        self.sync_from(qwen, gpt);
+        drop(current);
+        self.retry_deferred();
+    }
+    fn retry_deferred(&self) {
+        use std::sync::atomic::Ordering;
+        if !self.qwen.reload_pending() && !self.gpt.reload_pending() {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        if self.retrying.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let desired = self.desired.clone();
+        let retrying = self.retrying.clone();
+        let qwen = self.qwen.clone();
+        let gpt = self.gpt.clone();
+        runtime.spawn(async move {
+            struct Reset(Arc<std::sync::atomic::AtomicBool>, bool);
+            impl Drop for Reset {
+                fn drop(&mut self) {
+                    if self.1 {
+                        self.0.store(false, Ordering::Release);
+                    }
+                }
+            }
+            let mut reset = Reset(retrying, true);
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let current = desired.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some((_, q, g)) = current.as_ref() {
+                    qwen.sync_config(q.clone());
+                    gpt.sync_config(g.clone());
+                }
+                qwen.kick_ensure_if_needed(None);
+                gpt.kick_ensure_if_needed(None);
+                if !qwen.reload_pending() && !gpt.reload_pending() {
+                    // Publish idle while holding the same lock used by new
+                    // versions; a concurrent update cannot lose its retry.
+                    reset.0.store(false, Ordering::Release);
+                    reset.1 = false;
+                    break;
+                }
+            }
+        });
     }
 
     /// Kick background download + load for enabled providers that have no
@@ -69,6 +135,18 @@ mod tests {
     use super::*;
     use crate::tts::providers::TtsProvider;
 
+    #[test]
+    fn older_configuration_cannot_restore_a_retired_provider() {
+        let pool = ProviderPool::new();
+        let enabled = QwenConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        pool.sync_versioned(10, enabled.clone(), GptSovitsConfig::default());
+        pool.sync_versioned(11, QwenConfig::default(), GptSovitsConfig::default());
+        pool.sync_versioned(10, enabled, GptSovitsConfig::default());
+        assert!(!pool.qwen.status().enabled);
+    }
     #[test]
     fn pool_registers_all_three_providers() {
         let pool = ProviderPool::new();

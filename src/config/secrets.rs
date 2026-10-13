@@ -86,10 +86,10 @@ impl FileSecretStore {
     }
 
     fn write_map(&self, map: &BTreeMap<String, String>) -> Result<(), SecretStoreError> {
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = self.path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
         }
         let temporary = self
             .path
@@ -146,10 +146,10 @@ impl SecretStore for FileSecretStore {
 /// the `SONICBOOM_ADMIN_PW` environment variable (headless/Docker
 /// compatibility). The environment value is *not* persisted.
 pub fn load_admin_password(store: &dyn SecretStore) -> Result<Option<String>, SecretStoreError> {
-    if let Some(pw) = store.get(keys::ADMIN_PASSWORD)? {
-        if !pw.is_empty() {
-            return Ok(Some(pw));
-        }
+    if let Some(pw) = store.get(keys::ADMIN_PASSWORD)?
+        && !pw.is_empty()
+    {
+        return Ok(Some(pw));
     }
     Ok(std::env::var("SONICBOOM_ADMIN_PW")
         .ok()
@@ -169,10 +169,10 @@ pub fn store_admin_password(
 /// Load the HuggingFace token from the secret store, falling back
 /// to the `HF_TOKEN` environment variable.
 pub fn load_hf_token(store: &dyn SecretStore) -> Result<Option<String>, SecretStoreError> {
-    if let Some(token) = store.get(keys::HF_TOKEN)? {
-        if !token.is_empty() {
-            return Ok(Some(token));
-        }
+    if let Some(token) = store.get(keys::HF_TOKEN)?
+        && !token.is_empty()
+    {
+        return Ok(Some(token));
     }
     Ok(std::env::var("HF_TOKEN").ok().filter(|v| !v.is_empty()))
 }

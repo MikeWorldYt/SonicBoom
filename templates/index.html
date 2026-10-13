@@ -61,7 +61,9 @@
         </div>
 
         <button id="btn" class="primary" BTN_DISABLED>Generate speech</button>
-        <div id="status" role="status"></div>
+        <button type="button" id="cancelGeneration" class="btn-secondary" hidden>Cancel generation</button>
+        <div id="status" role="status" aria-live="polite"></div>
+        <a id="downloadAudio" download="sonicboom.wav" hidden>Download generated audio</a>
         <audio id="player" controls></audio>
       </section>
 
@@ -71,6 +73,7 @@
           <span class="hint">Live status from the server</span>
         </div>
         <div class="provider-list">PROVIDERS_ROWS</div>
+        <details><summary>Advanced inference diagnostics</summary><pre id="inferenceDiagnostics">Load provider status to view diagnostics.</pre></details>
         <p class="muted">Voice cloning (Qwen3-TTS, GPT-SoVITS) needs an API token and a reference recording uploaded via <code>POST /api/voices/clones</code>. See <code>docs/providers.md</code> for setup. Use Enable on a card to download and start an engine — no file edits or restarts needed.</p>
       </section>
 
@@ -84,6 +87,7 @@
         </div>
 
         <h3 class="subhead">Clone a new voice</h3>
+        <p class="muted">ICL uses the recording and its exact transcript. X-vector uses the voice embedding without a transcript. Use clear speech with little background noise; very short references may reduce quality. Saving a profile does not validate synthesis — preview it with short text.</p>
         <form id="cloneForm">
           <div class="row">
             <div class="field">

@@ -33,9 +33,17 @@ pub(super) async fn synthesize_bounded(
     let config = state.config.get().await;
     let inference_steps = config.model.inference_steps;
     let max_chunk_chars = config.tts.max_chunk_chars;
-    state
-        .inference_gate
-        .run_bounded(move || {
+    super::jobs::with_deadline(
+        config.inference.generation_deadline_secs,
+        state.inference_gate.run_bounded(move || {
+            if let Some(c) = sonicboom::tts::control::current() {
+                let device = if cfg!(any(feature = "cuda", feature = "rocm", feature = "coreml")) {
+                    "onnxruntime_placement_unknown"
+                } else {
+                    "cpu"
+                };
+                c.set_context("supertonic", "supertonic-3", &voice_name, device);
+            }
             inference::synthesize(
                 &model_handle,
                 &text,
@@ -44,17 +52,21 @@ pub(super) async fn synthesize_bounded(
                 inference_steps,
                 max_chunk_chars,
             )
-        })
-        .await
-        .map_err(|e| match e {
-            RunBoundedError::Saturated => AppError::TooManyRequests(
-                "Server is busy. Too many pending inference requests.".to_string(),
-            ),
-            RunBoundedError::JoinFailed(detail) => {
-                AppError::internal(format!("inference task failed: {detail}"))
-            }
-        })?
-        .map_err(|e| AppError::internal(e.to_string()))
+        }),
+    )
+    .await
+    .map_err(|e| match e {
+        RunBoundedError::Saturated => AppError::TooManyRequests(
+            "Server is busy. Too many pending inference requests.".to_string(),
+        ),
+        RunBoundedError::Cancelled => {
+            AppError::ServiceUnavailable("Inference cancelled or deadline exceeded".into())
+        }
+        RunBoundedError::JoinFailed(detail) => {
+            AppError::internal(format!("inference task failed: {detail}"))
+        }
+    })?
+    .map_err(|e| AppError::internal(e.to_string()))
 }
 
 #[derive(Deserialize)]
@@ -127,18 +139,25 @@ pub(crate) async fn synthesize_provider_bounded(
     request: sonicboom::tts::providers::types::ProviderRequest,
 ) -> Result<sonicboom::tts::providers::types::PcmAudio, sonicboom::tts::providers::ProviderError> {
     use sonicboom::tts::providers::ProviderError;
-    state
-        .inference_gate
-        .run_bounded(move || provider.synthesize(&request))
-        .await
-        .map_err(|e| match e {
-            RunBoundedError::Saturated => ProviderError::busy(
-                "Server is busy. Too many pending inference requests.".to_string(),
-            ),
-            RunBoundedError::JoinFailed(detail) => {
-                ProviderError::inference_failed(format!("inference task failed: {detail}"))
-            }
-        })?
+    let config = state.config.get().await;
+    super::jobs::with_deadline(
+        config.inference.generation_deadline_secs,
+        state
+            .inference_gate
+            .run_bounded(move || provider.synthesize(&request)),
+    )
+    .await
+    .map_err(|e| match e {
+        RunBoundedError::Saturated => {
+            ProviderError::busy("Server is busy. Too many pending inference requests.".to_string())
+        }
+        RunBoundedError::Cancelled => {
+            ProviderError::inference_failed("Inference cancelled or deadline exceeded")
+        }
+        RunBoundedError::JoinFailed(detail) => {
+            ProviderError::inference_failed(format!("inference task failed: {detail}"))
+        }
+    })?
 }
 
 /// Shared pre-inference pipeline: rate limit -> validate -> admission control.
@@ -150,6 +169,9 @@ pub(crate) fn check_rate_limit(
     state: &crate::AppState,
     token: &AuthenticatedToken,
 ) -> Result<(), AppError> {
+    if super::jobs::active_control().is_some() {
+        return Ok(());
+    }
     let decision = state.rate_limiter.check(&token.rate_limit_key());
     if decision.allowed {
         return Ok(());
@@ -164,6 +186,19 @@ pub(crate) fn check_rate_limit(
 }
 
 pub async fn post_tts(
+    token: AuthenticatedToken,
+    State(state): State<crate::AppState>,
+    Query(query): Query<TtsQuery>,
+    body: String,
+) -> Result<Response, AppError> {
+    super::jobs::with_admission(
+        &state,
+        post_tts_inner(token, State(state.clone()), Query(query), body),
+    )
+    .await
+}
+
+async fn post_tts_inner(
     token: AuthenticatedToken,
     State(state): State<crate::AppState>,
     Query(query): Query<TtsQuery>,
@@ -232,8 +267,7 @@ pub async fn post_tts(
 
     let samples = synthesize_bounded(&state, model_handle, text, lang, voice_name).await?;
 
-    let audio_bytes = audio::encode_audio(&samples, sample_rate, format)
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let audio_bytes = encode_output(samples, sample_rate, format).await?;
 
     Ok((
         StatusCode::OK,
@@ -245,6 +279,20 @@ pub async fn post_tts(
 
 #[cfg(feature = "playback")]
 pub async fn post_tts_and_play(
+    token: AuthenticatedToken,
+    State(state): State<crate::AppState>,
+    Query(query): Query<TtsQuery>,
+    body: String,
+) -> Result<Response, AppError> {
+    super::jobs::with_admission(
+        &state,
+        post_tts_and_play_inner(token, State(state.clone()), Query(query), body),
+    )
+    .await
+}
+
+#[cfg(feature = "playback")]
+async fn post_tts_and_play_inner(
     token: AuthenticatedToken,
     State(state): State<crate::AppState>,
     Query(query): Query<TtsQuery>,
@@ -300,8 +348,7 @@ pub async fn post_tts_and_play(
     let samples = synthesize_bounded(&state, model_handle, text, lang, voice_name).await?;
 
     // We use WAV for internal queue to ensure maximum compatibility with rodio
-    let audio_bytes = audio::encode_audio(&samples, sample_rate, audio::AudioFormat::Wav)
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let audio_bytes = encode_output(samples, sample_rate, audio::AudioFormat::Wav).await?;
 
     // Ensure the temp directory exists with restrictive permissions.
     let temp_dir =
@@ -392,4 +439,35 @@ pub async fn post_tts_and_play(
         })),
     )
         .into_response())
+}
+
+/// Audio codecs execute off the async executor. Results cancelled during
+/// encoding are withheld just like results cancelled during generation.
+pub(crate) async fn encode_output(
+    samples: Vec<f32>,
+    rate: u32,
+    format: audio::AudioFormat,
+) -> Result<Vec<u8>, AppError> {
+    let control = super::jobs::active_control();
+    if let Some(c) = &control
+        && !c.update("encoding", c.snapshot().frames)
+    {
+        return Err(AppError::ServiceUnavailable(
+            "Inference cancelled or deadline exceeded".into(),
+        ));
+    }
+    let lease = super::jobs::preparation_lease();
+    let bytes = tokio::task::spawn_blocking(move || {
+        let _lease = lease;
+        audio::encode_audio(&samples, rate, format)
+    })
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?
+    .map_err(|e| AppError::internal(e.to_string()))?;
+    if control.is_some_and(|c| c.stopped()) {
+        return Err(AppError::ServiceUnavailable(
+            "Inference cancelled or deadline exceeded".into(),
+        ));
+    }
+    Ok(bytes)
 }

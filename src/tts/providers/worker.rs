@@ -9,6 +9,14 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+/// Serialize heavyweight construction across providers. Already resident
+/// models and inference remain independent; a failed load cannot poison
+/// this resource guard for another provider.
+pub fn model_load_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOAD: Mutex<()> = Mutex::new(());
+    LOAD.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Bounded least-recently-used cache for voice conditioning artifacts,
 /// keyed by `(provider, model revision, reference hash, transcript, mode)`.
 #[derive(Debug)]
@@ -20,7 +28,7 @@ pub struct ConditioningCache {
 impl ConditioningCache {
     pub fn new(capacity: usize) -> Self {
         Self {
-            capacity: capacity.max(1),
+            capacity: capacity.clamp(1, 1024),
             entries: VecDeque::new(),
         }
     }
@@ -32,9 +40,13 @@ impl ConditioningCache {
         transcript: Option<&str>,
         mode: &str,
     ) -> String {
+        use sha2::Digest;
+        let identity =
+            serde_json::to_vec(&(provider, model_revision, reference_hash, transcript, mode))
+                .expect("string identity serializes");
         format!(
-            "{provider}|{model_revision}|{reference_hash}|{}|{mode}",
-            transcript.unwrap_or("")
+            "{provider}|{model_revision}|{}",
+            hex::encode(sha2::Sha256::digest(identity))
         )
     }
 
@@ -49,8 +61,18 @@ impl ConditioningCache {
         if let Some(pos) = self.entries.iter().position(|(k, _)| k == &key) {
             self.entries.remove(pos);
         }
+        if key.len().saturating_add(value.len()) > 64 * 1024 * 1024 {
+            return;
+        }
         self.entries.push_back((key, value));
-        while self.entries.len() > self.capacity {
+        while self.entries.len() > self.capacity
+            || self
+                .entries
+                .iter()
+                .map(|(k, v)| k.len() + v.len())
+                .sum::<usize>()
+                > 64 * 1024 * 1024
+        {
             self.entries.pop_front();
         }
     }
