@@ -106,6 +106,7 @@ struct Job {
     control: Arc<InferenceControl>,
     status: JobStatus,
     finished: Option<Instant>,
+    retention: Duration,
     audio: Option<(String, Vec<u8>)>,
 }
 #[derive(Debug, Default)]
@@ -113,8 +114,8 @@ pub struct JobStore {
     entries: Mutex<HashMap<String, Job>>,
 }
 impl JobStore {
-    fn reap(entries: &mut HashMap<String, Job>, retention: Duration) {
-        entries.retain(|_, j| j.finished.is_none_or(|t| t.elapsed() < retention));
+    fn reap(entries: &mut HashMap<String, Job>) {
+        entries.retain(|_, j| j.finished.is_none_or(|t| t.elapsed() < j.retention));
     }
     fn snapshot(&self, id: &str, owner: &str) -> Result<JobStatus, AppError> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
@@ -202,7 +203,7 @@ pub async fn create(
     let store = state.inference_gate.jobs.clone();
     {
         let mut entries = store.entries.lock().unwrap_or_else(|e| e.into_inner());
-        JobStore::reap(&mut entries, retention);
+        JobStore::reap(&mut entries);
         if entries.len() >= config.inference.max_retained_jobs
             || entries.values().filter(|j| !j.status.terminal()).count()
                 >= config
@@ -221,6 +222,7 @@ pub async fn create(
                 control: control.clone(),
                 status: status.clone(),
                 finished: None,
+                retention,
                 audio: None,
             },
         );
@@ -321,7 +323,7 @@ pub async fn create(
         }
         tokio::time::sleep(retention).await;
         let mut entries = store.entries.lock().unwrap_or_else(|e| e.into_inner());
-        JobStore::reap(&mut entries, retention);
+        JobStore::reap(&mut entries);
     });
     Ok((StatusCode::ACCEPTED, Json(status)))
 }
@@ -447,6 +449,7 @@ mod tests {
                     stage_secs: Default::default(),
                 },
                 finished: Some(Instant::now()),
+                retention: Duration::ZERO,
                 audio: None,
             },
         );
@@ -455,7 +458,7 @@ mod tests {
             Err(AppError::NotFound(_))
         ));
         assert_eq!(store.snapshot("id", "alice").unwrap().stage, "failed");
-        JobStore::reap(&mut store.entries.lock().unwrap(), Duration::ZERO);
+        JobStore::reap(&mut store.entries.lock().unwrap());
         assert!(store.snapshot("id", "alice").is_err());
     }
 }

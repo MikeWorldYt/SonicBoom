@@ -214,22 +214,22 @@ struct GptState {
     downloading: bool,
 }
 
-#[cfg(feature = "gpt-sovits")]
+#[cfg(any(feature = "gpt-sovits", test))]
 struct StagedReference(PathBuf);
-#[cfg(feature = "gpt-sovits")]
+#[cfg(any(feature = "gpt-sovits", test))]
 impl Drop for StagedReference {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
     }
 }
-#[cfg(feature = "gpt-sovits")]
+#[cfg(any(feature = "gpt-sovits", test))]
 impl std::ops::Deref for StagedReference {
     type Target = Path;
     fn deref(&self) -> &Path {
         &self.0
     }
 }
-#[cfg(feature = "gpt-sovits")]
+#[cfg(any(feature = "gpt-sovits", test))]
 impl AsRef<Path> for StagedReference {
     fn as_ref(&self) -> &Path {
         &self.0

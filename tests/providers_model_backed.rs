@@ -252,3 +252,53 @@ fn gptsovits_japanese_is_rejected_without_weights() {
     let error = provider.synthesize(&request).unwrap_err();
     assert_eq!(error.code(), "unsupported_language");
 }
+
+#[cfg(feature = "qwen")]
+#[test]
+#[ignore = "requires Qwen weights and authorized reference; proves active native cancellation"]
+fn qwen_active_cancellation_preserves_the_resident_model() {
+    use sonicboom::tts::control::{InferenceControl, scope};
+    use std::time::{Duration, Instant};
+    let (pcm, rate) = decode_wav(&required_env("QWEN_REFERENCE_WAV"));
+    let provider = sonicboom::tts::providers::qwen::QwenProvider::new(
+        sonicboom::tts::providers::qwen::QwenConfig {
+            enabled: true,
+            model_dir: required_env("QWEN_MODEL_DIR"),
+            ..Default::default()
+        },
+    );
+    provider.load("qwen3-tts-0.6b-base").unwrap();
+    let mut request = ProviderRequest::new(
+        "qwen3-tts-0.6b-base",
+        "authorized-test",
+        "This generation should stop before this sentence is complete.",
+        "en",
+    );
+    request.clone_mode = Some(CloneMode::XVector);
+    request.reference_audio = Some(ReferenceAudio {
+        pcm,
+        sample_rate: rate,
+    });
+    request.seed = Some(42);
+    let control = InferenceControl::new(Duration::from_secs(180));
+    let monitor = control.clone();
+    let canceller = std::thread::spawn(move || {
+        while monitor.snapshot().frames < 1 && !monitor.stopped() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let at = Instant::now();
+        monitor.cancel();
+        at
+    });
+    assert!(scope(control.clone(), || provider.synthesize(&request)).is_err());
+    let at = canceller.join().unwrap();
+    assert!(
+        control.snapshot().frames >= 1,
+        "must observe active generation, not just preparation"
+    );
+    println!("native cancellation acknowledgement: {:?}", at.elapsed());
+    request.text = "Hi there.".into();
+    let audio = provider.synthesize(&request).unwrap();
+    assert!(audio.is_audible() && audio.samples.iter().all(|s| s.is_finite()));
+    assert_eq!(provider.diagnostics()["model_load_count"], 1);
+}
