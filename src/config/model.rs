@@ -276,6 +276,99 @@ pub struct PathsConfig {
     pub token_store: String,
 }
 
+/// Optional Qwen3-TTS provider settings (`[providers.qwen3]`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Qwen3Config {
+    /// Enable the Qwen3-TTS provider (default `false`).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Directory holding the verified Qwen3-TTS model bundle.
+    #[serde(default = "default_qwen_model_dir")]
+    pub model_dir: PathBuf,
+    /// Model identifier (`qwen3-tts-0.6b-base`, `qwen3-tts-1.7b-base`).
+    #[serde(default = "default_qwen_model_id")]
+    pub model_id: String,
+    /// Pinned model revision.
+    #[serde(default = "default_qwen_revision")]
+    pub revision: String,
+    /// Requested device: `cpu`, `auto` (resolves to CPU), or `cuda`
+    /// (requires the `qwen-cuda` build feature; rejected otherwise).
+    #[serde(default = "default_provider_device")]
+    pub device: String,
+    /// Maximum concurrent Qwen syntheses (serialized per model by default).
+    #[serde(default = "default_provider_concurrency")]
+    pub max_concurrent: usize,
+    /// Voice-conditioning cache entries.
+    #[serde(default = "default_provider_cache")]
+    pub cache_entries: usize,
+    /// Maximum codec frames per synthesis (upstream `SynthesisOptions.max_length`).
+    #[serde(default = "default_qwen_max_tokens")]
+    pub max_tokens: usize,
+}
+
+/// Optional GPT-SoVITS provider settings (`[providers.gpt_sovits]`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GptSovitsConfig {
+    /// Enable the GPT-SoVITS provider (default `false`).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Directory holding the exported ONNX bundle (never raw `.pth`).
+    #[serde(default = "default_gptsovits_model_dir")]
+    pub model_dir: PathBuf,
+    /// Model identifier (`gpt-sovits-v2-onnx`, `gpt-sovits-v2pro-onnx`,
+    /// `gpt-sovits-v2proplus-onnx`).
+    #[serde(default = "default_gptsovits_model_id")]
+    pub model_id: String,
+    /// Pinned bundle revision.
+    #[serde(default = "default_gptsovits_revision")]
+    pub revision: String,
+    /// CPU only: `cpu` or `auto`. GPU values are rejected explicitly.
+    #[serde(default = "default_provider_device")]
+    pub device: String,
+    /// Maximum concurrent GPT-SoVITS syntheses (serialized per model).
+    #[serde(default = "default_provider_concurrency")]
+    pub max_concurrent: usize,
+    /// Voice-conditioning cache entries.
+    #[serde(default = "default_provider_cache")]
+    pub cache_entries: usize,
+    /// Sampling top-k (`0` disables, upstream default off).
+    #[serde(default = "default_gpt_top_k")]
+    pub top_k: usize,
+    /// Sampling top-p (`0.0` disables, upstream default off).
+    #[serde(default = "default_gpt_top_p")]
+    pub top_p: f32,
+    /// Sampling temperature.
+    #[serde(default = "default_gpt_temperature")]
+    pub temperature: f32,
+    /// Repetition penalty (`1.0` disables).
+    #[serde(default = "default_gpt_repetition_penalty")]
+    pub repetition_penalty: f32,
+}
+
+/// Provider section grouping (`[providers.qwen3]`, `[providers.gpt_sovits]`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProvidersConfig {
+    #[serde(default)]
+    pub qwen3: Qwen3Config,
+    #[serde(default)]
+    pub gpt_sovits: GptSovitsConfig,
+}
+
+/// Voice-profile store settings (`[voices]`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VoicesConfig {
+    /// Directory for `profiles.json` plus `<uuid>.wav` references.
+    #[serde(default = "default_voices_dir")]
+    pub store_dir: String,
+    /// Maximum reference upload size in bytes.
+    #[serde(default = "default_voices_max_upload_bytes")]
+    pub max_upload_bytes: usize,
+}
+
 /// Security-relevant settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -333,6 +426,10 @@ pub struct AppConfig {
     pub paths: PathsConfig,
     #[serde(default)]
     pub security: SecurityConfig,
+    #[serde(default)]
+    pub providers: ProvidersConfig,
+    #[serde(default)]
+    pub voices: VoicesConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +536,54 @@ fn default_temp_audio_dir() -> String {
 fn default_token_store_path() -> String {
     "./tokens.json".to_string()
 }
+fn default_qwen_model_dir() -> PathBuf {
+    PathBuf::from("./models/qwen3-tts")
+}
+fn default_qwen_model_id() -> String {
+    "qwen3-tts-0.6b-base".to_string()
+}
+fn default_qwen_revision() -> String {
+    "5d83992436eae1d760afd27aff78a71d676296fc".to_string()
+}
+fn default_gptsovits_model_dir() -> PathBuf {
+    PathBuf::from("./models/gpt-sovits-v2pro")
+}
+fn default_gptsovits_model_id() -> String {
+    "gpt-sovits-v2pro-onnx".to_string()
+}
+fn default_gptsovits_revision() -> String {
+    "69063da489c62f34fffc40acd10e2167623509aa".to_string()
+}
+fn default_provider_device() -> String {
+    "auto".to_string()
+}
+fn default_provider_concurrency() -> usize {
+    1
+}
+fn default_provider_cache() -> usize {
+    16
+}
+fn default_qwen_max_tokens() -> usize {
+    1024
+}
+fn default_gpt_top_k() -> usize {
+    4
+}
+fn default_gpt_top_p() -> f32 {
+    0.9
+}
+fn default_gpt_temperature() -> f32 {
+    1.0
+}
+fn default_gpt_repetition_penalty() -> f32 {
+    1.0
+}
+fn default_voices_dir() -> String {
+    "./voices".to_string()
+}
+fn default_voices_max_upload_bytes() -> usize {
+    8_388_608
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -501,6 +646,50 @@ impl Default for AppConfig {
                 enable_hsts: false,
                 allow_insecure_remote: false,
             },
+            providers: ProvidersConfig::default(),
+            voices: VoicesConfig::default(),
+        }
+    }
+}
+
+impl Default for Qwen3Config {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model_dir: default_qwen_model_dir(),
+            model_id: default_qwen_model_id(),
+            revision: default_qwen_revision(),
+            device: default_provider_device(),
+            max_concurrent: default_provider_concurrency(),
+            cache_entries: default_provider_cache(),
+            max_tokens: default_qwen_max_tokens(),
+        }
+    }
+}
+
+impl Default for GptSovitsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model_dir: default_gptsovits_model_dir(),
+            model_id: default_gptsovits_model_id(),
+            revision: default_gptsovits_revision(),
+            device: default_provider_device(),
+            max_concurrent: default_provider_concurrency(),
+            cache_entries: default_provider_cache(),
+            top_k: default_gpt_top_k(),
+            top_p: default_gpt_top_p(),
+            temperature: default_gpt_temperature(),
+            repetition_penalty: default_gpt_repetition_penalty(),
+        }
+    }
+}
+
+impl Default for VoicesConfig {
+    fn default() -> Self {
+        Self {
+            store_dir: default_voices_dir(),
+            max_upload_bytes: default_voices_max_upload_bytes(),
         }
     }
 }

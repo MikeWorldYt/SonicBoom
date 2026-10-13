@@ -72,6 +72,15 @@
   <div id="status"></div>
   <audio id="player" controls></audio>
 
+  <details id="providers">
+    <summary>Voice providers</summary>
+    <table>
+      <thead><tr><th>Provider</th><th>Models</th><th>Status</th><th>Device</th><th>Active model</th><th>Details</th></tr></thead>
+      <tbody>PROVIDERS_ROWS</tbody>
+    </table>
+    <p>Voice cloning (Qwen3-TTS, GPT-SoVITS) requires an API token and an authorized reference recording uploaded via <code>POST /api/voices/clones</code>. See <code>docs/providers.md</code> for setup. No new frontend framework is used; cloning controls stay disabled here until the provider reports ready.</p>
+  </details>
+
   <details id="configuration">
     <summary>Configuration</summary>
     <p id="configStatus" role="status">Loading configuration…</p>

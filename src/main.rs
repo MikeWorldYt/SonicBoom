@@ -56,6 +56,10 @@ pub struct AppState {
     pub rate_limiter: Arc<RateLimiterManager>,
     /// Model lifecycle owner (download, load, reload).
     pub model_service: Arc<ModelService>,
+    /// Resident optional voice-cloning providers (Qwen3-TTS, GPT-SoVITS).
+    /// Singletons load once and stay resident; per-request registries borrow
+    /// them after syncing live configuration (hot reload without restarts).
+    pub providers: Arc<sonicboom::tts::providers::ProviderPool>,
     /// Secret store (admin password, HuggingFace token).
     pub secrets: Arc<dyn secrets::SecretStore>,
 }
@@ -797,6 +801,7 @@ async fn run_server(config_path: std::path::PathBuf) -> anyhow::Result<()> {
         current.rate_limit.burst,
     )));
 
+    let provider_pool = Arc::new(sonicboom::tts::providers::ProviderPool::new());
     let app_state = AppState {
         model_status: Arc::clone(&model_status),
         token_store: Arc::clone(&token_store),
@@ -805,6 +810,7 @@ async fn run_server(config_path: std::path::PathBuf) -> anyhow::Result<()> {
         inference_gate,
         rate_limiter,
         model_service: Arc::clone(&model_service),
+        providers: Arc::clone(&provider_pool),
         secrets: Arc::clone(&secrets),
     };
 
@@ -821,7 +827,18 @@ async fn run_server(config_path: std::path::PathBuf) -> anyhow::Result<()> {
     // Model download + load runs in the background.
     let hf_token = secrets::load_hf_token(secrets.as_ref())
         .map_err(|e| anyhow::anyhow!("secret store error: {e}"))?;
-    model_service.start_initial_load(&current.model, hf_token);
+    model_service.start_initial_load(&current.model, hf_token.clone());
+    // Optional providers download + load in parallel with the HTTP server
+    // when enabled (deduplicated background tasks; progress via
+    // `/api/providers/{id}/status`). Supertonic is unaffected.
+    {
+        use crate::api::providers::{map_gpt_config, map_qwen_config};
+        provider_pool.sync_from(
+            map_qwen_config(&current.providers.qwen3),
+            map_gpt_config(&current.providers.gpt_sovits),
+        );
+        provider_pool.kick_ensure_if_needed(hf_token);
+    }
 
     // Runtime reconfiguration: every committed configuration
     // change is applied to the live subsystems here.

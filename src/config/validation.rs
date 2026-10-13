@@ -32,6 +32,8 @@ pub fn validate(config: &AppConfig) -> Result<(), String> {
     validate_logging(config)?;
     validate_paths(config)?;
     validate_security(config)?;
+    validate_providers(config)?;
+    validate_voices(config)?;
     Ok(())
 }
 
@@ -298,6 +300,81 @@ fn validate_security(config: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_providers(config: &AppConfig) -> Result<(), String> {
+    let qwen = &config.providers.qwen3;
+    if !["cpu", "auto", "cuda"].contains(&qwen.device.as_str()) {
+        return Err("providers.qwen3.device must be one of: cpu, auto, cuda".to_string());
+    }
+    if qwen.model_id.trim().is_empty() || qwen.model_id.len() > 64 {
+        return Err("providers.qwen3.model_id must be 1-64 characters".to_string());
+    }
+    if qwen.revision.trim().is_empty() || qwen.revision.len() > 128 {
+        return Err("providers.qwen3.revision must be 1-128 characters".to_string());
+    }
+    if !(1..=64).contains(&qwen.max_concurrent) {
+        return Err("providers.qwen3.max_concurrent must be between 1 and 64".to_string());
+    }
+    if !(1..=1024).contains(&qwen.cache_entries) {
+        return Err("providers.qwen3.cache_entries must be between 1 and 1024".to_string());
+    }
+    if !(128..=4096).contains(&qwen.max_tokens) {
+        return Err("providers.qwen3.max_tokens must be between 128 and 4096".to_string());
+    }
+    if qwen.model_dir.as_os_str().is_empty() {
+        return Err("providers.qwen3.model_dir must not be empty".to_string());
+    }
+    let gpt = &config.providers.gpt_sovits;
+    if !["cpu", "auto"].contains(&gpt.device.as_str()) {
+        return Err("providers.gpt_sovits.device must be one of: cpu, auto \
+             (GPU execution providers are unsupported for GPT-SoVITS)"
+            .to_string());
+    }
+    if gpt.model_id.trim().is_empty() || gpt.model_id.len() > 64 {
+        return Err("providers.gpt_sovits.model_id must be 1-64 characters".to_string());
+    }
+    if gpt.revision.trim().is_empty() || gpt.revision.len() > 128 {
+        return Err("providers.gpt_sovits.revision must be 1-128 characters".to_string());
+    }
+    if !(1..=64).contains(&gpt.max_concurrent) {
+        return Err("providers.gpt_sovits.max_concurrent must be between 1 and 64".to_string());
+    }
+    if !(1..=1024).contains(&gpt.cache_entries) {
+        return Err("providers.gpt_sovits.cache_entries must be between 1 and 1024".to_string());
+    }
+    if gpt.top_k > 100 {
+        return Err(
+            "providers.gpt_sovits.top_k must be between 0 and 100 (0 disables)".to_string(),
+        );
+    }
+    if !(0.0..=1.0).contains(&gpt.top_p) || !gpt.top_p.is_finite() {
+        return Err(
+            "providers.gpt_sovits.top_p must be between 0.0 and 1.0 (0.0 disables)".to_string(),
+        );
+    }
+    if !(0.0..=2.0).contains(&gpt.temperature) || !gpt.temperature.is_finite() {
+        return Err("providers.gpt_sovits.temperature must be between 0.0 and 2.0".to_string());
+    }
+    if !(0.1..=2.0).contains(&gpt.repetition_penalty) || !gpt.repetition_penalty.is_finite() {
+        return Err(
+            "providers.gpt_sovits.repetition_penalty must be between 0.1 and 2.0".to_string(),
+        );
+    }
+    if gpt.model_dir.as_os_str().is_empty() {
+        return Err("providers.gpt_sovits.model_dir must not be empty".to_string());
+    }
+    Ok(())
+}
+
+fn validate_voices(config: &AppConfig) -> Result<(), String> {
+    if config.voices.store_dir.trim().is_empty() {
+        return Err("voices.store_dir must not be empty".to_string());
+    }
+    if !(1024..=64 * 1024 * 1024).contains(&config.voices.max_upload_bytes) {
+        return Err("voices.max_upload_bytes must be between 1024 and 67108864".to_string());
+    }
+    Ok(())
+}
+
 impl AppConfig {
     /// Whether `paths.audio` (the queue root) is configured.
     pub fn requires_audio_dir(&self) -> bool {
@@ -439,6 +516,31 @@ mod tests {
     fn zero_port_is_rejected() {
         let mut config = valid_config();
         config.server.port = 0;
+        assert!(validate(&config).is_err());
+    }
+
+    #[test]
+    fn optional_providers_default_to_disabled() {
+        let config = valid_config();
+        assert!(!config.providers.qwen3.enabled);
+        assert!(!config.providers.gpt_sovits.enabled);
+        assert!(validate(&config).is_ok());
+    }
+
+    #[test]
+    fn provider_devices_are_constrained() {
+        let mut config = valid_config();
+        config.providers.qwen3.device = "rocm".to_string();
+        assert!(validate(&config).is_err());
+        let mut config = valid_config();
+        config.providers.qwen3.device = "cuda".to_string();
+        assert!(validate(&config).is_ok());
+        // GPT-SoVITS is CPU-only: GPU values are rejected, not reinterpreted.
+        let mut config = valid_config();
+        config.providers.gpt_sovits.device = "cuda".to_string();
+        assert!(validate(&config).is_err());
+        let mut config = valid_config();
+        config.providers.gpt_sovits.device = "rocm".to_string();
         assert!(validate(&config).is_err());
     }
 }

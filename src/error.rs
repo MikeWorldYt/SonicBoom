@@ -15,6 +15,12 @@ fn correlation_id() -> String {
 pub enum AppError {
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("not found: {0}")]
+    NotFound(String),
+    #[error("unsupported media type: {0}")]
+    UnsupportedMediaType(String),
+    #[error("payload too large: {0}")]
+    PayloadTooLarge(String),
     #[error("too many requests")]
     TooManyRequests(String),
     /// Token-bucket rejection. Same `429` JSON shape as [`AppError::TooManyRequests`]
@@ -52,6 +58,17 @@ impl IntoResponse for AppError {
         let request_id = correlation_id();
         let (status, error_code, message) = match &self {
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg.clone()),
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found", msg.clone()),
+            AppError::UnsupportedMediaType(msg) => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_media_type",
+                msg.clone(),
+            ),
+            AppError::PayloadTooLarge(msg) => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "payload_too_large",
+                msg.clone(),
+            ),
             AppError::TooManyRequests(msg) => (
                 StatusCode::TOO_MANY_REQUESTS,
                 "too_many_requests",

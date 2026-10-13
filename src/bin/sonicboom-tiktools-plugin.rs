@@ -214,6 +214,28 @@ impl SonicBoomPlugin {
 
         let config = call.config();
         let text = required_string(config, "text")?;
+        // Optional provider selection (new, defaults preserve the existing
+        // Supertonic shape). This process-plugin build embeds the Supertonic
+        // engine only: non-Supertonic providers are rejected explicitly
+        // instead of silently falling back to another voice.
+        let provider =
+            optional_string(config, "provider").unwrap_or_else(|| "supertonic".to_owned());
+        if provider.trim().to_ascii_lowercase() != "supertonic" {
+            return Err(PluginError::invalid_request(format!(
+                "unsupported provider '{provider}' in this plugin build \
+                 (only 'supertonic' is embedded; configure the SonicBoom server \
+                 with [providers.qwen3]/[providers.gpt_sovits] for voice cloning)"
+            )));
+        }
+        if let Some(model) = optional_string(config, "model")
+            && (sonicboom::tts::providers::qwen::QWEN_MODELS.contains(&model.as_str())
+                || sonicboom::tts::providers::gptsovits::GPTSOVITS_MODELS.contains(&model.as_str()))
+        {
+            return Err(PluginError::invalid_request(format!(
+                "model '{model}' requires a voice-cloning provider that is not \
+                 embedded in this plugin build; use the SonicBoom server API"
+            )));
+        }
         let voice = optional_string(config, "voice").unwrap_or_else(|| "F1".to_owned());
         let language = optional_string(config, "language").unwrap_or_else(|| "en".to_owned());
         let volume = optional_number(config, "volume").unwrap_or(1.0);

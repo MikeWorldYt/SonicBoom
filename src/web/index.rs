@@ -63,7 +63,10 @@ pub async fn get_index(State(state): State<AppState>) -> Response {
 
     let voice_options: String = voice_options_html(&voices);
 
+    let provider_rows = provider_rows_html(&state).await;
+
     let html = TEMPLATE
+        .replace("PROVIDERS_ROWS", &provider_rows)
         .replace("STATUS_MSG", &status_msg)
         .replace(
             "STATUS_HIDDEN",
@@ -101,6 +104,41 @@ fn voice_options_html(voices: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Server-rendered provider summary (public metadata only: no secrets,
+/// no reference transcripts, no audio bytes). Controls for cloning
+/// providers stay disabled with a clear reason until the provider reports
+/// `ready`; this page never implies an unavailable model can synthesize.
+async fn provider_rows_html(state: &AppState) -> String {
+    let config = state.config.get().await;
+    let handle = {
+        let status = state.model_status.read().await;
+        match &*status {
+            ModelStatus::Ready(handle) => Some(std::sync::Arc::clone(handle)),
+            _ => None,
+        }
+    };
+    let registry = crate::api::providers::build_registry(&config, handle, &state.providers);
+    let mut rows = Vec::new();
+    for status in registry.statuses() {
+        let capabilities = registry.get(&status.provider_id).map(|p| p.capabilities());
+        let models = capabilities
+            .map(|c| c.models.join(", "))
+            .unwrap_or_default();
+        let device = status.effective_device.as_deref().unwrap_or("—");
+        let reason = status.detail.as_deref().unwrap_or("");
+        rows.push(format!(
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            html_escape(&status.provider_id),
+            html_escape(&models),
+            html_escape(status.state.as_str()),
+            html_escape(device),
+            html_escape(&status.active_model.unwrap_or_default()),
+            html_escape(reason),
+        ));
+    }
+    rows.join("\n")
 }
 
 fn html_escape(s: &str) -> String {
