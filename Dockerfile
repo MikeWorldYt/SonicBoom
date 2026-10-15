@@ -37,6 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     cmake \
+    libclang-dev \
     && rm -rf /var/lib/apt/lists/* \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --profile minimal --default-toolchain 1.89.0
@@ -46,6 +47,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 ENV ORT_STRATEGY=download
 
 COPY Cargo.toml Cargo.lock ./
+COPY vendor ./vendor
 
 # Warm the registry/git caches (does not hide build failures).
 RUN cargo fetch --locked
@@ -91,6 +93,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     cmake \
+    libclang-dev \
     && rm -rf /var/lib/apt/lists/* \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --profile minimal --default-toolchain 1.89.0
@@ -99,6 +102,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 ENV ORT_STRATEGY=download
 
 COPY Cargo.toml Cargo.lock ./
+COPY vendor ./vendor
 
 RUN cargo fetch --locked
 
@@ -137,6 +141,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     cmake \
+    libclang-dev \
     && rm -rf /var/lib/apt/lists/* \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --profile minimal --default-toolchain 1.89.0
@@ -145,6 +150,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 ENV ORT_STRATEGY=download
 
 COPY Cargo.toml Cargo.lock ./
+COPY vendor ./vendor
 
 RUN cargo fetch --locked
 

@@ -30,7 +30,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-x86_64-unknown-linux-gnu-cargo-v2-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}
 
       - name: Install cargo audit
         run: cargo install cargo-audit --locked
@@ -43,10 +43,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --all-targets
+        run: cargo test --locked --all-targets
 
       # Explicit regression mapping for the production-hardening pass.
       # These tests also run inside `cargo test --all-targets` above; this
@@ -113,7 +113,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-x86_64-unknown-linux-gnu-cargo-v2-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}
 
       # Install ALSA for audio playback feature (server-side queue)
       - name: Install ALSA development libraries
@@ -141,7 +141,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-headless
+          key: ${{ runner.os }}-x86_64-unknown-linux-gnu-cargo-v2-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-headless
 
       - name: Build release (headless server)
         run: cargo build --release --locked --no-default-features --features server
@@ -172,15 +172,33 @@ jobs:
   # The desktop tray on Linux is pure-Rust StatusNotifierItem (ksni): no GTK
   # system libraries are needed. Never reintroduce a GTK build dependency.
   build-gui:
-    name: Build GUI (Linux tray)
-    runs-on: ubuntu-24.04
+    name: GUI tests and package (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      KNF_STATIC_CRT: '0'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            asset: sonicboom-linux-x86_64.tar.gz
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            asset: sonicboom-windows-x86_64.zip
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Install packaging Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: rustfmt, clippy
+          targets: ${{ matrix.target }}
 
       - name: Cache cargo
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -189,12 +207,14 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-gui
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-v2-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-gui
 
       - name: Install ALSA development libraries
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libssl-dev libopus-dev pkg-config cmake clang
 
       - name: Linux GUI graph must not contain glib
+        if: runner.os == 'Linux'
         run: |
           set -e
           if cargo tree --locked --features gui --target x86_64-unknown-linux-gnu -i glib 2>/dev/null | grep -q 'glib v'; then
@@ -204,13 +224,29 @@ jobs:
           echo "OK: no glib in Linux GUI graph"
 
       - name: Clippy (GUI)
-        run: cargo clippy --locked --features gui --all-targets -- -D warnings
+        run: cargo clippy --locked --features gui --target ${{ matrix.target }} --all-targets -- -D warnings
+
+      # ort/copy-dylibs can copy only beside the profile root when Windows
+      # symlinks are unavailable (cache and checkout live on different drives).
+      # Tests/examples must still resolve those DLLs without disabling tests.
+      - name: Make Cargo-copied DLLs available to Windows tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"${{ github.workspace }}/target/${{ matrix.target }}/debug" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append'
 
       - name: Test (GUI)
-        run: cargo test --locked --features gui
+        run: cargo test --locked --features gui --target ${{ matrix.target }}
 
       - name: Build release (GUI)
-        run: cargo build --release --locked --features gui
+        run: cargo build --release --locked --features gui --target ${{ matrix.target }}
+
+      - name: Test archive and checksum guards
+        run: python -m unittest discover -s scripts/release -p "test_*.py"
+      - name: Package release binary (case-sensitive existence check)
+        run: python scripts/release/package.py --target ${{ matrix.target }}
+
+      - name: Verify native runtime, health and graceful shutdown
+        run: python scripts/release/smoke.py dist/${{ matrix.asset }}
 
   docker-cpu:
     name: Docker CPU build

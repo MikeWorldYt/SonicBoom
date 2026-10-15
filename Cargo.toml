@@ -208,3 +208,7 @@ opt-level = 3
 strip = true
 panic = "unwind"
 codegen-units = 1
+
+# esaxx 0.1.10 forces /MT; match Rust, knf and ORT /MD on MSVC.
+[patch.crates-io]
+esaxx-rs = { path = "vendor/esaxx-rs" }

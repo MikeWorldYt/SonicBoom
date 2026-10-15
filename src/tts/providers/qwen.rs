@@ -1121,9 +1121,12 @@ impl QwenProvider {
                 "qwen3 model is verifying cache ({:.0}% complete)",
                 state.download_progress * 100.0
             )),
-            Some(state) if let Some(detail) = state.load_error.clone() => {
-                ProviderError::inference_failed(format!("qwen3 model unavailable: {detail}"))
-            }
+            Some(state) => match &state.load_error {
+                Some(detail) => {
+                    ProviderError::inference_failed(format!("qwen3 model unavailable: {detail}"))
+                }
+                None => ProviderError::loading("qwen3 model is not loaded yet"),
+            },
             _ => ProviderError::loading("qwen3 model is not loaded yet"),
         }
     }

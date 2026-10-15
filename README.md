@@ -297,3 +297,8 @@ Use the authenticated [background job API](docs/inference-jobs.md) for long CPU
 inference, with progress and cooperative cancellation. The synchronous routes
 remain supported. See [ownership/cache architecture](docs/inference-architecture.md)
 for model residency, integrity verification, reloads and cache bounds.
+
+## Binary releases
+
+See [release instructions and runtime requirements](docs/RELEASING.md) for
+supported Linux/Windows x64 archives, checksums, smoke tests and troubleshooting.

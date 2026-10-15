@@ -1,0 +1,14 @@
+# Build-input allowlist: never send local credentials, models or Cargo caches
+# to the Docker daemon. Keep this aligned with Dockerfile COPY instructions.
+**
+!Cargo.toml
+!Cargo.lock
+!vendor/
+!vendor/**
+!src/
+!src/**
+!templates/
+!templates/**
+!static/
+!static/**
+!models.sha256.json
