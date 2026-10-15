@@ -4,7 +4,7 @@ import type { AdminData } from '../types';
 defineProps<{ data: AdminData }>();
 </script>
 <template>
-<main class="admin-workspace">
+<main id="main-content" tabindex="-1" class="admin-workspace">
   <div v-if="data.page === 'login'" class="box">
     <h1>{{ t("Admin Login") }}</h1><p class="login-intro">{{ t("Sign in to manage API tokens.") }}</p><p v-if="data.error" class="error">{{ t(data.error || '') }}</p>
     <form method="post" action="/admin/login">

@@ -220,8 +220,8 @@ mod tests {
         // A nonexistent directory can be created successfully. Use a regular
         // file instead so cache directory creation fails on every platform,
         // before any network access or model loading.
-        let cache_file = std::env::temp_dir()
-            .join(format!("sonicboom-reload-failure-{}", uuid::Uuid::new_v4()));
+        let cache_file =
+            std::env::temp_dir().join(format!("sonicboom-reload-failure-{}", uuid::Uuid::new_v4()));
         let file = std::fs::File::create_new(&cache_file).unwrap();
         drop(file);
         let mut model = test_model_config();
