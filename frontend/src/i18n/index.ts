@@ -46,33 +46,6 @@ export function errorMessage(error: unknown): Message {
     return t(error instanceof Error ? error.message : String(error));
   });
 }
-let cleanupScheduled = false;
-function scheduleCleanup() {
-  if (cleanupScheduled) return;
-  cleanupScheduled = true;
-  queueMicrotask(() => {
-    for (const node of bindings.keys()) if (!node.isConnected) bindings.delete(node);
-    cleanupScheduled = false;
-  });
-}
-const bindings = new Map<Node, { message: Message; attribute?: string }[]>();
-/** Keep controller-created labels reactive without replacing controls or losing edits. */
-export function setText(node: Node, value: string | Message) {
-  const message = typeof value === 'string' ? undefined : value;
-  const current = bindings.get(node) || [];
-  const attributes = current.filter(binding => binding.attribute);
-  if (message) attributes.push({ message });
-  if (attributes.length) bindings.set(node, attributes); else bindings.delete(node);
-  scheduleCleanup();
-  node.textContent = message ? renderMessage(message) : String(value ?? '');
-}
-export function setTranslatedAttribute(node: Element, attribute: string, message: Message) {
-  const current = (bindings.get(node) || []).filter(binding => binding.attribute !== attribute);
-  current.push({ message, attribute });
-  bindings.set(node, current);
-  scheduleCleanup();
-  node.setAttribute(attribute, renderMessage(message));
-}
 export function languageName(code: string) {
   try { return new Intl.DisplayNames([locale.value], { type: 'language' }).of(code) || code; }
   catch { return code; }
@@ -81,11 +54,4 @@ watch(locale, value => {
   document.documentElement.lang = value;
   document.title = t('SonicBoom · Voice studio');
   try { localStorage.setItem(storageKey, value); } catch { /* Preference remains active for this session. */ }
-  for (const [node, entries] of bindings) {
-    if (!node.isConnected) { bindings.delete(node); continue; }
-    for (const { message, attribute } of entries) {
-      if (attribute && node instanceof Element) node.setAttribute(attribute, renderMessage(message));
-      else node.textContent = renderMessage(message);
-    }
-  }
 }, { immediate: true, flush: 'sync' });

@@ -2,8 +2,8 @@
 
 All pages (speech synthesis, providers, voice cloning, configuration, first-run
 setup, admin login and token management) live in `frontend/src`. Vue renders
-precompiled templates; synthesis and configuration interactions
-are TypeScript controllers. Page data comes from Axum, including session CSRF
+precompiled templates and owns each workflow through components and composables.
+Typed services in `src/services` provide the only HTTP entry point. Page data comes from Axum, including session CSRF
 tokens and the one-time token banner. Tokens are never saved in browser storage.
 
 Requires Node.js 22.12+ (Node 24 recommended) and npm. Versions are pinned in
@@ -83,12 +83,10 @@ storage. Switching languages does not reload the page or change the selected
 speech language. Speech languages are supplied by each engine independently.
 
 Translations live in `frontend/src/i18n/en.json` and `es.json`. Vue templates use
-`t(key, parameters)`. Controller-created labels use `msg(key, parameters)` with
-`setText` or `setTranslatedAttribute`, which update existing DOM nodes when the
-locale changes. `computedMessage` handles labels built from multiple values.
-Names, file paths, model identifiers, transcripts and raw diagnostic payloads
-remain data. Server messages with known translations are localized; unknown
-server messages fall back to the original text.
+`t(key, parameters)`. Shared async tasks store `Message` objects so loading,
+validation and error feedback react to language changes without replacing form
+controls. Names, paths, model identifiers and raw diagnostics remain data.
+Known server messages are localized; unknown server messages retain their text.
 
 To add a language later:
 
@@ -104,3 +102,23 @@ To add a language later:
 
 Only English and Spanish are offered until another complete catalog is added.
 The UI uses the English catalog as a fallback for future untranslated messages.
+
+
+## Component architecture
+
+- `AppShell` owns the shared header, language switcher, skip link and footer.
+- `StudioLayout` owns responsive navigation, keyboard focus and stable panels.
+- `SpeechGenerator` / `VoiceSelector` own synthesis and searchable voice choices.
+- `VoiceLibrary` / `CloneWizard` manage profiles and progressive raw-WAV upload.
+- `EnginesPanel` / `EngineCard` consolidate provider status, models and toggles.
+- `SettingsPanel` / `SettingField` group frequent and advanced settings and keep
+  unsaved values during polling, language changes and filtering.
+- `useStudio` shares API data; `useSynthesis` owns job monitoring and object URLs;
+  `useTask` / `FeedbackNotice` share loading and feedback behavior.
+- `services/http.ts` attaches same-origin credentials and optional bearer auth;
+  `services/api.ts` defines typed endpoints; `services/jobs.ts` reconciles dropped
+  SSE connections without creating duplicate inference jobs.
+
+No frontend code outside `services/http.ts` calls `fetch`. Theme colors are
+semantic variables in `styles/tokens.css`; `prefers-color-scheme` updates all
+pages and native controls immediately. There is no theme override in storage.
