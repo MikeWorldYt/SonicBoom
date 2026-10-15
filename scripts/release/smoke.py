@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -42,9 +43,15 @@ def smoke(archive):
             # Deliberately exclude developer-tool DLL directories. The supported
             # system MSVC redistributable must resolve alongside packaged DLLs.
             env['PATH'] = str(app) + os.pathsep + str(Path(os.environ['SystemRoot']) / 'System32')
-            import ctypes
-            for dll in app.glob('*.dll'):
-                ctypes.WinDLL(str(dll))
+            # Windows keeps loaded DLLs locked until the loading process exits.
+            # Probe in a child so TemporaryDirectory can remove every DLL, even
+            # when a later validation step fails. Keep load failures fatal.
+            subprocess.run(
+                [sys.executable, '-I', '-c',
+                 'import ctypes, sys; libraries = [ctypes.WinDLL(path) for path in sys.argv[1:]]',
+                 *map(str, sorted(app.glob('*.dll')))],
+                env=env, check=True, timeout=30,
+            )
             # Record PE import tables with the installed MSVC toolchain.
             vswhere = Path(os.environ['ProgramFiles(x86)']) / 'Microsoft Visual Studio/Installer/vswhere.exe'
             install = subprocess.check_output([str(vswhere), '-latest', '-products', '*', '-property', 'installationPath'], text=True, timeout=15).strip()
