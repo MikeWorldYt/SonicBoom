@@ -13,8 +13,11 @@ configuration, downloaded voices/models or caches belong in release archives.
   are not separately certified. The tray uses a D-Bus StatusNotifier host;
   a missing host falls back to server operation. Launch `./sonicboom` to
   include any packaged ONNX shared libraries in the loader search path.
-* Windows x86_64: Windows 10/11 with the current Microsoft Visual C++
+* Windows x86_64: Windows 10 (2004 or newer)/11 with the current Microsoft Visual C++
   2015–2022 x64 Redistributable (https://aka.ms/vs/17/release/vc_redist.x64.exe).
+  The pinned Windows ORT static distribution also links DirectML/D3D12/DXGI/
+  DXCore imports even though SonicBoom selects CPU inference. Keep any bundled
+  DirectML DLLs with the executable; do not infer GPU support from those imports.
   Launch `SonicBoom.exe`. CI uses Windows Server 2022; consumer desktop
   tray interaction and physical audio devices still need manual checks.
 * macOS is not a release target. The source has Apple feature gates, but no

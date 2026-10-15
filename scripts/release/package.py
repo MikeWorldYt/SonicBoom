@@ -66,7 +66,8 @@ def package(target, output):
                           p.name.upper().startswith(('LICENSE', 'LICENCE', 'COPYING', 'NOTICE'))]
             if pkg['name'] == 'ort-sys':
                 distribution = (home / 'build/download/dist.tsv').read_text()
-                cpu = [line for line in distribution.splitlines() if line.startswith(target + '\tnone\t')]
+                native_features = 'directml' if windows else 'none'
+                cpu = [line for line in distribution.splitlines() if line.startswith(target + '\t' + native_features + '\t')]
                 if len(cpu) != 1 or '/ms@1.28.0/' not in cpu[0] or not native_notices.is_dir():
                     raise RuntimeError('Native ORT distribution changed: update pinned licenses/onnxruntime notices')
             if pkg.get('license_file'):

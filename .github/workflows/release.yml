@@ -52,6 +52,14 @@ jobs:
         run: |
           cargo tree --locked --features gui --target ${{ matrix.target }} -i esaxx-rs
           cargo tree --locked --features gui --target ${{ matrix.target }} -i knf-rs-sys
+      # ort/copy-dylibs can copy only beside the profile root when Windows
+      # symlinks are unavailable (cache and checkout live on different drives).
+      # Tests/examples must still resolve those DLLs without disabling tests.
+      - name: Make Cargo-copied DLLs available to Windows tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"${{ github.workspace }}/target/${{ matrix.target }}/debug" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append'
+
       - name: Test release feature combination (native linker regression)
         run: cargo test --locked --features gui --target ${{ matrix.target }}
       - name: Build release with GUI
