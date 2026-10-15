@@ -217,16 +217,24 @@ mod tests {
         // state: the point is that a failed reload restores it.
         let status = Arc::new(RwLock::new(ModelStatus::Failed("previous".to_string())));
         let service = ModelService::new(Arc::clone(&status));
-        // Point at a bogus cache dir so the download fails.
+        // A nonexistent directory can be created successfully. Use a regular
+        // file instead so cache directory creation fails on every platform,
+        // before any network access or model loading.
+        let cache_file = std::env::temp_dir()
+            .join(format!("sonicboom-reload-failure-{}", uuid::Uuid::new_v4()));
+        let file = std::fs::File::create_new(&cache_file).unwrap();
+        drop(file);
         let mut model = test_model_config();
-        model.cache_dir = std::path::PathBuf::from("/nonexistent-sonicboom-models");
+        model.cache_dir = cache_file.clone();
         let result = service.reload(&model, None).await;
-        assert!(result.is_err());
-        // The previous status is restored (not Downloading).
+        std::fs::remove_file(&cache_file).unwrap();
+        assert!(matches!(result, Err(ModelServiceError::Download(_))));
+        // The exact previous status is restored.
         let current = service.status().await;
         assert!(
-            !matches!(current, ModelStatus::Downloading { .. }),
-            "failed reload must not leave Downloading status"
+            matches!(current, ModelStatus::Failed(ref message) if message == "previous"),
+            "failed reload must restore the previous status"
         );
+        assert!(service.active_config().await.is_none());
     }
 }
