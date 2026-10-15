@@ -53,7 +53,9 @@ model inference quality, GPU execution, tray interaction or audio playback.
    commit to **hernan-lc/SonicBoom**, not another remote by accident.
 4. The tag workflow tests GUI before release compilation on each native runner.
    Fail-fast is disabled. Both jobs must succeed before publishing. The publish
-   job checks the tag is on `main`, refuses an existing release, downloads only
+   job checks the tag is on `main`, refuses a release that already carries
+   assets or notes (an empty placeholder release left by publishing a new tag
+   through the web UI is removed so the draft can be staged), downloads only
    the two packages, generates and verifies SHA256SUMS, creates a draft, verifies
    the downloaded draft assets against checksums through the API, then publishes
    it with generated release notes. It verifies published assets again.
@@ -63,9 +65,13 @@ model inference quality, GPU execution, tray interaction or audio playback.
 Publishing uses the workflow repository's `GITHUB_TOKEN` and `contents: write`
 only in the publish job. No PAT or cross-repository upload is needed. Concurrency
 serializes the same tag without cancelling a release already running. Existing
-releases/assets are never overwritten automatically. If a draft is left after
-failure, inspect its assets and logs; delete that unpublished draft deliberately
-before retrying. Do not blindly rerun over an existing production release.
+releases/assets are never overwritten automatically: only a release with no
+assets and no notes is discarded and rebuilt, so creating the release (and with
+it the tag) through the GitHub web UI no longer blocks the workflow. A release
+that already carries assets or notes always fails the publish job. If a draft
+is left after failure, inspect its assets and logs; delete that unpublished
+draft deliberately before retrying. Do not blindly rerun over an existing
+production release.
 
 ## Local packaging and checksum verification
 

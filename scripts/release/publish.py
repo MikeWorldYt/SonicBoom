@@ -16,14 +16,39 @@ def gh(*args):
 
 def preflight(repo, tag):
     result = subprocess.run(['gh', 'api', f'repos/{repo}/releases/tags/{tag}'], capture_output=True, text=True)
-    if result.returncode == 0:
+    if result.returncode != 0:
+        if 'HTTP 404' not in result.stderr:
+            raise RuntimeError(f'Cannot establish release absence: {result.stderr}')
+        return
+    try:
+        release = json.loads(result.stdout)
+    except ValueError as error:
+        raise RuntimeError(f'Cannot parse existing release for {repo}@{tag}: {error}') from error
+    if release.get('assets') or (release.get('body') or '').strip():
         raise RuntimeError(f'Release {repo}@{tag} already exists; refusing duplicate/replacement upload')
-    if 'HTTP 404' not in result.stderr:
-        raise RuntimeError(f'Cannot establish release absence: {result.stderr}')
+    release_id = release.get('id')
+    if release_id is None:
+        raise RuntimeError(f'Cannot identify empty release for {repo}@{tag}')
+    gh('api', '-X', 'DELETE', f'repos/{repo}/releases/{release_id}')
+    print(f'Removed empty placeholder release {repo}@{tag}; staging a verified draft')
+
+
+def find_release(repo, tag):
+    # Get-by-tag-name only resolves published releases; drafts must come from
+    # the paginated list so the staged draft can be verified before publication.
+    pages = json.loads(gh('api', '--paginate', '--slurp', f'repos/{repo}/releases?per_page=100'))
+    matches = [release for page in pages for release in page if release.get('tag_name') == tag]
+    with_assets = [release for release in matches if release.get('assets')]
+    candidates = with_assets or matches
+    if not candidates:
+        raise RuntimeError(f'No published or draft release exists for {repo}@{tag}')
+    if len(candidates) != 1:
+        raise RuntimeError(f'Ambiguous releases for {repo}@{tag}: {len(candidates)} candidates')
+    return candidates[0]
 
 
 def verify(repo, tag, directory):
-    release = json.loads(gh('api', f'repos/{repo}/releases/tags/{tag}'))
+    release = find_release(repo, tag)
     expected = {*ASSETS, 'SHA256SUMS'}
     assets = release['assets']
     if len(assets) != 3 or {a['name'] for a in assets} != expected or any(a['size'] <= 0 for a in assets):
