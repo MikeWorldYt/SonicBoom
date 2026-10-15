@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -30,7 +34,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-x86_64-unknown-linux-gnu-cargo-v2-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}
+          key: cargo-v3-${{ runner.os }}-validate-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-${{ github.sha }}
+          restore-keys: |
+            cargo-v3-${{ runner.os }}-validate-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
 
       - name: Install cargo audit
         run: cargo install cargo-audit --locked
@@ -113,7 +119,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-x86_64-unknown-linux-gnu-cargo-v2-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}
+          key: cargo-v3-${{ runner.os }}-build-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-${{ github.sha }}
+          restore-keys: |
+            cargo-v3-${{ runner.os }}-build-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
 
       # Install ALSA for audio playback feature (server-side queue)
       - name: Install ALSA development libraries
@@ -141,7 +149,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-x86_64-unknown-linux-gnu-cargo-v2-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-headless
+          key: cargo-v3-${{ runner.os }}-build-headless-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-${{ github.sha }}
+          restore-keys: |
+            cargo-v3-${{ runner.os }}-build-headless-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
 
       - name: Build release (headless server)
         run: cargo build --release --locked --no-default-features --features server
@@ -194,6 +204,8 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
+      - name: Test archive and checksum guards
+        run: python -m unittest discover -s scripts/release -p "test_*.py"
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
@@ -207,7 +219,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-v2-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-gui
+          key: cargo-v3-${{ runner.os }}-gui-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-${{ github.sha }}
+          restore-keys: |
+            cargo-v3-${{ runner.os }}-gui-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
 
       - name: Install ALSA development libraries
         if: runner.os == 'Linux'
@@ -240,8 +254,6 @@ jobs:
       - name: Build release (GUI)
         run: cargo build --release --locked --features gui --target ${{ matrix.target }}
 
-      - name: Test archive and checksum guards
-        run: python -m unittest discover -s scripts/release -p "test_*.py"
       - name: Package release binary (case-sensitive existence check)
         run: python scripts/release/package.py --target ${{ matrix.target }}
 

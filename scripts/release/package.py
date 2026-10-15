@@ -33,7 +33,8 @@ def package(target, output):
         raise RuntimeError(f'Missing/nonempty release executable required: {binary}')
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as temporary:
-        stage = Path(temporary)
+        stage = Path(temporary) / 'payload'
+        stage.mkdir()
         shutil.copy2(binary, stage / binary.name)
         (stage / binary.name).chmod(0o755)
         for source, name in [('LICENSE', 'LICENSE'), ('README.md', 'README.md'), ('docs/RELEASING.md', 'docs/RELEASING.md'),
@@ -46,8 +47,10 @@ def package(target, output):
             if library.is_file() and (library.suffix.lower() == '.dll' if windows else '.so' in library.name):
                 shutil.copyfile(library, stage / library.name)
         if not windows:
-            (stage / 'sonicboom').write_text('#!/bin/sh\nset -eu\nAPP_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexport LD_LIBRARY_PATH="$APP_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexec "$APP_DIR/SonicBoom" "$@"\n')
-            (stage / 'sonicboom').chmod(0o755)
+            # Keep case-only archive names on separate filesystem paths (NTFS).
+            launcher = Path(temporary) / 'sonicboom'
+            launcher.write_text('#!/bin/sh\nset -eu\nAPP_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexport LD_LIBRARY_PATH="$APP_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexec "$APP_DIR/SonicBoom" "$@"\n', encoding='utf-8', newline='\n')
+            launcher.chmod(0o755)
         # Carry upstream license/notice files for resolved target dependencies.
         metadata = json.loads(subprocess.check_output([
             'cargo', 'metadata', '--locked', '--format-version', '1',
@@ -100,14 +103,16 @@ def package(target, output):
             'target': target, 'features': 'default + gui',
             'rustc': subprocess.check_output(['rustc', '--version'], text=True).strip(),
         }, indent=2) + '\n')
-        files = sorted(p for p in stage.rglob('*') if p.is_file())
+        files = {p.relative_to(stage).as_posix(): p for p in stage.rglob('*') if p.is_file()}
+        if not windows:
+            files['sonicboom'] = launcher
         archive = output / ASSETS[int(windows)]
         if archive.exists():
             raise RuntimeError(f'Refusing to replace {archive}')
         if windows:
             with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-                for path in files:
-                    entry = zipfile.ZipInfo(path.relative_to(stage).as_posix(), (1980, 1, 1, 0, 0, 0))
+                for name, path in sorted(files.items()):
+                    entry = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
                     entry.create_system = 3
                     entry.external_attr = 0o100644 << 16
                     entry.compress_type = zipfile.ZIP_DEFLATED
@@ -118,14 +123,15 @@ def package(target, output):
         else:
             with archive.open('wb') as raw, gzip.GzipFile(filename='', mode='wb', fileobj=raw, mtime=0) as gz:
                 with tarfile.open(fileobj=gz, mode='w') as tar:
-                    for path in files:
-                        entry = tarfile.TarInfo(path.relative_to(stage).as_posix())
+                    for name, path in sorted(files.items()):
+                        entry = tarfile.TarInfo(name)
                         entry.size = path.stat().st_size
                         entry.mode = 0o755 if path.name in ('SonicBoom', 'sonicboom') else 0o644
                         tar.addfile(entry, io.BytesIO(path.read_bytes()))
             with tarfile.open(archive) as tar:
                 assert tar.getmember('SonicBoom').size > 0
                 assert tar.getmember('SonicBoom').mode & 0o111
+                assert tar.getmember('sonicboom').mode & 0o111
         print(f'Packaged and inspected {archive}: {digest(archive)}')
 
 
