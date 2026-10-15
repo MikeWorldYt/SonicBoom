@@ -2,82 +2,119 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  KNF_STATIC_CRT: '0'
 
 jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-            artifact_name: sonicboom
-            asset_name: sonicboom-linux-x86_64
-          - os: windows-latest
+            asset: sonicboom-linux-x86_64.tar.gz
+          - os: windows-2022
             target: x86_64-pc-windows-msvc
-            artifact_name: sonicboom.exe
-            asset_name: sonicboom-windows-x86_64
-
+            asset: sonicboom-windows-x86_64.zip
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Install ALSA development libraries (Linux)
-        if: matrix.os == 'ubuntu-24.04'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-
-      # NOTE: the Linux `gui` tray is pure-Rust StatusNotifierItem (ksni);
-      # it needs no GTK/X11 development libraries. Do not reintroduce them.
-
-      # Exercise the exact feature combination before publishing it.
-      - name: Test release feature combination
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-v1-${{ runner.os }}-${{ matrix.target }}-gui-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}
+      - name: Install native build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libssl-dev libopus-dev pkg-config cmake clang
+      - name: Confirm native dependency graph
+        run: |
+          cargo tree --locked --features gui --target ${{ matrix.target }} -i esaxx-rs
+          cargo tree --locked --features gui --target ${{ matrix.target }} -i knf-rs-sys
+      - name: Test release feature combination (native linker regression)
         run: cargo test --locked --features gui --target ${{ matrix.target }}
-
       - name: Build release with GUI
         run: cargo build --release --locked --features gui --target ${{ matrix.target }}
-
-      - name: Upload artifact
+      - name: Package and inspect archive
+        run: python scripts/release/package.py --target ${{ matrix.target }}
+      - name: Smoke-test extracted package
+        run: python scripts/release/smoke.py dist/${{ matrix.asset }}
+      - name: Upload verified platform archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ matrix.asset_name }}
-          path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
 
   release:
-    name: Create GitHub Release
+    name: Publish verified GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Download all artifacts
+        with:
+          fetch-depth: 0
+      - name: Require tag on main and refuse an existing release
+        run: |
+          git merge-base --is-ancestor HEAD origin/main || { echo 'Release tag must be on merged main'; exit 1; }
+          python scripts/release/publish.py preflight
+      - name: Download platform archives
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
+          pattern: sonicboom-*
           path: artifacts
-
-      - name: Generate checksums
+          merge-multiple: true
+      - name: Generate and verify final archive checksums
         run: |
-          set -e
+          python scripts/release/package.py --checksums --output artifacts
+          python scripts/release/package.py --checksums --verify --output artifacts
           cd artifacts
-          find . -type f -not -name 'SHA256SUMS' -exec sha256sum {} + | sort > SHA256SUMS
-          cat SHA256SUMS
-
-      - name: Create Release
+          sha256sum --check SHA256SUMS
+      - name: Stage complete draft release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          files: artifacts/**/*
-          draft: false
+          repository: ${{ github.repository }}
+          token: ${{ github.token }}
+          files: |
+            artifacts/sonicboom-linux-x86_64.tar.gz
+            artifacts/sonicboom-windows-x86_64.zip
+            artifacts/SHA256SUMS
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          draft: true
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify uploaded draft assets before publication
+        run: python scripts/release/publish.py verify
+      - name: Publish verified draft
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+      - name: Verify published assets and checksums
+        run: python scripts/release/publish.py verify
