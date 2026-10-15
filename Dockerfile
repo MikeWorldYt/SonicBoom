@@ -46,6 +46,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 ENV ORT_STRATEGY=download
 
 COPY Cargo.toml Cargo.lock ./
+COPY vendor ./vendor
 
 # Warm the registry/git caches (does not hide build failures).
 RUN cargo fetch --locked
@@ -99,6 +100,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 ENV ORT_STRATEGY=download
 
 COPY Cargo.toml Cargo.lock ./
+COPY vendor ./vendor
 
 RUN cargo fetch --locked
 
@@ -145,6 +147,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 ENV ORT_STRATEGY=download
 
 COPY Cargo.toml Cargo.lock ./
+COPY vendor ./vendor
 
 RUN cargo fetch --locked
 
