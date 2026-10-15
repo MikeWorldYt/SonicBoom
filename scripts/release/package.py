@@ -72,6 +72,12 @@ def package(target, output):
                 cpu = [line for line in distribution.splitlines() if line.startswith(target + '\t' + native_features + '\t')]
                 if len(cpu) != 1 or '/ms@1.28.0/' not in cpu[0] or not native_notices.is_dir():
                     raise RuntimeError('Native ORT distribution changed: update pinned licenses/onnxruntime notices')
+                if windows:
+                    dml = stage / 'DirectML.dll'
+                    expected_dml = '9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1'
+                    if not dml.is_file() or digest(dml) != expected_dml:
+                        raise RuntimeError('Expected pinned DirectML 1.15.4 DLL beside executable; check ort/copy-dylibs and native notices')
+                    shutil.copytree(ROOT / 'licenses/directml', notices / 'directml')
             if pkg.get('license_file'):
                 files.append(home / pkg['license_file'])
             for source in sorted(set(files)):
