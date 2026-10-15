@@ -1,6 +1,7 @@
+import { t, msg, computedMessage, uiError, errorMessage, renderMessage, setText, setTranslatedAttribute, type Message } from '../i18n';
 import type { ProviderCardData } from '../types';
 import { element } from '../dom';
-export function startHome(modelReady: boolean, providers: ProviderCardData[]) {
+export function startHome(modelReady: boolean, providers: ProviderCardData[], initialStatus = '') {
 // SonicBoom home page (CSP: no inline script, so everything lives here).
 //
 // Layout of this file:
@@ -10,12 +11,13 @@ export function startHome(modelReady: boolean, providers: ProviderCardData[]) {
 //   3. TTS synthesis.
 //   4. Configuration browser.
 //
-'use strict';
+
+setText(element('modelStatus'), msg(initialStatus));
 
 // --- 1. Constants -----------------------------------------------------------
 
 // Backend state is exposed via data attributes (CSP has no unsafe-inline).
-const MODEL_READY = modelReady;
+let builtinReady = modelReady;
 
 const App = Object.freeze({
   modelReloadMs: 5000,
@@ -54,11 +56,11 @@ const ApplyStrategy = Object.freeze({
 });
 
 const APPLY_META = Object.freeze({
-  [ApplyStrategy.Hot]: { label: 'Live' },
-  [ApplyStrategy.RestartServer]: { label: 'Restarts server' },
-  [ApplyStrategy.RestartSubsystem]: { label: 'Restarts worker' },
-  [ApplyStrategy.ReloadModel]: { label: 'Reloads model' },
-  [ApplyStrategy.RestartProcess]: { label: 'Needs restart' },
+  [ApplyStrategy.Hot]: { label: msg('Live') },
+  [ApplyStrategy.RestartServer]: { label: msg('Restarts server') },
+  [ApplyStrategy.RestartSubsystem]: { label: msg('Restarts worker') },
+  [ApplyStrategy.ReloadModel]: { label: msg('Reloads model') },
+  [ApplyStrategy.RestartProcess]: { label: msg('Needs restart') },
 });
 
 const CATEGORIES = Object.freeze({
@@ -79,39 +81,39 @@ const CATEGORIES = Object.freeze({
 // Canonical language list for the synthesis form. The HTML carries an
 // empty <select>; options are rendered from here so the list exists once.
 const LANGUAGES = Object.freeze([
-  { code: 'en', label: 'English' },
-  { code: 'ko', label: 'Korean' },
-  { code: 'ja', label: 'Japanese' },
-  { code: 'zh', label: 'Chinese' },
-  { code: 'es', label: 'Spanish' },
-  { code: 'pt', label: 'Portuguese' },
-  { code: 'fr', label: 'French' },
-  { code: 'de', label: 'German' },
-  { code: 'it', label: 'Italian' },
-  { code: 'ru', label: 'Russian' },
-  { code: 'ar', label: 'Arabic' },
-  { code: 'hi', label: 'Hindi' },
-  { code: 'nl', label: 'Dutch' },
-  { code: 'pl', label: 'Polish' },
-  { code: 'tr', label: 'Turkish' },
-  { code: 'vi', label: 'Vietnamese' },
-  { code: 'id', label: 'Indonesian' },
-  { code: 'th', label: 'Thai' },
-  { code: 'sv', label: 'Swedish' },
-  { code: 'da', label: 'Danish' },
-  { code: 'fi', label: 'Finnish' },
-  { code: 'el', label: 'Greek' },
-  { code: 'cs', label: 'Czech' },
-  { code: 'sk', label: 'Slovak' },
-  { code: 'sl', label: 'Slovenian' },
-  { code: 'hr', label: 'Croatian' },
-  { code: 'ro', label: 'Romanian' },
-  { code: 'hu', label: 'Hungarian' },
-  { code: 'bg', label: 'Bulgarian' },
-  { code: 'uk', label: 'Ukrainian' },
-  { code: 'lt', label: 'Lithuanian' },
-  { code: 'lv', label: 'Latvian' },
-  { code: 'et', label: 'Estonian' },
+  { code: 'en' },
+  { code: 'ko' },
+  { code: 'ja' },
+  { code: 'zh' },
+  { code: 'es' },
+  { code: 'pt' },
+  { code: 'fr' },
+  { code: 'de' },
+  { code: 'it' },
+  { code: 'ru' },
+  { code: 'ar' },
+  { code: 'hi' },
+  { code: 'nl' },
+  { code: 'pl' },
+  { code: 'tr' },
+  { code: 'vi' },
+  { code: 'id' },
+  { code: 'th' },
+  { code: 'sv' },
+  { code: 'da' },
+  { code: 'fi' },
+  { code: 'el' },
+  { code: 'cs' },
+  { code: 'sk' },
+  { code: 'sl' },
+  { code: 'hr' },
+  { code: 'ro' },
+  { code: 'hu' },
+  { code: 'bg' },
+  { code: 'uk' },
+  { code: 'lt' },
+  { code: 'lv' },
+  { code: 'et' },
 ]);
 
 const VOLUME_SETTING = 'audio.volume';
@@ -119,19 +121,21 @@ const VOLUME_SETTING = 'audio.volume';
 // --- 2. Component builders --------------------------------------------------
 
 /** Create an element with an optional class, text, and attributes. */
-function el(tag, { cls = '', text = '', attrs = {} } = {}) {
+function el(tag, { cls = '', text = '', attrs = {} }: { cls?: string; text?: string | Message; attrs?: Record<string, string | Message> } = {}) {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
-  if (text) node.textContent = text;
+  if (text) setText(node, text);
   for (const [key, value] of Object.entries(attrs)) {
-    node.setAttribute(key, value);
+    if (typeof value === "object") setTranslatedAttribute(node, key, value);
+    else node.setAttribute(key, value);
   }
   return node;
 }
 
 /** One <option> for a <select>. */
-function optionEl(value: string, label = value) {
-  return el('option', { text: label ?? value, attrs: { value } });
+function optionEl(value: string, label: string | Message = value) {
+  const text = label === value && value === 'default' ? msg('System Default') : label;
+  return el('option', { text: text ?? value, attrs: { value } });
 }
 
 /** Fill a <select> with values, preserving the current value first. */
@@ -151,9 +155,9 @@ function applyBadge(apply) {
   const meta = APPLY_META[apply];
   const badge = el('span', {
     cls: `apply apply-${apply}`,
-    text: meta ? meta.label : apply,
+    text: meta ? meta.label : msg(apply),
   });
-  badge.title = `Changing this ${apply.replace(/_/g, ' ')}`;
+  setTranslatedAttribute(badge, 'title', computedMessage(() => t('Changing this {strategy}', { strategy: t(meta?.label?.key || apply) })));
   return badge;
 }
 
@@ -169,9 +173,9 @@ function rowMessage() {
   return el('p', { cls: 'row-msg' });
 }
 
-function setRowMessage(msg, text, kind) {
-  msg.textContent = text;
-  msg.className = kind ? `row-msg ${kind}` : 'row-msg';
+function setRowMessage(node, text, kind) {
+  setText(node, typeof text === "string" ? msg(text) : text);
+  node.className = kind ? `row-msg ${kind}` : 'row-msg';
 }
 
 /** Boolean toggle. Returns { node, getValue, isClean }. */
@@ -179,9 +183,9 @@ function switchControl({ label, checked, onEdit }) {
   const wrapper = el('label', { cls: 'switch' });
   const input = el('input', { attrs: { type: 'checkbox', 'aria-label': label } });
   input.checked = checked;
-  const state = el('span', { cls: 'switch-state', text: checked ? 'On' : 'Off' });
+  const state = el('span', { cls: 'switch-state', text: msg(checked ? 'On' : 'Off') });
   input.addEventListener('change', () => {
-    state.textContent = input.checked ? 'On' : 'Off';
+    setText(state, msg(input.checked ? 'On' : 'Off'));
     onEdit();
   });
   wrapper.append(input, state);
@@ -240,7 +244,7 @@ function volumeControl({ label, current, onEdit }) {
   input.value = current ?? 1;
   const readout = el('span', { cls: 'range-val', text: Number(input.value).toFixed(2) });
   input.addEventListener('input', () => {
-    readout.textContent = Number(input.value).toFixed(2);
+    setText(readout, Number(input.value).toFixed(2));
     onEdit();
   });
   wrap.append(input, readout);
@@ -274,7 +278,7 @@ function fieldControl({ label, meta, current, onEdit }) {
 
 /** Pick the right control for a schema entry. */
 function settingControl(path, meta, title, current, onEdit) {
-  const base = { label: title, current, onEdit };
+  const base = { label: msg(`setting.${path}.label`), current, onEdit };
   if (meta.type === SettingType.Boolean) {
     return switchControl({ ...base, checked: current === true });
   }
@@ -299,6 +303,7 @@ const charCount = element('charCount');
 const voiceSelect = element('voice');
 const langSelect = element('lang');
 const generateBtn = element('btn');
+setText(generateBtn, msg('Generate speech'));
 const statusDiv = element('status');
 const audioPlayer = element('player');
 
@@ -341,16 +346,16 @@ async function configRequest(path: string, options: RequestInit = {}) {
 }
 
 function setNotice(kind, text) {
-  configNotice.textContent = text;
+  setText(configNotice, typeof text === "string" ? msg(text) : text);
   configNotice.className = kind || '';
 }
 
 function showProblems(problems) {
   if (problems.length > 0) {
-    configError.textContent = problems.join('\n');
+    setText(configError, problems.join('\n'));
     configError.hidden = false;
   } else {
-    configError.textContent = '';
+    setText(configError, '');
     configError.hidden = true;
   }
 }
@@ -378,30 +383,30 @@ function providerCard(status, models) {
     el('span', { cls: 'provider-name', text: status.provider_id }),
     el('span', {
       cls: `badge ${providerBadgeClass(status.state)}`,
-      text: String(status.state).replace(/_/g, ' '),
+      text: msg(String(status.state)),
     }),
     el('span', { cls: 'device-chip', text: status.effective_device || '—' }),
   );
   card.append(top);
   if (models) {
     const line = el('p', { cls: 'provider-models' });
-    line.append(el('span', { text: 'Models: ' }), document.createTextNode(models));
+    line.append(el('span', { text: msg("Models: ") }), document.createTextNode(models));
     card.append(line);
   }
   if (status.active_model) {
     const line = el('p', { cls: 'provider-active' });
-    line.append(document.createTextNode('Active model: '), el('code', { text: status.active_model }));
+    line.append(el('span', { text: msg('Active model:') }), el('code', { text: status.active_model }));
     card.append(line);
   }
   if (status.detail) {
-    card.append(el('p', { cls: 'provider-detail', text: status.detail }));
+    card.append(el('p', { cls: 'provider-detail', text: msg(status.detail) }));
   }
   const togglePath = providerTogglePath(status.provider_id);
   if (togglePath) {
     const actions = el('div', { cls: 'provider-actions' });
     const toggle = el('button', {
       cls: `${status.enabled ? 'btn-secondary' : 'btn-small'} provider-toggle`,
-      text: status.enabled ? 'Disable' : 'Enable',
+      text: msg(status.enabled ? 'Disable' : 'Enable'),
     });
     toggle.type = 'button';
     toggle.dataset.path = togglePath;
@@ -434,9 +439,8 @@ async function patchConfig(changes) {
  *  no file edits or restarts). Enabling kicks off the model download;
  *  progress shows on the card through the regular status polling. */
 async function setProviderEnabled(path, enabled, button) {
-  const original = button.textContent;
-  button.disabled = true;
-  button.textContent = enabled ? 'Starting…' : 'Stopping…';
+    button.disabled = true;
+  setText(button, msg(enabled ? 'Starting…' : 'Stopping…'));
   try {
     configSnapshot = await configRequest(Endpoints.config);
     const changes = {};
@@ -451,12 +455,12 @@ async function setProviderEnabled(path, enabled, button) {
     providerSignature = null;
     await refreshConfiguration();
     await refreshProviders();
-    setNotice('ok', `${path} ${enabled ? 'enabled — the engine will download and start.' : 'disabled.'}`);
+    setNotice('ok', msg(enabled ? '{path} enabled — the engine will download and start.' : '{path} disabled.', { path }));
   } catch (error) {
-    setNotice('error', error.message);
+    setNotice('error', errorMessage(error));
   } finally {
     button.disabled = false;
-    button.textContent = original;
+    setText(button, msg(enabled ? 'Disable' : 'Enable'));
   }
 }
 
@@ -470,7 +474,7 @@ async function refreshProviders() {
   try {
     const body = await configRequest(Endpoints.providers);
     const diagnostics = element('inferenceDiagnostics');
-    if (diagnostics) diagnostics.textContent = JSON.stringify(body.diagnostics || {}, null, 2);
+    if (diagnostics) setText(diagnostics, JSON.stringify(body.diagnostics || {}, null, 2));
     const signature = JSON.stringify(body.providers || []);
     if (signature === providerSignature) return;
     providerSignature = signature;
@@ -484,6 +488,7 @@ async function refreshProviders() {
       list.append(providerCard(status, modelsById.get(status.provider_id) || ''));
     }
     lastProviders = body;
+    updateAvailability();
     await renderModelOptions();
     refreshCloneForm();
   } catch {
@@ -535,9 +540,18 @@ function selectedModelMeta() {
   return { kind: 'cloning', ...found };
 }
 
+function updateAvailability() {
+  const cloned = selectedModelMeta().kind === 'cloning';
+  const ready = cloned || builtinReady;
+  modelSelect.disabled = !builtinReady && readyCloningModels().length === 0;
+  voiceSelect.disabled = !ready;
+  langSelect.disabled = !ready;
+  if (!generateBtn.classList.contains('loading') && !activeJobId) generateBtn.disabled = !ready;
+}
+
 async function renderModelOptions() {
   const previous = modelSelect.value || SUPERTONIC_MODEL;
-  const options = [optionEl(SUPERTONIC_MODEL, `${SUPERTONIC_MODEL} (built-in voices)`)];
+  const options = [optionEl(SUPERTONIC_MODEL, msg('supertonic-3 (built-in voices)'))];
   for (const { model, provider } of readyCloningModels()) {
     options.push(optionEl(model, `${model} (${provider})`));
   }
@@ -551,15 +565,16 @@ async function renderModelOptions() {
  *  built-in styles for Supertonic, your uploaded profiles (plus the
  *  provider's languages) for cloning engines. */
 async function syncVoicesToModel() {
+  updateAvailability();
   const meta = selectedModelMeta();
   if (meta.kind === 'supertonic') {
     voiceSelect.innerHTML = '';
     for (const { value, text } of builtinVoiceOptions) voiceSelect.append(optionEl(value, text));
     populateLanguages(null, 'en');
-    modelHint.textContent = '';
+    setText(modelHint, '');
     return;
   }
-  modelHint.textContent = `Cloned voice: synthesizes with your uploaded reference for ${meta.model}.`;
+  setText(modelHint, msg('Cloned voice: synthesizes with your uploaded reference for {model}.', { model: meta.model }));
   const needToken = serverInfo?.auth?.required && !apiTokenInput.value.trim();
   let profiles = [];
   if (!needToken) {
@@ -574,7 +589,7 @@ async function syncVoicesToModel() {
   const matches = profiles.filter(p => p.model === meta.model);
   voiceSelect.innerHTML = '';
   if (matches.length === 0) {
-    const empty = optionEl('', needToken ? 'Enter your API token to load voices' : 'No voice profiles for this model yet');
+    const empty = optionEl('', msg(needToken ? 'Enter your API token to load voices' : 'No voice profiles for this model yet'));
     empty.disabled = true;
     voiceSelect.append(empty);
     setStatus(
@@ -613,10 +628,11 @@ const cloneTranscript = element('cloneTranscript');
 const cloneConsent = element('cloneConsent');
 const cloneFile = element('cloneFile');
 const cloneSubmit = element('cloneSubmit');
+setText(cloneSubmit, msg('Clone voice'));
 const cloneStatus = element('cloneStatus');
 
 function setCloneStatus(text, kind) {
-  cloneStatus.textContent = text;
+  setText(cloneStatus, typeof text === "string" ? msg(text) : text);
   cloneStatus.className = kind || '';
 }
 
@@ -644,7 +660,7 @@ function refreshCloneForm() {
   const ids = cloningCapabilities().map(c => c.provider_id);
   const previous = cloneProvider.value;
   cloneProvider.innerHTML = '';
-  if (ids.length === 0) cloneProvider.append(optionEl('', 'No cloning engines available'));
+  if (ids.length === 0) cloneProvider.append(optionEl('', msg('No cloning engines available')));
   for (const id of ids) cloneProvider.append(optionEl(id));
   if (ids.includes(previous)) cloneProvider.value = previous;
   refreshCloneDependents();
@@ -659,8 +675,7 @@ function refreshCloneDependents() {
   const prevLang = cloneLang.value;
   cloneLang.innerHTML = '';
   for (const code of cap?.languages || []) {
-    const known = LANGUAGES.find(l => l.code === code);
-    cloneLang.append(optionEl(code, known ? known.label : code));
+    cloneLang.append(optionEl(code, msg(`language.${code}`)));
   }
   if ([...cloneLang.options].some(o => o.value === prevLang)) cloneLang.value = prevLang;
   const prevMode = cloneMode.value;
@@ -685,11 +700,11 @@ async function refreshVoiceList() {
     const body = await configRequest(Endpoints.voices);
     profiles = body.data || [];
   } catch {
-    voicesList.append(el('p', { cls: 'muted', text: 'Enter your API token to see your voices.' }));
+    voicesList.append(el('p', { cls: 'muted', text: msg("Enter your API token to see your voices.") }));
     return;
   }
   if (profiles.length === 0) {
-    voicesList.append(el('p', { cls: 'muted', text: 'No cloned voices yet — upload a reference below.' }));
+    voicesList.append(el('p', { cls: 'muted', text: msg("No cloned voices yet — upload a reference below.") }));
     return;
   }
   for (const profile of profiles) voicesList.append(voiceRow(profile));
@@ -703,13 +718,13 @@ function voiceRow(profile) {
     el('div', { cls: 'voice-name', text: profile.name }),
     el('div', {
       cls: 'voice-meta',
-      text: `${profile.provider} · ${profile.model} · ${profile.language} · ${profile.clone_mode} · ${(profile.reference_duration_secs || 0).toFixed(1)}s reference · ${profile.reference_sample_rate || '?'} Hz`,
+      text: computedMessage(() => `${profile.provider} · ${profile.model} · ${t('language.' + profile.language)} · ${profile.clone_mode} · ${(profile.reference_duration_secs || 0).toFixed(1)}s ${t('reference')} · ${profile.reference_sample_rate || '?'} Hz`),
     }),
   );
   const actions = el('div', { cls: 'voice-actions' });
-  const use = el('button', { cls: 'btn-inline', text: 'Use', attrs: { type: 'button', 'data-action': 'use' } });
-  const preview = el('button', { cls: 'btn-inline', text: 'Preview', attrs: { type: 'button', 'data-action': 'preview' } });
-  const del = el('button', { cls: 'btn-inline', text: 'Delete', attrs: { type: 'button', 'data-action': 'delete' } });
+  const use = el('button', { cls: 'btn-inline', text: msg("Use"), attrs: { type: 'button', 'data-action': 'use' } });
+  const preview = el('button', { cls: 'btn-inline', text: msg("Preview"), attrs: { type: 'button', 'data-action': 'preview' } });
+  const del = el('button', { cls: 'btn-inline', text: msg("Delete"), attrs: { type: 'button', 'data-action': 'delete' } });
   actions.append(use, preview, del);
   row.append(main, actions);
   return row;
@@ -732,7 +747,7 @@ voicesList.addEventListener('click', async event => {
   const id = button.closest<HTMLButtonElement>('.voice-row')?.dataset.id;
   if (!id) return;
   if (button.dataset.action === 'delete') {
-    if (!confirm('Delete this cloned voice? Its reference audio is removed too.')) return;
+    if (!confirm(t("Delete this cloned voice? Its reference audio is removed too."))) return;
     button.disabled = true;
     try {
       const resp = await apiFetch(`${Endpoints.voices}/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -740,7 +755,7 @@ voicesList.addEventListener('click', async event => {
       await refreshVoiceList();
       await syncVoicesToModel();
     } catch (error) {
-      setCloneStatus(error.message, 'error');
+      setCloneStatus(errorMessage(error), 'error');
     } finally {
       button.disabled = false;
     }
@@ -749,22 +764,22 @@ voicesList.addEventListener('click', async event => {
   try {
     const body = await configRequest(Endpoints.voices);
     const profile = (body.data || []).find(p => String(p.id) === id);
-    if (!profile) throw new Error('Voice profile is no longer available.');
+    if (!profile) throw uiError("Voice profile is no longer available.");
     if (![...modelSelect.options].some(o => o.value === profile.model)) {
-      throw new Error(`Model ${profile.model} is not ready — enable its engine first.`);
+      throw uiError('Model {model} is not ready — enable its engine first.', { model: profile.model });
     }
     modelSelect.value = profile.model;
     await syncVoicesToModel();
     voiceSelect.value = profile.id;
     voiceSelect.dispatchEvent(new Event('change'));
-    element('tts-heading').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    window.dispatchEvent(new CustomEvent('sonicboom:compose'));
     if (button.dataset.action === 'preview') {
       await synthesize({ previewText: 'Hi there. This is a voice preview.' });
       return;
     }
-    setStatus(`Using cloned voice “${profile.name}”.`, false);
+    setStatus(msg('Using cloned voice “{name}”.', { name: profile.name }), false);
   } catch (error) {
-    setCloneStatus(error.message, 'error');
+    setCloneStatus(errorMessage(error), 'error');
   }
 });
 
@@ -783,21 +798,21 @@ cloneForm.addEventListener('submit', async event => {
   const consent = cloneConsent.value.trim();
   const file = cloneFile.files[0];
   try {
-    if (!provider) throw new Error('No cloning engine is available right now.');
-    if (name.length < 1 || name.length > 64) throw new Error('Name must be 1–64 characters.');
-    if (!model) throw new Error('Pick a model.');
-    if (!language) throw new Error('Pick a language.');
-    if (mode === 'icl' && !transcript) throw new Error('ICL mode needs the exact reference transcript.');
-    if (!consent) throw new Error('Consent basis is required (e.g. owner).');
-    if (!file) throw new Error('Choose a WAV reference recording.');
-    if (file.size === 0) throw new Error('The selected file is empty.');
-    if (!await isWavFile(file)) throw new Error('The selected file is not a WAV recording.');
+    if (!provider) throw uiError("No cloning engine is available right now.");
+    if (name.length < 1 || name.length > 64) throw uiError("Name must be 1–64 characters.");
+    if (!model) throw uiError("Pick a model.");
+    if (!language) throw uiError("Pick a language.");
+    if (mode === 'icl' && !transcript) throw uiError("ICL mode needs the exact reference transcript.");
+    if (!consent) throw uiError("Consent basis is required (e.g. owner).");
+    if (!file) throw uiError("Choose a WAV reference recording.");
+    if (file.size === 0) throw uiError("The selected file is empty.");
+    if (!await isWavFile(file)) throw uiError("The selected file is not a WAV recording.");
     const params = new URLSearchParams({
       name, provider, model, language, mode, consent_basis: consent,
     });
     if (mode === 'icl') params.set('transcript', transcript);
     cloneSubmit.disabled = true;
-    cloneSubmit.textContent = 'Cloning…';
+    setText(cloneSubmit, msg("Cloning…"));
     const resp = await apiFetch(`${Endpoints.voices}/clones?${params.toString()}`, {
       method: 'POST',
       headers: { 'Content-Type': 'audio/wav' },
@@ -808,7 +823,7 @@ cloneForm.addEventListener('submit', async event => {
     cloneForm.reset();
     refreshCloneDependents();
     await refreshVoiceList();
-    setCloneStatus(`Reference profile “${profile.name}” saved. Generate a short preview to validate voice conditioning.`, 'ok');
+    setCloneStatus(msg('Reference profile “{name}” saved. Generate a short preview to validate voice conditioning.', { name: profile.name }), 'ok');
     if ([...modelSelect.options].some(o => o.value === profile.model)) {
       modelSelect.value = profile.model;
       await syncVoicesToModel();
@@ -816,10 +831,10 @@ cloneForm.addEventListener('submit', async event => {
       voiceSelect.dispatchEvent(new Event('change'));
     }
   } catch (error) {
-    setCloneStatus(error.message, 'error');
+    setCloneStatus(errorMessage(error), 'error');
   } finally {
     cloneSubmit.disabled = false;
-    cloneSubmit.textContent = 'Clone voice';
+    setText(cloneSubmit, msg("Clone voice"));
   }
 });
 
@@ -830,8 +845,8 @@ function populateLanguages(allowed = null, preferred = 'en') {
     ? LANGUAGES.filter(l => allowed.includes(l.code))
     : [...LANGUAGES];
   langSelect.innerHTML = '';
-  for (const { code, label } of list) {
-    langSelect.append(optionEl(code, label));
+  for (const { code } of list) {
+    langSelect.append(optionEl(code, msg(`language.${code}`)));
   }
   langSelect.value = list.some(l => l.code === preferred) ? preferred : (list[0]?.code ?? 'en');
 }
@@ -843,6 +858,25 @@ async function loadServerInfo() {
       throw new Error(`HTTP ${resp.status}`);
     }
     serverInfo = await resp.json();
+    const ready = serverInfo.model?.status === 'ready';
+    if (ready && (!builtinReady || builtinVoiceOptions.length === 0)) {
+      const response = await apiFetch('/v1/voices');
+      if (response.ok) {
+        const voices = await response.json();
+        builtinVoiceOptions = (voices.data || []).map(voice => ({ value: voice.id, text: voice.name || voice.id })).sort((a, b) => a.value.localeCompare(b.value));
+        if (selectedModelMeta().kind === 'supertonic') {
+          const previous = voiceSelect.value;
+          voiceSelect.replaceChildren(...builtinVoiceOptions.map(voice => optionEl(voice.value, voice.text)));
+          if (builtinVoiceOptions.some(voice => voice.value === previous)) voiceSelect.value = previous;
+        }
+      }
+    }
+    builtinReady = ready;
+    const state = serverInfo.model?.status;
+    const badge = element('modelStatus');
+    badge.hidden = ready;
+    setText(badge, msg(state === 'failed' ? 'Model load failed. Check server logs.' : state === 'loading' ? 'Loading model...' : state === 'downloading' ? 'Downloading model…' : 'Preparing model...'));
+    updateAvailability();
   } catch (e) {
     console.warn('Could not load server info:', e);
     serverInfo = null;
@@ -901,7 +935,7 @@ updateCharCount();
 
 function updateCharCount() {
   const n = textInput.value.length;
-  charCount.textContent = `${n} character${n === 1 ? '' : 's'}`;
+  setText(charCount, msg(n === 1 ? '{count} character' : '{count} characters', { count: n }));
 }
 
 let activeJobId = null;
@@ -911,9 +945,9 @@ cancelGeneration.addEventListener('click', async () => {
   cancelGeneration.disabled = true;
   try {
     const response = await apiFetch(`/api/tts/jobs/${encodeURIComponent(activeJobId)}/cancel`, { method: 'POST' });
-    if (!response.ok) throw new Error(`Cancellation failed (HTTP ${response.status})`);
+    if (!response.ok) throw uiError('Cancellation failed (HTTP {status})', { status: response.status });
     setStatus('Cancellation requested. Waiting for native computation to stop…');
-  } catch (error) { setStatus(error.message, true); cancelGeneration.disabled = false; }
+  } catch (error) { setStatus(errorMessage(error), true); cancelGeneration.disabled = false; }
 });
 
 async function watchSynthesisJob(id) {
@@ -923,10 +957,10 @@ async function watchSynthesisJob(id) {
     const seconds = Math.floor(snapshot.elapsed_secs || 0);
     const context = snapshot.context;
     const identity = context ? `${context.model} (${context.provider}) · ${context.voice} · ${context.effective_device} · ` : '';
-    setStatus(`${identity}${snapshot.stage}${snapshot.cancellation_requested || snapshot.deadline_exceeded ? ' (stopping)' : ''} · ${seconds}s elapsed${snapshot.frames ? ` · ${snapshot.frames} generated frames` : ''}${context?.effective_device === 'cpu' && context?.provider === 'qwen3' ? ' · CPU inference can be slow.' : ''}`);
+    setStatus(computedMessage(() => `${identity}${t(snapshot.stage)}${snapshot.cancellation_requested || snapshot.deadline_exceeded ? ' (' + t('stopping') + ')' : ''} · ${t('{seconds}s elapsed', { seconds })}${snapshot.frames ? ' · ' + t('{count} generated frames', { count: snapshot.frames }) : ''}${context?.effective_device === 'cpu' && context?.provider === 'qwen3' ? ' · ' + t('CPU inference can be slow.') : ''}`));
     if (snapshot.stage === 'completed') return true;
     if (snapshot.stage === 'failed' || snapshot.stage === 'cancelled') {
-      const error: Error & { terminalJob?: boolean } = new Error(snapshot.stage === 'failed' ? snapshot.error || 'Inference failed.' : 'Generation cancelled or its deadline expired.');
+      const error: Error & { terminalJob?: boolean } = uiError(snapshot.stage === 'failed' ? snapshot.error || 'Inference failed.' : 'Generation cancelled or its deadline expired.');
       error.terminalJob = true; throw error;
     }
     return false;
@@ -938,7 +972,7 @@ async function watchSynthesisJob(id) {
     try { statusResponse = await apiFetch(endpoint, { signal: AbortSignal.timeout(15000) }); }
     catch (_) { failures++; await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
     if (!statusResponse.ok) {
-      const error: Error & { terminalJob?: boolean } = new Error(`Job status unavailable (HTTP ${statusResponse.status}).`);
+      const error: Error & { terminalJob?: boolean } = uiError('Job status unavailable (HTTP {status}).', { status: statusResponse.status });
       error.terminalJob = statusResponse.status === 404;
       throw error;
     }
@@ -961,7 +995,7 @@ async function watchSynthesisJob(id) {
           const data = event.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
           if (data) { failures = 0; if (terminal(JSON.parse(data))) return; }
         }
-        if (pending.length > 65536) throw new Error('Invalid progress response.');
+        if (pending.length > 65536) throw uiError("Invalid progress response.");
       }
     } catch (error) {
       if (error.terminalJob) throw error;
@@ -969,7 +1003,7 @@ async function watchSynthesisJob(id) {
     } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
-  throw new Error('Progress connection lost. The job may still be running; reconnect to check its status.');
+  throw uiError("Progress connection lost. The job may still be running; reconnect to check its status.");
 }
 
 async function synthesize(options: { previewText?: string } = {}) {
@@ -995,15 +1029,15 @@ async function synthesize(options: { previewText?: string } = {}) {
   // Set UI Loading State
   generateBtn.disabled = true;
   generateBtn.classList.add('loading');
-  generateBtn.textContent = 'Generating…';
+  setText(generateBtn, msg("Generating…"));
   const providerStatus = (lastProviders?.providers || []).find(p => p.active_model === modelSelect.value);
   const selectedDevice = providerStatus?.effective_device || 'unknown';
-  setStatus(`${modelSelect.value} · ${voice} · ${selectedDevice}${selectedDevice === 'cpu' && meta.kind === 'cloning' ? ' · CPU inference may be slow; no completion time estimate is available.' : ''}`);
+  setStatus(`${modelSelect.value} · ${voice} · ${selectedDevice}${selectedDevice === 'cpu' && meta.kind === 'cloning' ? ' · ' + t('CPU inference may be slow; no completion time estimate is available.') : ''}`);
 
   let terminalReached = false;
   try {
     if (meta.kind === 'cloning' && !voice && !activeJobId) {
-      throw new Error('Create a voice profile for this model first.');
+      throw uiError("Create a voice profile for this model first.");
     }
     const params = new URLSearchParams({ lang, format: 'wav' });
     if (meta.kind === 'cloning') params.set('profile', voice);
@@ -1049,7 +1083,7 @@ async function synthesize(options: { previewText?: string } = {}) {
     setStatus('Completed. Audio is ready to play or download.');
   } catch (e) {
     terminalReached ||= Boolean(e.terminalJob);
-    setStatus(e.message + (activeJobId && !terminalReached ? ' Use Resume monitoring or Cancel generation.' : ''), true);
+    setStatus(computedMessage(() => renderMessage(errorMessage(e)) + (activeJobId && !terminalReached ? ' ' + t('Use Resume monitoring or Cancel generation.') : '')), true);
   } finally {
     if (terminalReached) activeJobId = null;
     cancelGeneration.hidden = !activeJobId;
@@ -1057,21 +1091,22 @@ async function synthesize(options: { previewText?: string } = {}) {
     // Reset UI State
     generateBtn.disabled = false;
     generateBtn.classList.remove('loading');
-    generateBtn.textContent = activeJobId ? 'Resume monitoring' : 'Generate speech';
+    setText(generateBtn, msg(activeJobId ? 'Resume monitoring' : 'Generate speech'));
   }
 }
 
-function setStatus(msg: string, isError = false) {
-  statusDiv.textContent = msg;
+function setStatus(status: string | Message, isError = false) {
+  setText(statusDiv, typeof status === "string" ? msg(status) : status);
   statusDiv.className = isError ? 'error' : '';
 }
 
 // Refresh periodically if model is not ready yet
-const reloadTimer = !MODEL_READY ? setTimeout(() => location.reload(), App.modelReloadMs) : undefined;
+// Poll model state without reloading the page or discarding user input.
+const modelTimer = setInterval(() => void loadServerInfo(), App.modelReloadMs);
 
 // --- 4. Configuration browser -----------------------------------------------
 
-configSearch.addEventListener('input', renderConfigGroups);
+configSearch.addEventListener('input', () => { if (configSearch.value.trim()) configCategory.value = 'all'; renderConfigGroups(); });
 configCategory.addEventListener('change', renderConfigGroups);
 
 function humanize(key) {
@@ -1108,17 +1143,17 @@ function parseSettingInput(meta, raw) {
   if (meta.nullable && (raw === '' || raw === 'null')) return null;
   if (type === SettingType.Boolean) return raw === true || raw === 'true';
   if (type === SettingType.Integer || type === SettingType.Number) {
-    if (raw === '' || raw === null || raw === undefined) throw new Error('Enter a number');
+    if (raw === '' || raw === null || raw === undefined) throw uiError("Enter a number");
     const value = Number(raw);
-    if (!Number.isFinite(value)) throw new Error('Enter a valid number');
-    if (type === SettingType.Integer && !Number.isInteger(value)) throw new Error('Enter a whole number');
+    if (!Number.isFinite(value)) throw uiError("Enter a valid number");
+    if (type === SettingType.Integer && !Number.isInteger(value)) throw uiError("Enter a whole number");
     return value;
   }
   if (type === SettingType.Array || type === SettingType.Object) {
     try {
       return JSON.parse(raw);
     } catch {
-      throw new Error(type === SettingType.Array ? 'Enter a JSON array, e.g. ["a"]' : 'Enter valid JSON');
+      throw uiError(type === SettingType.Array ? 'Enter a JSON array, e.g. ["a"]' : 'Enter valid JSON');
     }
   }
   return raw;
@@ -1145,16 +1180,18 @@ function buildCategoryOptions() {
   const present = new Set(
     Object.keys(configSchema).filter(p => !configSchema[p].secret).map(categoryOf),
   );
+  const previous = configCategory.value;
   configCategory.innerHTML = '';
-  configCategory.append(optionEl('all', 'All categories'));
+  configCategory.append(optionEl('all', msg('All categories')));
   for (const key of [...present].sort((a, b) => categoryLabel(a).localeCompare(categoryLabel(b)))) {
-    configCategory.append(optionEl(key, categoryLabel(key)));
+    configCategory.append(optionEl(key, msg(categoryLabel(key))));
   }
+  configCategory.value = previous || (present.has('server') ? 'server' : 'all');
 }
 
 function matchesFilter(path, meta, title) {
   const q = configSearch.value.trim().toLowerCase();
-  if (q && !(path.toLowerCase().includes(q) || title.toLowerCase().includes(q) || meta.description.toLowerCase().includes(q))) {
+  if (q && !(path.toLowerCase().includes(q) || title.toLowerCase().includes(q) || t(meta.description).toLowerCase().includes(q))) {
     return false;
   }
   const cat = configCategory.value || 'all';
@@ -1167,21 +1204,21 @@ function hintFor(meta) {
   const hasMin = meta.min !== undefined && meta.min !== null;
   const hasMax = meta.max !== undefined && meta.max !== null;
   if (meta.type === SettingType.Integer || meta.type === SettingType.Number) {
-    if (hasMin && hasMax) hints.push(`Range ${meta.min} – ${meta.max}`);
-    else if (hasMin || hasMax) hints.push(`Allowed: ${[hasMin ? `≥ ${meta.min}` : '', hasMax ? `≤ ${meta.max}` : ''].filter(Boolean).join(', ')}`);
+    if (hasMin && hasMax) hints.push(t('Range {min} – {max}', { min: meta.min, max: meta.max }));
+    else if (hasMin || hasMax) hints.push(t('Allowed: {range}', { range: [hasMin ? `≥ ${meta.min}` : '', hasMax ? `≤ ${meta.max}` : ''].filter(Boolean).join(', ') }));
   }
-  if (meta.nullable) hints.push('Empty clears the value');
-  if (meta.type === SettingType.Array) hints.push('JSON array');
+  if (meta.nullable) hints.push(t('Empty clears the value'));
+  if (meta.type === SettingType.Array) hints.push(t('JSON array'));
   return hints.join(' · ');
 }
 
 function groupSection(category, entries) {
   entries.sort((a, b) => a.path.localeCompare(b.path));
   const section = el('section', { cls: 'cfg-group' });
-  const heading = el('h3', { text: categoryLabel(category) });
+  const heading = el('h3', { text: msg(categoryLabel(category)) });
   heading.append(el('span', {
     cls: 'count',
-    text: `${entries.length} setting${entries.length === 1 ? '' : 's'}`,
+    text: msg(entries.length === 1 ? '{count} setting' : '{count} settings', { count: entries.length }),
   }));
   section.append(heading);
   for (const entry of entries) {
@@ -1195,7 +1232,7 @@ function renderConfigGroups() {
   const groups = new Map();
   for (const [path, meta] of Object.entries(configSchema)) {
     if (meta.secret) continue;
-    const title = humanize(path.split('.').at(-1));
+    const title = t(`setting.${path}.label`) === `setting.${path}.label` ? humanize(path.split('.').at(-1)) : t(`setting.${path}.label`);
     if (!matchesFilter(path, meta, title)) continue;
     const cat = categoryOf(path);
     if (!groups.has(cat)) groups.set(cat, []);
@@ -1204,7 +1241,7 @@ function renderConfigGroups() {
 
   configGroupsEl.innerHTML = '';
   if (groups.size === 0) {
-    configGroupsEl.append(el('div', { cls: 'empty-result', text: 'No settings match this filter.' }));
+    configGroupsEl.append(el('div', { cls: 'empty-result', text: msg("No settings match this filter.") }));
     return;
   }
 
@@ -1221,29 +1258,29 @@ function settingRow({ path, meta, title }) {
   const head = el('div', { cls: 'setting-head' });
   const titleWrap = el('div');
   titleWrap.append(
-    el('div', { cls: 'setting-title', text: title }),
+    el('div', { cls: 'setting-title', text: computedMessage(() => t(`setting.${path}.label`) === `setting.${path}.label` ? humanize(path.split('.').at(-1)) : t(`setting.${path}.label`)) }),
     el('div', { cls: 'setting-path', text: path }),
   );
   head.append(titleWrap, applyBadge(meta.apply));
   row.append(head);
 
-  row.append(el('p', { cls: 'setting-desc', text: meta.description }));
+  row.append(el('p', { cls: 'setting-desc', text: msg(meta.description) }));
 
   const control = el('div', { cls: 'setting-control' });
   const markDirty = () => row.classList.toggle('dirty', !field.isClean());
   const field = settingControl(path, meta, title, getConfiguredValue(path), markDirty);
-  const save = actionButton('Save');
+  const save = actionButton(msg('Save'));
   control.append(field.node, save);
   row.append(control);
 
   const hint = hintFor(meta);
-  if (hint) row.append(el('p', { cls: 'field-hint', text: hint }));
+  if (hint) row.append(el('p', { cls: 'field-hint', text: computedMessage(() => hintFor(meta)) }));
 
-  const msg = rowMessage();
-  row.append(msg);
+  const rowFeedback = rowMessage();
+  row.append(rowFeedback);
 
   save.addEventListener('click', async () => {
-    setRowMessage(msg, '', null);
+    setRowMessage(rowFeedback, '', null);
     save.disabled = true;
     try {
       const value = parseSettingInput(meta, field.getValue());
@@ -1255,10 +1292,10 @@ function settingRow({ path, meta, title }) {
         body: JSON.stringify({ expected_revision: configSnapshot.revision, changes }),
       });
       row.classList.remove('dirty');
-      setRowMessage(msg, 'Saved.', 'ok');
+      setRowMessage(rowFeedback, 'Saved.', 'ok');
       await refreshConfiguration();
     } catch (error) {
-      setRowMessage(msg, error.message, 'error');
+      setRowMessage(rowFeedback, errorMessage(error), 'error');
     } finally {
       save.disabled = false;
     }
@@ -1271,18 +1308,18 @@ async function refreshConfiguration() {
   const loading = document.getElementById('configLoading');
   try {
     const status = await configRequest(Endpoints.configStatus);
-    element('configPath').textContent = status.config_path || '';
+    setText(element('configPath'), status.config_path || '');
     element('configOpen').hidden = serverInfo?.mode !== 'desktop';
-    element('configRevision').textContent = `Revision ${status.revision}`;
-    element('statWatcher').textContent = status.watcher || '—';
-    element('statReload').textContent = status.last_reload || '—';
-    element('statPending').textContent = (status.pending_applies || []).join(', ') || 'none';
+    setText(element('configRevision'), msg('Revision {revision}', { revision: status.revision }));
+    setText(element('statWatcher'), msg(status.watcher || '—'));
+    setText(element('statReload'), status.last_reload || '—');
+    setText(element('statPending'), (status.pending_applies || []).join(', ') || msg('none'));
     showProblems([
       status.last_error,
       ...(status.apply_failures || []).map(f => `${f.path}: ${f.error} (active: ${JSON.stringify(f.active)})`),
     ].filter(Boolean));
     const previous = configSnapshot;
-    if (!configSnapshot || configSnapshot.revision !== status.revision) {
+    if (!configSnapshot || Object.keys(configSchema).length === 0 || configSnapshot.revision !== status.revision) {
       configSnapshot = await configRequest(Endpoints.config);
       if (Object.keys(configSchema).length === 0) {
         const schema = await configRequest(Endpoints.configSchema);
@@ -1303,7 +1340,7 @@ async function refreshConfiguration() {
     }
     if (loading) loading.remove();
   } catch (error) {
-    if (loading) loading.textContent = 'Configuration needs an API token to load.';
+    if (loading) setText(loading, msg('Configuration needs an API token to load.'));
     showProblems([error.message]);
   }
 }
@@ -1315,12 +1352,12 @@ function bindConfigAction(buttonId, action, onSuccess) {
       await configRequest(Endpoints.configAction(action), { method: 'POST' });
       await onSuccess();
     } catch (error) {
-      setNotice('error', error.message);
+      setNotice('error', errorMessage(error));
     }
   });
 }
 
-apiTokenInput.addEventListener('change', refreshConfiguration);
+apiTokenInput.addEventListener('change', async () => { providerSignature = null; await refreshConfiguration(); await refreshProviders(); await refreshVoiceList(); });
 element('configRefresh').addEventListener('click', async () => {
   configSchema = {};
   configCategory.innerHTML = '';
@@ -1337,7 +1374,7 @@ bindConfigAction('configValidate', 'validate', async () => {
 element('configOpen').addEventListener('click', async () => {
   try { await configRequest(Endpoints.configOpen, { method: 'POST' }); }
   catch (error) {
-    setNotice('error', error.message);
+    setNotice('error', errorMessage(error));
   }
 });
 
@@ -1348,7 +1385,7 @@ const configTimer = setInterval(async () => {
 }, App.configPollMs);
 return () => {
   clearInterval(configTimer);
-  clearTimeout(reloadTimer);
+  clearInterval(modelTimer);
   if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
 };
 

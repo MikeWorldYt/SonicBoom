@@ -11,6 +11,7 @@ fn main() {
     }
     for path in [
         "frontend/src",
+        "frontend/scripts",
         "frontend/index.html",
         "frontend/vite.config.ts",
         "frontend/tsconfig.json",

@@ -18,7 +18,8 @@ This README serves as an index to all SonicBoom documentation:
 
 ## Frontend development
 
-The interface uses Vue, TypeScript and Vite. See the [frontend guide](docs/frontend.md)
+The interface uses Vue, TypeScript and Vite, with English and Spanish localization
+and dedicated speech, voice library, engine and settings views. See the [frontend guide](docs/frontend.md)
 for localhost hot reload and embedded production builds. Building the server
 requires Node.js 22.12+ and npm; deployed binaries need neither.
 

@@ -66,3 +66,41 @@ CI and release workflows install Node before Cargo builds.
 
 `npm run typecheck` checks TypeScript with the current TypeScript compiler;
 Vite's Vue plugin compiles and validates the single-file component templates.
+
+## Workspace and languages
+
+The studio has separate Create speech, Voice library, Engines and Settings views.
+Switching views retains the speech draft, voice upload and unsaved settings.
+Settings initially show the Server category; searching includes every category.
+Model availability updates in place instead of reloading the browser. Choosing
+Use on a saved voice opens the speech composer.
+
+The interface supports **English (`en`) and Spanish (`es`)**. The language menu
+is available in the studio, setup and administration pages. The first visit uses
+the browser language (Spanish variants select Spanish; other languages fall back
+to English). An explicit selection is remembered in `sonicboom.locale` in local
+storage. Switching languages does not reload the page or change the selected
+speech language. Speech languages are supplied by each engine independently.
+
+Translations live in `frontend/src/i18n/en.json` and `es.json`. Vue templates use
+`t(key, parameters)`. Controller-created labels use `msg(key, parameters)` with
+`setText` or `setTranslatedAttribute`, which update existing DOM nodes when the
+locale changes. `computedMessage` handles labels built from multiple values.
+Names, file paths, model identifiers, transcripts and raw diagnostic payloads
+remain data. Server messages with known translations are localized; unknown
+server messages fall back to the original text.
+
+To add a language later:
+
+1. Copy `en.json` to a new locale file and translate every value, retaining
+   message keys and named parameters such as `{count}`.
+2. Import the catalog in `src/i18n/index.ts`, register it in `catalogs`, and add
+   its code and native name to `locales`. Extend initial browser-language
+   matching for the new language.
+3. Run `npm run build`. The build automatically checks every catalog for
+   matching keys, nonempty strings and matching interpolation parameters.
+4. Check the new language on setup, admin, each workspace view and mobile.
+   Include live status messages and unsaved form values when switching language.
+
+Only English and Spanish are offered until another complete catalog is added.
+The UI uses the English catalog as a fallback for future untranslated messages.

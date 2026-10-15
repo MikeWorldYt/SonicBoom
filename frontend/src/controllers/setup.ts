@@ -1,3 +1,4 @@
+import { t, msg, setText, computedMessage, uiError, errorMessage, renderMessage } from '../i18n';
 import { element } from '../dom';
 export function startSetup() {
 function field(name: string): HTMLInputElement | HTMLSelectElement {
@@ -13,11 +14,15 @@ const error = element("error");
 
 function show(i) {
   index = i;
-  document.querySelectorAll<HTMLElement>(".step").forEach(el =>
-    el.classList.toggle("active", el.dataset.step === steps[i]));
+  document.querySelectorAll<HTMLElement>(".step").forEach(el => {
+    const active = el.dataset.step === steps[i];
+    el.classList.toggle("active", active);
+    // Hidden steps must not block submission through native validation.
+    (el as HTMLFieldSetElement).disabled = !active;
+  });
   const visibleSteps = usageMode() === "advanced" ? steps : steps.filter(step => step !== "1b");
-  element("step-no").textContent = String(visibleSteps.indexOf(steps[i]) + 1);
-  element("step-count").textContent = String(visibleSteps.length);
+  setText(element("step-no"), String(visibleSteps.indexOf(steps[i]) + 1));
+  setText(element("step-count"), String(visibleSteps.length));
   element("back").style.visibility =
     i === 0 ? "hidden" : "visible";
   const last = i === steps.length - 1;
@@ -39,14 +44,14 @@ function renderSummary() {
     port = Number(field("port").value || 17842);
     auth = field("auth_mode").value;
   }
-  element("summary").textContent =
-    "API: http://" + bind + ":" + port + "\n" +
-    "Authentication: " + auth + "\n" +
-    "Audio: " + (field("audio_device").value || "default") + "\n" +
-    "Inference steps: " + (field("inference_steps").value || 5);
+  setText(element("summary"), msg('setup.summary', {
+    url: `http://${bind}:${field("port").value || port}`, auth: t(auth),
+    audio: field("audio_device").value || t('System Default'), steps: field("inference_steps").value || 5,
+  }));
 }
 
 element("next").onclick = () => {
+  if (!form.reportValidity()) return;
   if (usageMode() === "advanced" && steps[index] === "1") { show(1); return; }
   if (steps[index] === "1b") { show(2); return; }
   show(steps[index] === "1" ? 2 : Math.min(index + 1, steps.length - 1));
@@ -56,7 +61,7 @@ element("back").onclick = () => {
   show(steps[index] === "2" && usageMode() !== "advanced" ? 0 : Math.max(index - 1, 0));
 };
 form.querySelectorAll('input[name="usage_mode"]').forEach(r =>
-  r.addEventListener("change", () => { if (index === 0) renderSummary(); }));
+  r.addEventListener("change", () => { if (index === 0) show(0); }));
 ["bind", "port", "auth_mode", "audio_device", "inference_steps"].forEach(name => {
   const el = form.elements.namedItem(name);
   if (el instanceof Element) el.addEventListener("change", renderSummary);
@@ -65,29 +70,29 @@ form.querySelectorAll('input[name="usage_mode"]').forEach(r =>
 element("test-audio").onclick = async () => {
   try {
     const device = field("audio_device").value;
-    if (!device) throw new Error("Choose an audio output first.");
+    if (!device) throw uiError("Choose an audio output first.");
     const commit = await apiFetch("/api/config", { method: "PATCH", headers: { "content-type": "application/json" },
       body: JSON.stringify({ changes: { audio: { output_device: device } } }) });
-    if (!commit.ok) throw new Error("Could not configure selected output.");
+    if (!commit.ok) throw uiError("Could not configure selected output.");
     for (let attempt = 0; attempt < 20; attempt++) {
       const output = await apiFetch("/api/audio/output");
       const active = await output.json();
       if (active.device === device && active.available) break;
-      if (attempt === 19) throw new Error("Selected output is unavailable. Check configuration status.");
+      if (attempt === 19) throw uiError("Selected output is unavailable. Check configuration status.");
       await new Promise(resolve => setTimeout(resolve, 150));
     }
     const res = await apiFetch("/api/tts/play", { method: "POST",
-      headers: { "content-type": "text/plain" }, body: "This is a test of the SonicBoom audio setup." });
-    if (res.ok) { error.textContent = "Test audio played (check your output device)."; }
-    else { error.textContent = "Test failed: HTTP " + res.status; }
-  } catch (e) { error.textContent = "Test failed: " + e; }
+      headers: { "content-type": "text/plain" }, body: t("This is a test of the SonicBoom audio setup.") });
+    if (res.ok) { setText(error, msg("Test audio played (check your output device).")); }
+    else { setText(error, msg('Test failed: {error}', { error: `HTTP ${res.status}` })); }
+  } catch (e) { setText(error, computedMessage(() => t('Test failed: {error}', { error: renderMessage(errorMessage(e)) }))); }
 };
 
 async function apiFetch(path: string, options: RequestInit = {}) { return fetch(path, options); }
 
 form.onsubmit = async (event) => {
   event.preventDefault();
-  error.textContent = "";
+  setText(error, "");
   const data = {
     usage_mode: usageMode(),
     audio_device: field("audio_device").value || "default",
@@ -104,17 +109,14 @@ form.onsubmit = async (event) => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(data) });
     const body = await res.json();
-    if (!res.ok) { error.textContent = body.message || "Setup failed"; return; }
-    let msg = "SonicBoom is ready.\n\nAPI: " + body.api_url +
-      "\nAudio: " + body.audio_device + "\nAuthentication: " + body.auth;
-    if (body.api_token) {
-      msg += "\n\nAPI token (shown once — store it safely):\n" + body.api_token;
-    }
-    alert(msg);
+    if (!res.ok) { setText(error, msg(body.message || 'Setup failed')); return; }
+    let completion = `${t('SonicBoom is ready.')}\n\nAPI: ${body.api_url}\n${t('Audio:')} ${body.audio_device}\n${t('Authentication:')} ${t(body.auth)}`;
+    if (body.api_token) completion += `\n\n${t('API token (shown once — store it safely):')}\n${body.api_token}`;
+    alert(completion);
     const api = new URL(body.api_url);
     if (import.meta.env.DEV && api.port === __SONICBOOM_BACKEND_PORT__) { window.location.href = "/"; return; }
     window.location.href = `${window.location.protocol}//${window.location.hostname}:${api.port}/`;
-  } catch (e) { error.textContent = "Setup failed: " + e; }
+  } catch (e) { setText(error, computedMessage(() => t('Setup failed: {error}', { error: renderMessage(errorMessage(e)) }))); }
 };
 
 (async () => {
@@ -128,11 +130,11 @@ form.onsubmit = async (event) => {
       const list = await res.json();
       const select = element("audio-device");
       const devices = list.devices || [];
-      element("test-audio").disabled = false;
+      element("test-audio").disabled = devices.length === 0;
       devices.forEach(d => {
         const option = document.createElement("option");
         option.value = d.id;
-        option.textContent = d.name;
+        setText(option, d.name);
         select.appendChild(option);
       });
     }
