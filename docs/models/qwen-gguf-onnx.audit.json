@@ -258,6 +258,232 @@
       ],
       "checker_ok": false,
       "error": "Data of TensorProto ( tensor name: speaker_encoder.blocks.0.conv.weight) should be stored in MODEL_DIR/qwen3_tts_speaker_encoder.fp32.onnx.data, but it is not regular file."
+    },
+    {
+      "path": "qwen3_tts_codec_encoder.int8.onnx",
+      "sha256": "b744d0570ad6420f1ddb6c65a15b180c345643f6e90aee6091bcaf3d008b8b9e",
+      "integrity_ok": true,
+      "opsets": {
+        "": 18
+      },
+      "input": [
+        {
+          "name": "input_values",
+          "type": "FLOAT, batch_sizexsequence_length"
+        }
+      ],
+      "output": [
+        {
+          "name": "audio_codes",
+          "type": "INT64, batch_sizex(((sequence_length - 1)//1920)) + 1x16"
+        }
+      ],
+      "external_data": [],
+      "checker_ok": true
+    },
+    {
+      "path": "qwen3_tts_decoder.int8.onnx",
+      "sha256": "4e13954107651a7a7c0ecfa8b34cf82c686c386634b2043d1214f0357933be2f",
+      "integrity_ok": true,
+      "opsets": {
+        "": 18
+      },
+      "input": [
+        {
+          "name": "audio_codes",
+          "type": "INT64, batchxnum_framesx16"
+        },
+        {
+          "name": "pre_conv_history",
+          "type": "FLOAT, batchx512xpre_conv_seq"
+        },
+        {
+          "name": "latent_buffer",
+          "type": "FLOAT, batchx1024xlatent_seq"
+        },
+        {
+          "name": "conv_history",
+          "type": "FLOAT, batchx1024xconv_seq"
+        },
+        {
+          "name": "is_last",
+          "type": "FLOAT, 1"
+        },
+        {
+          "name": "past_key_0",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_key_1",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_key_2",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_key_3",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_key_4",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_key_5",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_key_6",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_key_7",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_0",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_1",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_2",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_3",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_4",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_5",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_6",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_7",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        }
+      ],
+      "output": [
+        {
+          "name": "final_wav",
+          "type": "FLOAT, batchx1920*latent_seq + 1920*num_frames"
+        },
+        {
+          "name": "valid_samples",
+          "type": "INT64, 1"
+        },
+        {
+          "name": "next_pre_conv_history",
+          "type": "FLOAT, batchx512xu0"
+        },
+        {
+          "name": "next_latent_buffer",
+          "type": "FLOAT, batchx1024xu44"
+        },
+        {
+          "name": "next_conv_history",
+          "type": "FLOAT, batchx1024x4"
+        },
+        {
+          "name": "next_key_0",
+          "type": "FLOAT, batchx16xu4x64"
+        },
+        {
+          "name": "next_key_1",
+          "type": "FLOAT, batchx16xu9x64"
+        },
+        {
+          "name": "next_key_2",
+          "type": "FLOAT, batchx16xu14x64"
+        },
+        {
+          "name": "next_key_3",
+          "type": "FLOAT, batchx16xu19x64"
+        },
+        {
+          "name": "next_key_4",
+          "type": "FLOAT, batchx16xu24x64"
+        },
+        {
+          "name": "next_key_5",
+          "type": "FLOAT, batchx16xu29x64"
+        },
+        {
+          "name": "next_key_6",
+          "type": "FLOAT, batchx16xu34x64"
+        },
+        {
+          "name": "next_key_7",
+          "type": "FLOAT, batchx16xu39x64"
+        },
+        {
+          "name": "next_value_0",
+          "type": "FLOAT, batchx16xu6x64"
+        },
+        {
+          "name": "next_value_1",
+          "type": "FLOAT, batchx16xu11x64"
+        },
+        {
+          "name": "next_value_2",
+          "type": "FLOAT, batchx16xu16x64"
+        },
+        {
+          "name": "next_value_3",
+          "type": "FLOAT, batchx16xu21x64"
+        },
+        {
+          "name": "next_value_4",
+          "type": "FLOAT, batchx16xu26x64"
+        },
+        {
+          "name": "next_value_5",
+          "type": "FLOAT, batchx16xu31x64"
+        },
+        {
+          "name": "next_value_6",
+          "type": "FLOAT, batchx16xu36x64"
+        },
+        {
+          "name": "next_value_7",
+          "type": "FLOAT, batchx16xu41x64"
+        }
+      ],
+      "external_data": [],
+      "checker_ok": true
+    },
+    {
+      "path": "qwen3_tts_speaker_encoder.int8.onnx",
+      "sha256": "da1e0f5f5c6d4e04b376c1e862f6d4bd2905f94f622fade639654a2c507b2547",
+      "integrity_ok": true,
+      "opsets": {
+        "": 18
+      },
+      "input": [
+        {
+          "name": "mels",
+          "type": "FLOAT, batch_sizexsequence_lengthx128"
+        }
+      ],
+      "output": [
+        {
+          "name": "spk_emb",
+          "type": "FLOAT, batch_sizex2048"
+        }
+      ],
+      "external_data": [],
+      "checker_ok": true
     }
   ]
 }

@@ -17,9 +17,10 @@ fallback, or packaging acceptance is claimed. Existing providers are unchanged.
   is listed in the converted repository inventory.
 
 The adjacent [inventory](models/qwen-gguf-onnx.inventory.json) records exact
-sizes and registry LFS SHA-256 values for every large artifact. These are
-**registry metadata**, not a fully downloaded and verified installation
-manifest. Do not pass the inventory to the production downloader yet.
+sizes and registry LFS SHA-256 values for every large artifact. Entries identify whether hashes were checked against downloaded bytes or only
+registry metadata. The selected Q5_K talker / Q8_0 predictor / INT8 ONNX set,
+all embedding tables and tokenizer have now been fully downloaded and hashed.
+Alternative precision artifacts remain audit-only.
 
 ## Artifact findings
 
@@ -45,14 +46,17 @@ inventory SHA-256 values. Structural checks using `onnx.checker` found:
 None of those external-data files appears in the pinned repository inventory.
 FP32 graphs cannot constitute a complete offline bundle. FP16 speaker has no
 external initializers, but fails topological validation. Do not silently patch
-graphs or claim runtime compatibility from file extensions. INT8 and remaining
-FP16 graphs have not been validated; these findings do not establish that every
-possible precision combination is unusable.
+graphs or claim runtime compatibility from file extensions. The INT8 graphs all pass ONNX structural checking and execute successfully
+using SonicBoom’s existing Rust `ort` rc.13 dependency (ORT build rel-1.28.0,
+commit da9b5e3). The opt-in `qwen_gguf_artifacts` integration test runs speaker
+encoding, codec encoding of one second of test signal (13 frames), and decoding
+to 24,960 finite PCM samples. This is tensor-contract validation, not speech
+quality or voice-cloning validation. Remaining FP16 graphs are unvalidated.
 
 ## Observed ONNX contracts
 
-The downloaded FP32 graphs use default-domain opset 18. These are graph-level
-observations, not successful ONNX Runtime session or operator execution tests.
+The downloaded FP32 graphs use default-domain opset 18. The FP32 observations are graph-level only; the selected INT8 graphs use the
+same observed input/output types and passed the CPU execution test.
 
 | Component | Inputs | Outputs |
 | --- | --- | --- |
@@ -88,11 +92,13 @@ Source review of `inference/{assets,encoder,prompt_builder,predictor,llama}.py`:
    seed handling for both samplers, and final flush against actual reference audio.
 
 Reference `llama.py` declares a ctypes ABI targeting llama.cpp **b10621** and
-loads ggml/ggml-base/llama shared libraries in-process. That label is not an
-immutable reviewed llama.cpp source pin. Bind against headers from the exact
+loads ggml/ggml-base/llama shared libraries in-process. The tag resolves to immutable commit
+`c1d0e7a004015f23bc0233470b747b596f29b264`, now pinned as a Git submodule. Bind against headers from the exact
 chosen revision; do not copy ctypes struct layouts into Rust against an arbitrary
-system library. Native GGUF metadata, tensor quantization, model loading,
-embedding extraction and tokenizer parity still require real artifact tests.
+system library. Downloaded GGUF metadata confirms talker architecture `qwen3vl`, embedding
+dimension 2048, acoustic vocabulary 3072, and predictor architecture `qwen3`,
+embedding dimension 1024, acoustic vocabulary 30720. Native loading, hidden
+state extraction and text tokenizer parity still require real artifact tests.
 
 ICL and zero-shot speaker-only paths exist in source; neither cloning mode has
 passed SonicBoom real-model validation. CustomVoice, VoiceDesign and arbitrary
@@ -127,9 +133,9 @@ and `Cargo.toml` on main:
 shader operations, offload, speed, output correctness or ONNX acceleration.
 No benchmark numbers are available for this backend.
 
-Before Phase 2: validate a complete usable precision set (including external
-data), download/hash selected GGUF/embedding/tokenizer artifacts, inspect GGUF
-metadata and pin/test the compatible llama.cpp ABI. Then validate native CPU
+The complete INT8 precision set, selected GGUF/embedding/tokenizer hashes and
+GGUF metadata have now been inspected. Prototype native ABI validation is in
+progress against the pinned headers. Next validate native CPU
 speech before lifecycle, Vulkan and UI claims. Do not open the final acceptance
 PR until the requested real-model, hardware and platform gates pass.
 
