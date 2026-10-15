@@ -1,7 +1,8 @@
 # SonicBoom MSVC runtime patch
 
 Vendored from the crates.io esaxx-rs 0.1.10 distribution, Apache-2.0.
-Original LICENSE and source notices are preserved. upstream-source.sha256.json
+Original LICENSE and source notices are preserved; NOTICE also carries the
+native header MIT notices into binary packages. upstream-source.sha256.json
 records original file hashes. Only build.rs is modified: both static_crt(true)
 calls become static_crt(false), matching Rust MSVC defaults, knf-rs-sys 0.3.2
 and ONNX Runtime. Do not enable +crt-static for production Windows builds.

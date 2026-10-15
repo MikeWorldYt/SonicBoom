@@ -14,6 +14,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 ASSETS = ('sonicboom-linux-x86_64.tar.gz', 'sonicboom-windows-x86_64.zip')
+DIRECTML_SHA256 = '9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1'
 
 
 def digest(path):
@@ -74,8 +75,7 @@ def package(target, output):
                     raise RuntimeError('Native ORT distribution changed: update pinned licenses/onnxruntime notices')
                 if windows:
                     dml = stage / 'DirectML.dll'
-                    expected_dml = '9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1'
-                    if not dml.is_file() or digest(dml) != expected_dml:
+                    if not dml.is_file() or digest(dml) != DIRECTML_SHA256:
                         raise RuntimeError('Expected pinned DirectML 1.15.4 DLL beside executable; check ort/copy-dylibs and native notices')
                     shutil.copytree(ROOT / 'licenses/directml', notices / 'directml')
             if pkg.get('license_file'):

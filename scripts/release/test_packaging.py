@@ -1,4 +1,5 @@
 """Regression tests for final-byte checksums and archive safety properties."""
+import hashlib
 import json
 from pathlib import Path
 import tarfile
@@ -26,6 +27,40 @@ class PackagingTests(unittest.TestCase):
             (directory / 'unexpected-secret').write_bytes(b'never upload')
             with self.assertRaises(RuntimeError):
                 package.checksums(directory)
+
+    def test_windows_requires_the_verified_runtime_and_its_own_notices(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name in ('docs', 'licenses/onnxruntime', 'native/build/download'):
+                (root / name).mkdir(parents=True)
+            for name in ('LICENSE', 'README.md', 'docs/RELEASING.md', 'models.sha256.json'):
+                (root / name).write_text('documentation')
+            target = 'x86_64-pc-windows-msvc'
+            (root / 'native/build/download/dist.tsv').write_text(target + '\tdirectml\thttps://example.invalid/ms@1.28.0/windows\thash\n')
+            build = root / 'target' / target / 'release'
+            build.mkdir(parents=True)
+            (build / 'SonicBoom.exe').write_bytes(b'executable fixture')
+            metadata = {'packages': [{'id': 'ort-sys', 'name': 'ort-sys', 'version': 'fixture',
+                                     'manifest_path': str(root / 'native/Cargo.toml')}]}
+            def output(args, **kwargs):
+                return json.dumps(metadata).encode() if args[0] == 'cargo' else 'build-input\n'
+            with patch.object(package, 'ROOT', root), patch.object(package.subprocess, 'check_output', side_effect=output):
+                with self.assertRaises(RuntimeError):
+                    package.package(target, root / 'out')
+                dll = build / 'DirectML.dll'
+                dll.write_bytes(b'wrong runtime version')
+                with self.assertRaises(RuntimeError):
+                    package.package(target, root / 'out')
+                fixture_hash = hashlib.sha256(dll.read_bytes()).hexdigest()
+                with patch.object(package, 'DIRECTML_SHA256', fixture_hash):
+                    with self.assertRaises(FileNotFoundError):
+                        package.package(target, root / 'out')
+                    (root / 'licenses/directml').mkdir()
+                    (root / 'licenses/directml/LICENSE.txt').write_text('runtime terms fixture')
+                    package.package(target, root / 'out')
+            with zipfile.ZipFile(root / 'out' / package.ASSETS[1]) as archive:
+                self.assertIn('DirectML.dll', archive.namelist())
+                self.assertIn('licenses/directml/LICENSE.txt', archive.namelist())
 
     def test_archives_are_deterministic_allowlisted_and_case_correct(self):
         with tempfile.TemporaryDirectory() as temp:
