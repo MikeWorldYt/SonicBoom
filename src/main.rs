@@ -590,8 +590,9 @@ fn run_tao_tray(server_err_rx: std::sync::mpsc::Receiver<String>) -> anyhow::Res
     const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.png");
     let icon = match image::load_from_memory(ICON_BYTES).map(|i| i.into_rgba8()) {
         Ok(image) => {
+            let (width, height) = image.dimensions();
             let rgba = image.into_raw();
-            tray_icon::Icon::from_rgba(rgba, image.width(), image.height()).ok()
+            tray_icon::Icon::from_rgba(rgba, width, height).ok()
         }
         Err(e) => {
             tracing::warn!("Failed to load embedded tray icon: {e}");
