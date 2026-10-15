@@ -15,10 +15,7 @@
     "types": [
       "vite/client",
       "node"
-    ],
-    "noImplicitAny": false,
-    "strictNullChecks": false,
-    "useUnknownInCatchVariables": false
+    ]
   },
   "include": [
     "src/**/*.ts",
