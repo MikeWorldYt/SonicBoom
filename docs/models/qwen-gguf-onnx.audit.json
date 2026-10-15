@@ -1,0 +1,263 @@
+{
+  "revision": "0a36d692562f83a862466b0bf8c12154ddf1965d",
+  "results": [
+    {
+      "path": "qwen3_tts_codec_encoder.fp32.onnx",
+      "sha256": "7fad836e4c7e6474bf5f11c172e5d8487c138bb31377755f3bedb2ff9f1c6073",
+      "integrity_ok": true,
+      "opsets": {
+        "": 18
+      },
+      "input": [
+        {
+          "name": "input_values",
+          "type": "FLOAT, batch_sizexsequence_length"
+        }
+      ],
+      "output": [
+        {
+          "name": "audio_codes",
+          "type": "INT64, batch_sizex(((sequence_length - 1)//1920)) + 1x16"
+        }
+      ],
+      "external_data": [
+        "qwen3_tts_codec_encoder.fp32.onnx.data"
+      ],
+      "checker_ok": false,
+      "error": "Data of TensorProto ( tensor name: cnn_encoder.layers.0.conv.weight) should be stored in MODEL_DIR/qwen3_tts_codec_encoder.fp32.onnx.data, but it is not regular file."
+    },
+    {
+      "path": "qwen3_tts_decoder.fp32.onnx",
+      "sha256": "8eccd62965bbb97f266de88dd8034f6452d0f491e5aad0a00af8922c76406873",
+      "integrity_ok": true,
+      "opsets": {
+        "": 18
+      },
+      "input": [
+        {
+          "name": "audio_codes",
+          "type": "INT64, batchxnum_framesx16"
+        },
+        {
+          "name": "pre_conv_history",
+          "type": "FLOAT, batchx512xpre_conv_seq"
+        },
+        {
+          "name": "latent_buffer",
+          "type": "FLOAT, batchx1024xlatent_seq"
+        },
+        {
+          "name": "conv_history",
+          "type": "FLOAT, batchx1024xconv_seq"
+        },
+        {
+          "name": "is_last",
+          "type": "FLOAT, 1"
+        },
+        {
+          "name": "past_key_0",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_key_1",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_key_2",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_key_3",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_key_4",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_key_5",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_key_6",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_key_7",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_0",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_1",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_2",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_3",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_4",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_5",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_6",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        },
+        {
+          "name": "past_value_7",
+          "type": "FLOAT, batchx16xpast_seqx64"
+        }
+      ],
+      "output": [
+        {
+          "name": "final_wav",
+          "type": "FLOAT, batchx1920*latent_seq + 1920*num_frames"
+        },
+        {
+          "name": "valid_samples",
+          "type": "INT64, 1"
+        },
+        {
+          "name": "next_pre_conv_history",
+          "type": "FLOAT, batchx512xu0"
+        },
+        {
+          "name": "next_latent_buffer",
+          "type": "FLOAT, batchx1024xu44"
+        },
+        {
+          "name": "next_conv_history",
+          "type": "FLOAT, batchx1024x4"
+        },
+        {
+          "name": "next_key_0",
+          "type": "FLOAT, batchx16xu4x64"
+        },
+        {
+          "name": "next_key_1",
+          "type": "FLOAT, batchx16xu9x64"
+        },
+        {
+          "name": "next_key_2",
+          "type": "FLOAT, batchx16xu14x64"
+        },
+        {
+          "name": "next_key_3",
+          "type": "FLOAT, batchx16xu19x64"
+        },
+        {
+          "name": "next_key_4",
+          "type": "FLOAT, batchx16xu24x64"
+        },
+        {
+          "name": "next_key_5",
+          "type": "FLOAT, batchx16xu29x64"
+        },
+        {
+          "name": "next_key_6",
+          "type": "FLOAT, batchx16xu34x64"
+        },
+        {
+          "name": "next_key_7",
+          "type": "FLOAT, batchx16xu39x64"
+        },
+        {
+          "name": "next_value_0",
+          "type": "FLOAT, batchx16xu6x64"
+        },
+        {
+          "name": "next_value_1",
+          "type": "FLOAT, batchx16xu11x64"
+        },
+        {
+          "name": "next_value_2",
+          "type": "FLOAT, batchx16xu16x64"
+        },
+        {
+          "name": "next_value_3",
+          "type": "FLOAT, batchx16xu21x64"
+        },
+        {
+          "name": "next_value_4",
+          "type": "FLOAT, batchx16xu26x64"
+        },
+        {
+          "name": "next_value_5",
+          "type": "FLOAT, batchx16xu31x64"
+        },
+        {
+          "name": "next_value_6",
+          "type": "FLOAT, batchx16xu36x64"
+        },
+        {
+          "name": "next_value_7",
+          "type": "FLOAT, batchx16xu41x64"
+        }
+      ],
+      "external_data": [
+        "qwen3_tts_decoder.fp32.onnx.data"
+      ],
+      "checker_ok": false,
+      "error": "Data of TensorProto ( tensor name: part1.quantizer.rvq_first.output_proj.weight) should be stored in MODEL_DIR/qwen3_tts_decoder.fp32.onnx.data, but it is not regular file."
+    },
+    {
+      "path": "qwen3_tts_speaker_encoder.fp16.onnx",
+      "sha256": "421c0b8c09a0cee29742e141a76621ab3eaf98f68ca96403f00396b250cb3aac",
+      "integrity_ok": true,
+      "opsets": {
+        "": 18
+      },
+      "input": [
+        {
+          "name": "mels",
+          "type": "FLOAT16, batch_sizexsequence_lengthx128"
+        }
+      ],
+      "output": [
+        {
+          "name": "spk_emb",
+          "type": "FLOAT16, batch_sizex2048"
+        }
+      ],
+      "external_data": [],
+      "checker_ok": false,
+      "error": "Nodes in a graph must be topologically sorted, however input 'masked_fill_cast_to_fp32' of node: \nname: node_softmax OpType: Softmax\n is not output of any previous nodes."
+    },
+    {
+      "path": "qwen3_tts_speaker_encoder.fp32.onnx",
+      "sha256": "aaef9c6b8c4d077330cb4f6165e74ae8a3aa8ea33f56ab52c0e270b133122fb8",
+      "integrity_ok": true,
+      "opsets": {
+        "": 18
+      },
+      "input": [
+        {
+          "name": "mels",
+          "type": "FLOAT, batch_sizexsequence_lengthx128"
+        }
+      ],
+      "output": [
+        {
+          "name": "spk_emb",
+          "type": "FLOAT, batch_sizex2048"
+        }
+      ],
+      "external_data": [
+        "qwen3_tts_speaker_encoder.fp32.onnx.data"
+      ],
+      "checker_ok": false,
+      "error": "Data of TensorProto ( tensor name: speaker_encoder.blocks.0.conv.weight) should be stored in MODEL_DIR/qwen3_tts_speaker_encoder.fp32.onnx.data, but it is not regular file."
+    }
+  ]
+}
