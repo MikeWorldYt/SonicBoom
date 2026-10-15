@@ -148,6 +148,15 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(code);
     }
 
+    // Bounded packaging probe: use the real server and native runtime without
+    // a desktop session or network model downloads. Configuration stays isolated
+    // by the caller; never allow this diagnostic mode on a public listener.
+    if args.get(1).is_some_and(|arg| arg == "--smoke-test") {
+        let config_path = paths::resolve_config_path();
+        prepare_config(&config_path).map_err(anyhow::Error::msg)?;
+        return tokio::runtime::Runtime::new()?.block_on(run_server_inner(config_path, true));
+    }
+
     // First-run detection: migrate a legacy `.env` or
     // bootstrap a fresh `config.toml`.
     let config_path = paths::resolve_config_path();
@@ -650,6 +659,10 @@ fn run_tao_tray(server_err_rx: std::sync::mpsc::Receiver<String>) -> anyhow::Res
 }
 
 async fn run_server(config_path: std::path::PathBuf) -> anyhow::Result<()> {
+    run_server_inner(config_path, false).await
+}
+
+async fn run_server_inner(config_path: std::path::PathBuf, smoke: bool) -> anyhow::Result<()> {
     // Load + validate the configuration (bootstrap
     // overrides for first-run are applied inside
     // `ConfigManager::load`).
@@ -672,13 +685,23 @@ async fn run_server(config_path: std::path::PathBuf) -> anyhow::Result<()> {
         .unwrap_or_else(paths::data_dir);
 
     #[cfg(feature = "gui")]
-    ensure_gui_port(&config, &data_dir).await;
+    if !smoke {
+        ensure_gui_port(&config, &data_dir).await;
+    }
 
     // Secrets live outside config.toml.
     let secrets: Arc<dyn secrets::SecretStore> =
         Arc::new(secrets::FileSecretStore::new(data_dir.join("secrets.json")));
 
     let current = config.get().await;
+    if smoke {
+        anyhow::ensure!(
+            current.server.bind.is_loopback(),
+            "smoke test requires a loopback bind"
+        );
+        // Force native ONNX Runtime initialization, even with no model loaded.
+        ort::environment::Environment::current()?;
+    }
 
     // Fail closed on completed installs without a valid
     // admin password (headless/server compatibility).
@@ -827,7 +850,9 @@ async fn run_server(config_path: std::path::PathBuf) -> anyhow::Result<()> {
     // Model download + load runs in the background.
     let hf_token = secrets::load_hf_token(secrets.as_ref())
         .map_err(|e| anyhow::anyhow!("secret store error: {e}"))?;
-    model_service.start_initial_load(&current.model, hf_token.clone());
+    if !smoke {
+        model_service.start_initial_load(&current.model, hf_token.clone());
+    }
     // Optional providers download + load in parallel with the HTTP server
     // when enabled (deduplicated background tasks; progress via
     // `/api/providers/{id}/status`). Supertonic is unaffected.
@@ -837,7 +862,9 @@ async fn run_server(config_path: std::path::PathBuf) -> anyhow::Result<()> {
             map_qwen_config(&current.providers.qwen3),
             map_gpt_config(&current.providers.gpt_sovits),
         );
-        provider_pool.kick_ensure_if_needed(hf_token);
+        if !smoke {
+            provider_pool.kick_ensure_if_needed(hf_token);
+        }
     }
 
     // Runtime reconfiguration: every committed configuration
@@ -861,12 +888,16 @@ async fn run_server(config_path: std::path::PathBuf) -> anyhow::Result<()> {
     let _watcher = config::watcher::start_watching(Arc::clone(&config));
     server.start().await?;
     #[cfg(feature = "gui")]
-    if !current.setup_complete {
+    if !smoke && !current.setup_complete {
         open_application();
     }
 
     // Wait for Ctrl+C / SIGTERM, then stop the listener.
-    shutdown_signal().await;
+    if smoke {
+        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+    } else {
+        shutdown_signal().await;
+    }
     app_state.inference_gate.jobs.cancel_all();
     server.stop().await?;
 
