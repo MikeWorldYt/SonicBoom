@@ -5,7 +5,6 @@ import gzip
 import hashlib
 import io
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -18,7 +17,8 @@ ASSETS = ('sonicboom-linux-x86_64.tar.gz', 'sonicboom-windows-x86_64.zip')
 
 
 def digest(path):
-    return hashlib.file_digest(path.open('rb'), 'sha256').hexdigest()
+    with path.open('rb') as source:
+        return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
 def package(target, output):
@@ -51,17 +51,30 @@ def package(target, output):
             '--features', 'gui', '--filter-platform', target], cwd=ROOT))
         notices = stage / 'licenses'
         notices.mkdir()
+        native_notices = ROOT / 'licenses/onnxruntime'
+        if native_notices.is_dir():
+            shutil.copytree(native_notices, notices / 'onnxruntime')
         inventory = []
         for pkg in sorted(metadata['packages'], key=lambda p: p['id']):
             home = Path(pkg['manifest_path']).parent
             destination = notices / f"{pkg['name']}-{pkg['version']}"
             files = [p for p in home.iterdir() if p.is_file() and
                      p.name.upper().startswith(('LICENSE', 'LICENCE', 'COPYING', 'NOTICE', 'AUTHORS'))]
+            # Preserve notices embedded in bundled C/C++ source trees too.
+            if pkg['name'] in ('knf-rs-sys', 'opusic-sys', 'esaxx-rs'):
+                files += [p for p in home.rglob('*') if p.is_file() and
+                          p.name.upper().startswith(('LICENSE', 'LICENCE', 'COPYING', 'NOTICE'))]
+            if pkg['name'] == 'ort-sys':
+                distribution = (home / 'build/download/dist.tsv').read_text()
+                cpu = [line for line in distribution.splitlines() if line.startswith(target + '\tnone\t')]
+                if len(cpu) != 1 or '/ms@1.28.0/' not in cpu[0] or not native_notices.is_dir():
+                    raise RuntimeError('Native ORT distribution changed: update pinned licenses/onnxruntime notices')
             if pkg.get('license_file'):
                 files.append(home / pkg['license_file'])
             for source in sorted(set(files)):
-                destination.mkdir(exist_ok=True)
-                shutil.copyfile(source, destination / source.name)
+                notice = destination / source.relative_to(home)
+                notice.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, notice)
             inventory.append({k: pkg.get(k) for k in ('name', 'version', 'license', 'repository', 'source')})
         (notices / 'dependencies.json').write_text(json.dumps(inventory, indent=2) + '\n')
         # Native ORT distributions can carry additional notices outside the Rust

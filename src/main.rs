@@ -268,6 +268,7 @@ fn prepare_config(config_path: &std::path::Path) -> Result<PrepareOutcome, Strin
 /// - Otherwise a taken `PORT` falls through to a nearby free port (gui
 ///   only; headless builds keep fail-closed binding), recorded together
 ///   with the pid in `<data>/sonicboom.lock` for discovery.
+///
 /// The chosen port is applied as a runtime override (the file is not
 /// rewritten) and always reported loudly: the service must never silently
 /// move ports.
@@ -276,17 +277,16 @@ async fn ensure_gui_port(config: &ConfigManager, data_dir: &std::path::Path) {
     let requested: u16 = config.get().await.server.port;
     let lock_path = data_dir.join(GUI_LOCK_FILE);
 
-    if let Ok(text) = std::fs::read_to_string(&lock_path) {
-        if let Some((old_pid, old_port)) = parse_lock_content(&text) {
-            if probe_port(old_port) == PortProbe::HttpOk {
-                eprintln!(
-                    "SonicBoom is already running (pid {old_pid}) at http://127.0.0.1:{old_port} \
+    if let Ok(text) = std::fs::read_to_string(&lock_path)
+        && let Some((old_pid, old_port)) = parse_lock_content(&text)
+        && probe_port(old_port) == PortProbe::HttpOk
+    {
+        eprintln!(
+            "SonicBoom is already running (pid {old_pid}) at http://127.0.0.1:{old_port} \
                      (see '{}'). Stop it first, or delete that file if it is stale and restart.",
-                    lock_path.display()
-                );
-                std::process::exit(1);
-            }
-        }
+            lock_path.display()
+        );
+        std::process::exit(1);
     }
 
     let Some(port) = select_gui_port(requested) else {

@@ -56,6 +56,8 @@ jobs:
         run: cargo test --locked --features gui --target ${{ matrix.target }}
       - name: Build release with GUI
         run: cargo build --release --locked --features gui --target ${{ matrix.target }}
+      - name: Test archive and checksum guards
+        run: python -m unittest discover -s scripts/release -p "test_*.py"
       - name: Package and inspect archive
         run: python scripts/release/package.py --target ${{ matrix.target }}
       - name: Smoke-test extracted package
@@ -109,6 +111,7 @@ jobs:
             artifacts/sonicboom-windows-x86_64.zip
             artifacts/SHA256SUMS
           fail_on_unmatched_files: true
+          overwrite_files: false
           generate_release_notes: true
           draft: true
           prerelease: false

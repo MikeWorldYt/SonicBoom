@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Extract and run the shipped archive in an isolated, model-free environment."""
 import argparse
-import json
 import os
 from pathlib import Path
-import signal
 import socket
 import subprocess
 import tarfile
@@ -29,18 +27,21 @@ def smoke(archive):
         binary = app / ('SonicBoom.exe' if windows else 'SonicBoom')
         assert binary.is_file() and binary.stat().st_size > 0, binary
         assert (app / 'licenses/dependencies.json').is_file()
-        env = os.environ.copy()
-        # No inherited credentials/configuration/ORT overrides enter the probe.
-        for key in list(env):
-            if key.startswith(('SONICBOOM_', 'ORT_', 'HF_', 'QWEN', 'GPT_SOVITS')) or key in ('PORT', 'BIND_ADDR'):
-                del env[key]
+        # Keep only OS process-loader necessities, never application settings,
+        # credentials, user models, proxy configuration or developer DLL paths.
+        keep = {'SYSTEMROOT', 'WINDIR', 'PATH', 'TEMP', 'TMP', 'COMSPEC',
+                'PATHEXT', 'SYSTEMDRIVE'}
+        env = {key: value for key, value in os.environ.items() if key.upper() in keep}
+        env['XDG_CONFIG_HOME'] = str(root / 'config')
+        env['APPDATA'] = str(root / 'appdata')
+        env['USERPROFILE'] = str(root)
         env['SONICBOOM_CONFIG'] = str(root / 'data/config.toml')
         env['SONICBOOM_ADMIN_PW'] = 'local-smoke-only-password-12345'
         env['LD_LIBRARY_PATH'] = str(app)
         if windows:
             # Deliberately exclude developer-tool DLL directories. The supported
             # system MSVC redistributable must resolve alongside packaged DLLs.
-            env['PATH'] = str(app) + os.pathsep + str(Path(env['SystemRoot']) / 'System32')
+            env['PATH'] = str(app) + os.pathsep + str(Path(os.environ['SystemRoot']) / 'System32')
             import ctypes
             for dll in app.glob('*.dll'):
                 ctypes.WinDLL(str(dll))
@@ -76,8 +77,8 @@ def smoke(archive):
                 while time.monotonic() < deadline and process.poll() is None:
                     try:
                         with opener.open(f'http://127.0.0.1:{port}/health', timeout=1) as response:
-                            payload = json.load(response)
-                            assert response.status == 200 and isinstance(payload, dict)
+                            payload = response.read()
+                            assert response.status == 200 and payload == b'OK'
                             healthy = True
                             break
                     except (OSError, ValueError):
@@ -88,7 +89,8 @@ def smoke(archive):
                 code = process.wait(timeout=25)
                 if code != 0:
                     raise RuntimeError(f'Packaged server exited with {code}')
-                if 'Server shut down gracefully.' not in log.read_text():
+                server_logs = log.read_text() + ''.join(p.read_text() for p in (root / 'data/logs').glob('*') if p.is_file())
+                if 'Server shut down gracefully.' not in server_logs:
                     raise RuntimeError('Missing graceful shutdown confirmation')
                 if list((root / 'data/models').glob('**/*')):
                     raise RuntimeError('Model-free probe unexpectedly created model files')
