@@ -802,9 +802,12 @@ impl GptSovitsProvider {
                 "gpt-sovits bundle is verifying cache ({:.0}% complete)",
                 state.download_progress * 100.0
             ))),
-            Some(state) if let Some(detail) = state.load_error.clone() => Err(
-                ProviderError::inference_failed(format!("gpt-sovits model unavailable: {detail}")),
-            ),
+            Some(state) => match &state.load_error {
+                Some(detail) => Err(ProviderError::inference_failed(format!(
+                    "gpt-sovits model unavailable: {detail}"
+                ))),
+                None => Err(ProviderError::loading("gpt-sovits model is not loaded yet")),
+            },
             _ => Err(ProviderError::loading("gpt-sovits model is not loaded yet")),
         }
     }

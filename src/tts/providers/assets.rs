@@ -33,9 +33,14 @@ impl PinnedFile {
 fn safe_join(model_dir: &Path, rel: &str) -> Result<PathBuf, ProviderError> {
     let rel_path = Path::new(rel);
     if rel_path.is_absolute()
-        || rel_path
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
+        || rel_path.components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
     {
         return Err(ProviderError::invalid_voice(format!(
             "refusing to install asset outside the model directory: '{rel}'"
@@ -558,6 +563,17 @@ mod tests {
         assert!(safe_join(&dir, "/etc/passwd").is_err());
         assert!(safe_join(&dir, "../evil.onnx").is_err());
         assert!(safe_join(&dir, "a/../../evil.onnx").is_err());
+        // Windows rooted paths are not necessarily absolute (`\asset` has
+        // no drive); joining them can still escape the model directory.
+        #[cfg(windows)]
+        for attack in [
+            r"\evil.onnx",
+            r"C:evil.onnx",
+            r"C:\evil.onnx",
+            r"\\host\share\evil.onnx",
+        ] {
+            assert!(safe_join(&dir, attack).is_err(), "accepted {attack}");
+        }
         assert!(safe_join(&dir, "speech_tokenizer/model.safetensors").is_ok());
     }
 
