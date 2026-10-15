@@ -12,8 +12,8 @@ use crate::config::ConfigManager;
 /// Add defense-in-depth security headers to responses.
 ///
 /// - `X-Content-Type-Options: nosniff` on everything.
-/// - `Referrer-Policy: no-referrer` so bearer tokens in URLs (none are used)
-///   or page URLs never leak via navigation.
+/// - `Referrer-Policy: same-origin` keeps URLs private across origins while
+///   preserving browser Origin headers for same-origin admin form posts.
 /// - `X-Frame-Options: DENY` plus CSP `frame-ancestors 'none'` on HTML pages
 ///   to prevent clickjacking of the admin UI.
 /// - A strict CSP on HTML pages. All JavaScript and CSS live in same-origin
@@ -42,7 +42,7 @@ pub async fn security_headers(
     }
     headers.insert(
         header::REFERRER_POLICY,
-        HeaderValue::from_static("no-referrer"),
+        HeaderValue::from_static("same-origin"),
     );
 
     let is_html = headers
@@ -51,12 +51,17 @@ pub async fn security_headers(
         .is_some_and(|ct| ct.contains("text/html"));
     if is_html {
         headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-        headers.insert(
+        if crate::web::static_files::dev_mode() {
+            headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws://localhost:5173; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"));
+        } else {
+            headers.insert(
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(
                 "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
             ),
         );
+        }
     }
     response
 }
@@ -190,7 +195,7 @@ mod tests {
             headers.get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
             "nosniff"
         );
-        assert_eq!(headers.get(header::REFERRER_POLICY).unwrap(), "no-referrer");
+        assert_eq!(headers.get(header::REFERRER_POLICY).unwrap(), "same-origin");
         assert_eq!(headers.get(header::X_FRAME_OPTIONS).unwrap(), "DENY");
         let csp = headers
             .get(header::CONTENT_SECURITY_POLICY)

@@ -1,6 +1,7 @@
+body.setup {
 
-  :root { color-scheme: light dark; }
-  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  & { color-scheme: light dark; }
+  & { font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
          max-width: 44rem; margin: 2rem auto; padding: 0 1rem; }
   fieldset { border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
              border-radius: .5rem; margin-bottom: 1rem; }
@@ -24,3 +25,5 @@
 [hidden] { display: none !important; }
 
 input[type="radio"] { width: auto; }
+
+}

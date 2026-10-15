@@ -12,7 +12,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(index::get_index))
         .route("/health", get(index::get_health))
         .route("/ready", get(index::get_ready))
-        .route("/static/{file}", get(static_files::get_static))
+        .route("/assets/{*file}", get(static_files::get_static))
         // First-run setup wizard (bootstrap mode:
         // loopback-only, no API bearer auth).
         .route("/setup", get(crate::setup::get_setup))

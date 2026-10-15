@@ -1,20 +1,21 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SonicBoom TTS</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230066cc'/%3E%3Cpath d='M3 6v4h2l3 2V4L5 6H3z' fill='white'/%3E%3Cpath d='M10 5.5a3.5 3.5 0 010 5M11.5 4a6 6 0 010 8' stroke='white' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/static/index.css">
-</head>
-<body data-model-ready="MODEL_READY_JS">
+<script setup lang="ts">
+import { onMounted, onUnmounted } from 'vue';
+import { startHome } from '../controllers/home';
+import type { HomeData } from '../types';
+const { data } = defineProps<{ data: HomeData }>();
+let stop: (() => void) | undefined;
+onMounted(() => { stop = startHome(data.modelReady, data.providers); });
+onUnmounted(() => stop?.());
+</script>
+<template>
+
 <div class="page">
   <header class="page-header">
     <div>
       <h1>SonicBoom TTS</h1>
       <p class="subtitle">Synthesize speech, check voice engines, and tune the server.</p>
     </div>
-    <div class="model-status" id="modelStatus" STATUS_HIDDEN>STATUS_MSG</div>
+    <div class="model-status" id="modelStatus" :hidden="!data.status">{{ data.status }}</div>
   </header>
 
   <div class="layout">
@@ -39,8 +40,8 @@
             <label for="model">Model</label>
             <button type="button" class="btn-inline" id="modelRefresh" title="Reload engines, voices, and languages">Refresh</button>
           </div>
-          <!-- Options are rendered live from /api/providers in index.js. -->
-          <select id="model" VOICE_DISABLED>
+          <!-- Options are rendered live from /api/providers in the home controller. -->
+          <select id="model" :disabled="!data.modelReady">
             <option value="supertonic-3">supertonic-3 (built-in voices)</option>
           </select>
           <p class="muted" id="modelHint"></p>
@@ -49,18 +50,18 @@
         <div class="row">
           <div class="field">
             <label for="voice">Voice</label>
-            <select id="voice" VOICE_DISABLED>
-              VOICE_OPTIONS
+            <select id="voice" :disabled="!data.modelReady">
+              <option v-for="voice in data.voices" :key="voice" :value="voice">{{ voice }}</option>
             </select>
           </div>
           <div class="field">
             <label for="lang">Language</label>
-            <!-- Options are rendered from the LANGUAGES const in index.js. -->
-            <select id="lang" VOICE_DISABLED></select>
+            <!-- Options are rendered from the LANGUAGES const in the home controller. -->
+            <select id="lang" :disabled="!data.modelReady"></select>
           </div>
         </div>
 
-        <button id="btn" class="primary" BTN_DISABLED>Generate speech</button>
+        <button id="btn" class="primary" :disabled="!data.modelReady">Generate speech</button>
         <button type="button" id="cancelGeneration" class="btn-secondary" hidden>Cancel generation</button>
         <div id="status" role="status" aria-live="polite"></div>
         <a id="downloadAudio" download="sonicboom.wav" hidden>Download generated audio</a>
@@ -72,7 +73,7 @@
           <h2 id="providers-heading">Voice engines</h2>
           <span class="hint">Live status from the server</span>
         </div>
-        <div class="provider-list">PROVIDERS_ROWS</div>
+        <div class="provider-list"></div>
         <details><summary>Advanced inference diagnostics</summary><pre id="inferenceDiagnostics">Load provider status to view diagnostics.</pre></details>
         <p class="muted">Voice cloning (Qwen3-TTS, GPT-SoVITS) needs an API token and a reference recording uploaded via <code>POST /api/voices/clones</code>. See <code>docs/providers.md</code> for setup. Use Enable on a card to download and start an engine — no file edits or restarts needed.</p>
       </section>
@@ -173,6 +174,5 @@
   </p>
 </div>
 
-<script src="/static/index.js" defer></script>
-</body>
-</html>
+
+</template>

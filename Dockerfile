@@ -25,6 +25,13 @@
 # The builder is Ubuntu 24.04 — the same distro as the runtime stages — so
 # binaries can never link against a newer glibc than the runtime provides.
 # ============================================================================
+FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS frontend
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
 FROM ubuntu:24.04@sha256:69cecf4bbf72d2d44a9eef1b71fb98c7fb973d78af11399deccef19beb008ad9 AS builder
 
 WORKDIR /build
@@ -53,8 +60,10 @@ COPY vendor ./vendor
 RUN cargo fetch --locked
 
 COPY src ./src
-COPY templates ./templates
-COPY static ./static
+COPY build.rs ./build.rs
+COPY frontend/index.html ./frontend/index.html
+COPY --from=frontend /frontend/dist ./frontend/dist
+ENV SONICBOOM_FRONTEND_PREBUILT=1
 COPY models.sha256.json ./models.sha256.json
 
 # Cloning backends ride along so every engine works out of the box.
@@ -107,8 +116,10 @@ COPY vendor ./vendor
 RUN cargo fetch --locked
 
 COPY src ./src
-COPY templates ./templates
-COPY static ./static
+COPY build.rs ./build.rs
+COPY frontend/index.html ./frontend/index.html
+COPY --from=frontend /frontend/dist ./frontend/dist
+ENV SONICBOOM_FRONTEND_PREBUILT=1
 COPY models.sha256.json ./models.sha256.json
 
 RUN cargo build --release --locked
@@ -155,8 +166,10 @@ COPY vendor ./vendor
 RUN cargo fetch --locked
 
 COPY src ./src
-COPY templates ./templates
-COPY static ./static
+COPY build.rs ./build.rs
+COPY frontend/index.html ./frontend/index.html
+COPY --from=frontend /frontend/dist ./frontend/dist
+ENV SONICBOOM_FRONTEND_PREBUILT=1
 COPY models.sha256.json ./models.sha256.json
 
 # The `cuda` feature enables the ONNX Runtime CUDA execution provider.

@@ -7,8 +7,9 @@
 !vendor/**
 !src/
 !src/**
-!templates/
-!templates/**
-!static/
-!static/**
+!build.rs
+!frontend/
+!frontend/**
+frontend/node_modules
+frontend/dist
 !models.sha256.json

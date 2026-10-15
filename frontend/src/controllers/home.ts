@@ -1,3 +1,6 @@
+import type { ProviderCardData } from '../types';
+import { element } from '../dom';
+export function startHome(modelReady: boolean, providers: ProviderCardData[]) {
 // SonicBoom home page (CSP: no inline script, so everything lives here).
 //
 // Layout of this file:
@@ -12,7 +15,7 @@
 // --- 1. Constants -----------------------------------------------------------
 
 // Backend state is exposed via data attributes (CSP has no unsafe-inline).
-const MODEL_READY = document.body.dataset.modelReady === 'true';
+const MODEL_READY = modelReady;
 
 const App = Object.freeze({
   modelReloadMs: 5000,
@@ -127,7 +130,7 @@ function el(tag, { cls = '', text = '', attrs = {} } = {}) {
 }
 
 /** One <option> for a <select>. */
-function optionEl(value, label) {
+function optionEl(value: string, label = value) {
   return el('option', { text: label ?? value, attrs: { value } });
 }
 
@@ -289,21 +292,21 @@ function settingControl(path, meta, title, current, onEdit) {
 
 // --- DOM cache --------------------------------------------------------------
 
-const tokenGroup = document.getElementById('tokenGroup');
-const apiTokenInput = document.getElementById('apiToken');
-const textInput = document.getElementById('text');
-const charCount = document.getElementById('charCount');
-const voiceSelect = document.getElementById('voice');
-const langSelect = document.getElementById('lang');
-const generateBtn = document.getElementById('btn');
-const statusDiv = document.getElementById('status');
-const audioPlayer = document.getElementById('player');
+const tokenGroup = element('tokenGroup');
+const apiTokenInput = element('apiToken');
+const textInput = element('text');
+const charCount = element('charCount');
+const voiceSelect = element('voice');
+const langSelect = element('lang');
+const generateBtn = element('btn');
+const statusDiv = element('status');
+const audioPlayer = element('player');
 
-const configGroupsEl = document.getElementById('configGroups');
-const configSearch = document.getElementById('configSearch');
-const configCategory = document.getElementById('configCategory');
-const configNotice = document.getElementById('configNotice');
-const configError = document.getElementById('configError');
+const configGroupsEl = element('configGroups');
+const configSearch = element('configSearch');
+const configCategory = element('configCategory');
+const configNotice = element('configNotice');
+const configError = element('configError');
 
 // Server info discovered from GET /api/info. When the
 // server runs in local (loopback) mode no API token is
@@ -314,14 +317,14 @@ let serverInfo = null;
 let currentAudioUrl = null;
 
 let configSnapshot = null;
-let configSchema = {};
+let configSchema: Record<string, any> = {};
 let audioDevicesCache = null;
 
 // --- Shared helpers ---------------------------------------------------------
 
 // Centralized API client: attaches the Bearer token only
 // when the server actually requires one (spec §32).
-async function apiFetch(path, options = {}) {
+async function apiFetch(path, options: RequestInit = {}) {
   const headers = new Headers(options.headers || {});
   const apiToken = apiTokenInput.value.trim();
   if (serverInfo && serverInfo.auth && serverInfo.auth.required && apiToken) {
@@ -330,7 +333,7 @@ async function apiFetch(path, options = {}) {
   return fetch(path, { ...options, headers });
 }
 
-async function configRequest(path, options) {
+async function configRequest(path: string, options: RequestInit = {}) {
   const response = await apiFetch(path, options);
   const body = await response.json();
   if (!response.ok) throw new Error(body.message || body.error || `HTTP ${response.status}`);
@@ -365,8 +368,7 @@ function providerBadgeClass(state) {
 }
 
 /**
- * One voice-engine status card. Mirrors the server-rendered markup in
- * `provider_card_html` so first paint and live updates look identical.
+ * One voice-engine status card, shared by initial page data and live updates.
  * Text is assigned (never parsed as HTML), so provider metadata is safe.
  */
 function providerCard(status, models) {
@@ -461,13 +463,13 @@ async function setProviderEnabled(path, enabled, button) {
 let providerSignature = null;
 
 /** Re-render engine cards when provider status changes; keeps the
- *  server-rendered first paint untouched on errors or when idle. */
+ *  last successful status cards visible on errors or when idle. */
 async function refreshProviders() {
   const list = document.querySelector('.provider-list');
   if (!list) return;
   try {
     const body = await configRequest(Endpoints.providers);
-    const diagnostics = document.getElementById('inferenceDiagnostics');
+    const diagnostics = element('inferenceDiagnostics');
     if (diagnostics) diagnostics.textContent = JSON.stringify(body.diagnostics || {}, null, 2);
     const signature = JSON.stringify(body.providers || []);
     if (signature === providerSignature) return;
@@ -485,7 +487,7 @@ async function refreshProviders() {
     await renderModelOptions();
     refreshCloneForm();
   } catch {
-    // Network or auth failure: leave the server-rendered cards in place.
+    // Network or auth failure: retain the last successful status cards.
   }
 }
 
@@ -497,8 +499,8 @@ async function refreshProviders() {
 const SUPERTONIC_PROVIDER = 'supertonic';
 const SUPERTONIC_MODEL = 'supertonic-3';
 
-const modelSelect = document.getElementById('model');
-const modelHint = document.getElementById('modelHint');
+const modelSelect = element('model');
+const modelHint = element('modelHint');
 
 let builtinVoiceOptions = [];
 let voiceProfiles = [];
@@ -511,7 +513,7 @@ function snapshotBuiltinVoices() {
 /** Models of providers reporting `ready`, excluding the Supertonic engine. */
 function readyCloningModels() {
   if (!lastProviders) return [];
-  const caps = new Map(
+  const caps = new Map<string, any>(
     (lastProviders.capabilities || []).filter(Boolean).map(c => [c.provider_id, c]),
   );
   const out = [];
@@ -599,19 +601,19 @@ async function syncVoicesToModel() {
 // API exposes (GET/POST/DELETE /api/voices), driven by live capabilities
 // so models, languages, and modes are never hardcoded per provider.
 
-const voicesList = document.getElementById('voicesList');
-const cloneForm = document.getElementById('cloneForm');
-const cloneName = document.getElementById('cloneName');
-const cloneProvider = document.getElementById('cloneProvider');
-const cloneModel = document.getElementById('cloneModel');
-const cloneLang = document.getElementById('cloneLang');
-const cloneMode = document.getElementById('cloneMode');
-const cloneTranscriptGroup = document.getElementById('cloneTranscriptGroup');
-const cloneTranscript = document.getElementById('cloneTranscript');
-const cloneConsent = document.getElementById('cloneConsent');
-const cloneFile = document.getElementById('cloneFile');
-const cloneSubmit = document.getElementById('cloneSubmit');
-const cloneStatus = document.getElementById('cloneStatus');
+const voicesList = element('voicesList');
+const cloneForm = element('cloneForm');
+const cloneName = element('cloneName');
+const cloneProvider = element('cloneProvider');
+const cloneModel = element('cloneModel');
+const cloneLang = element('cloneLang');
+const cloneMode = element('cloneMode');
+const cloneTranscriptGroup = element('cloneTranscriptGroup');
+const cloneTranscript = element('cloneTranscript');
+const cloneConsent = element('cloneConsent');
+const cloneFile = element('cloneFile');
+const cloneSubmit = element('cloneSubmit');
+const cloneStatus = element('cloneStatus');
 
 function setCloneStatus(text, kind) {
   cloneStatus.textContent = text;
@@ -725,9 +727,9 @@ async function isWavFile(file) {
 }
 
 voicesList.addEventListener('click', async event => {
-  const button = event.target.closest('button[data-action]');
+  const button = (event.target as Element).closest<HTMLButtonElement>('button[data-action]');
   if (!button || button.disabled) return;
-  const id = button.closest('.voice-row')?.dataset.id;
+  const id = button.closest<HTMLButtonElement>('.voice-row')?.dataset.id;
   if (!id) return;
   if (button.dataset.action === 'delete') {
     if (!confirm('Delete this cloned voice? Its reference audio is removed too.')) return;
@@ -755,7 +757,7 @@ voicesList.addEventListener('click', async event => {
     await syncVoicesToModel();
     voiceSelect.value = profile.id;
     voiceSelect.dispatchEvent(new Event('change'));
-    document.getElementById('tts-heading').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    element('tts-heading').scrollIntoView({ behavior: 'smooth', block: 'start' });
     if (button.dataset.action === 'preview') {
       await synthesize({ previewText: 'Hi there. This is a voice preview.' });
       return;
@@ -853,6 +855,8 @@ async function loadServerInfo() {
 }
 
 // Initialize Event Listeners
+const providerList = document.querySelector('.provider-list');
+for (const provider of providers) providerList?.append(providerCard(provider.status, provider.models));
 snapshotBuiltinVoices();
 populateLanguages();
 loadServerInfo().then(() => {
@@ -869,8 +873,8 @@ voiceSelect.addEventListener('change', () => {
     populateLanguages(meta.languages.length > 0 ? meta.languages : null, profile.language);
   }
 });
-document.getElementById('modelRefresh').addEventListener('click', async event => {
-  const button = event.currentTarget;
+element('modelRefresh').addEventListener('click', async event => {
+  const button = event.currentTarget as HTMLButtonElement;
   button.disabled = true;
   try {
     providerSignature = null;
@@ -887,11 +891,11 @@ document.getElementById('modelRefresh').addEventListener('click', async event =>
 // One delegated listener covers the server-rendered cards and every
 // live re-render: toggles are identified by their data attributes.
 document.querySelector('.provider-list').addEventListener('click', event => {
-  const button = event.target.closest('.provider-toggle');
+  const button = (event.target as Element).closest<HTMLButtonElement>('.provider-toggle');
   if (!button || button.disabled) return;
   void setProviderEnabled(button.dataset.path, button.dataset.enabled !== 'true', button);
 });
-generateBtn.addEventListener('click', synthesize);
+generateBtn.addEventListener('click', () => synthesize());
 textInput.addEventListener('input', updateCharCount);
 updateCharCount();
 
@@ -901,7 +905,7 @@ function updateCharCount() {
 }
 
 let activeJobId = null;
-const cancelGeneration = document.getElementById('cancelGeneration');
+const cancelGeneration = element('cancelGeneration');
 cancelGeneration.addEventListener('click', async () => {
   if (!activeJobId) return;
   cancelGeneration.disabled = true;
@@ -922,7 +926,7 @@ async function watchSynthesisJob(id) {
     setStatus(`${identity}${snapshot.stage}${snapshot.cancellation_requested || snapshot.deadline_exceeded ? ' (stopping)' : ''} · ${seconds}s elapsed${snapshot.frames ? ` · ${snapshot.frames} generated frames` : ''}${context?.effective_device === 'cpu' && context?.provider === 'qwen3' ? ' · CPU inference can be slow.' : ''}`);
     if (snapshot.stage === 'completed') return true;
     if (snapshot.stage === 'failed' || snapshot.stage === 'cancelled') {
-      const error = new Error(snapshot.stage === 'failed' ? snapshot.error || 'Inference failed.' : 'Generation cancelled or its deadline expired.');
+      const error: Error & { terminalJob?: boolean } = new Error(snapshot.stage === 'failed' ? snapshot.error || 'Inference failed.' : 'Generation cancelled or its deadline expired.');
       error.terminalJob = true; throw error;
     }
     return false;
@@ -934,7 +938,7 @@ async function watchSynthesisJob(id) {
     try { statusResponse = await apiFetch(endpoint, { signal: AbortSignal.timeout(15000) }); }
     catch (_) { failures++; await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
     if (!statusResponse.ok) {
-      const error = new Error(`Job status unavailable (HTTP ${statusResponse.status}).`);
+      const error: Error & { terminalJob?: boolean } = new Error(`Job status unavailable (HTTP ${statusResponse.status}).`);
       error.terminalJob = statusResponse.status === 404;
       throw error;
     }
@@ -968,7 +972,7 @@ async function watchSynthesisJob(id) {
   throw new Error('Progress connection lost. The job may still be running; reconnect to check its status.');
 }
 
-async function synthesize(options = {}) {
+async function synthesize(options: { previewText?: string } = {}) {
   if (generateBtn.disabled) return;
   const text = typeof options.previewText === 'string' ? options.previewText : textInput.value.trim();
   if (!text && !activeJobId) {
@@ -1034,7 +1038,7 @@ async function synthesize(options = {}) {
     currentAudioUrl = URL.createObjectURL(blob);
     audioPlayer.src = currentAudioUrl;
     audioPlayer.style.display = 'block';
-    const download = document.getElementById('downloadAudio');
+    const download = element('downloadAudio');
     download.href = currentAudioUrl; download.hidden = false;
 
     // Play naturally, catching browser auto-play prevention errors
@@ -1057,15 +1061,13 @@ async function synthesize(options = {}) {
   }
 }
 
-function setStatus(msg, isError) {
+function setStatus(msg: string, isError = false) {
   statusDiv.textContent = msg;
   statusDiv.className = isError ? 'error' : '';
 }
 
 // Refresh periodically if model is not ready yet
-if (!MODEL_READY) {
-  setTimeout(() => location.reload(), App.modelReloadMs);
-}
+const reloadTimer = !MODEL_READY ? setTimeout(() => location.reload(), App.modelReloadMs) : undefined;
 
 // --- 4. Configuration browser -----------------------------------------------
 
@@ -1269,12 +1271,12 @@ async function refreshConfiguration() {
   const loading = document.getElementById('configLoading');
   try {
     const status = await configRequest(Endpoints.configStatus);
-    document.getElementById('configPath').textContent = status.config_path || '';
-    document.getElementById('configOpen').hidden = serverInfo?.mode !== 'desktop';
-    document.getElementById('configRevision').textContent = `Revision ${status.revision}`;
-    document.getElementById('statWatcher').textContent = status.watcher || '—';
-    document.getElementById('statReload').textContent = status.last_reload || '—';
-    document.getElementById('statPending').textContent = (status.pending_applies || []).join(', ') || 'none';
+    element('configPath').textContent = status.config_path || '';
+    element('configOpen').hidden = serverInfo?.mode !== 'desktop';
+    element('configRevision').textContent = `Revision ${status.revision}`;
+    element('statWatcher').textContent = status.watcher || '—';
+    element('statReload').textContent = status.last_reload || '—';
+    element('statPending').textContent = (status.pending_applies || []).join(', ') || 'none';
     showProblems([
       status.last_error,
       ...(status.apply_failures || []).map(f => `${f.path}: ${f.error} (active: ${JSON.stringify(f.active)})`),
@@ -1307,7 +1309,7 @@ async function refreshConfiguration() {
 }
 
 function bindConfigAction(buttonId, action, onSuccess) {
-  document.getElementById(buttonId).addEventListener('click', async () => {
+  element(buttonId).addEventListener('click', async () => {
     setNotice('', '');
     try {
       await configRequest(Endpoints.configAction(action), { method: 'POST' });
@@ -1319,7 +1321,7 @@ function bindConfigAction(buttonId, action, onSuccess) {
 }
 
 apiTokenInput.addEventListener('change', refreshConfiguration);
-document.getElementById('configRefresh').addEventListener('click', async () => {
+element('configRefresh').addEventListener('click', async () => {
   configSchema = {};
   configCategory.innerHTML = '';
   await refreshConfiguration();
@@ -1332,15 +1334,22 @@ bindConfigAction('configValidate', 'validate', async () => {
   setNotice('ok', 'Configuration file is valid.');
 });
 
-document.getElementById('configOpen').addEventListener('click', async () => {
+element('configOpen').addEventListener('click', async () => {
   try { await configRequest(Endpoints.configOpen, { method: 'POST' }); }
   catch (error) {
     setNotice('error', error.message);
   }
 });
 
-setInterval(async () => {
+const configTimer = setInterval(async () => {
   await loadServerInfo();
   await refreshConfiguration();
   await refreshProviders();
 }, App.configPollMs);
+return () => {
+  clearInterval(configTimer);
+  clearTimeout(reloadTimer);
+  if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
+};
+
+}

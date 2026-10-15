@@ -16,6 +16,12 @@ This README serves as an index to all SonicBoom documentation:
 
 ---
 
+## Frontend development
+
+The interface uses Vue, TypeScript and Vite. See the [frontend guide](docs/frontend.md)
+for localhost hot reload and embedded production builds. Building the server
+requires Node.js 22.12+ and npm; deployed binaries need neither.
+
 ## Quick Start
 
 ### Installation
@@ -219,7 +225,7 @@ SonicBoom/
 │   │   ├── handlers.rs      # Admin HTTP handlers
 │   │   ├── lockout.rs       # Failed-login IP lockout
 │   │   ├── session.rs       # Admin session helpers
-│   │   └── templates.rs     # HTML templates
+│   │   └── templates.rs     # Session-protected Vue page data
 │   ├── api/                 # API handlers
 │   │   ├── tts.rs           # Original TTS API
 │   │   ├── openai.rs        # OpenAI-compatible API
@@ -243,6 +249,8 @@ SonicBoom/
 │   ├── openai.md           # OpenAI API guide
 │   ├── admin.md            # Admin panel guide
 │   └── config.md           # Configuration guide
+├── frontend/               # Vue components, TypeScript controllers, Vite
+├── build.rs                # Build and embed production UI
 ├── Cargo.toml
 ├── Dockerfile
 └── docker-compose.yml
