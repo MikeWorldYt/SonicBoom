@@ -40,12 +40,13 @@ class PackagingTests(unittest.TestCase):
             ]:
                 build = root / 'target' / target / 'release'
                 build.mkdir(parents=True)
-                # Lowercase executable must fail, even on a case-insensitive
-                # host by using an unrelated filename and no correct binary.
-                (build / 'wrong-name').write_bytes(b'bad')
+                # Directory entry spelling matters even on Windows NTFS.
+                lowercase = build / name.lower()
+                lowercase.write_bytes(b'bad')
                 with patch.object(package, 'ROOT', root):
                     with self.assertRaises(RuntimeError):
                         package.package(target, root / 'missing')
+                lowercase.unlink()
                 (build / name).write_bytes(b'nonempty native fixture')
                 (build / 'tokens.json').write_text('must never ship')
                 def output(args, **kwargs):
@@ -69,6 +70,7 @@ class PackagingTests(unittest.TestCase):
                         self.assertIn('sonicboom', names)
                 self.assertNotIn('tokens.json', names)
                 self.assertIn('LICENSE', names)
+                self.assertIn('docs/RELEASING.md', names)
 
 
 if __name__ == '__main__':

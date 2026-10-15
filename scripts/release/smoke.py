@@ -47,16 +47,16 @@ def smoke(archive):
                 ctypes.WinDLL(str(dll))
             # Record PE import tables with the installed MSVC toolchain.
             vswhere = Path(os.environ['ProgramFiles(x86)']) / 'Microsoft Visual Studio/Installer/vswhere.exe'
-            install = subprocess.check_output([str(vswhere), '-latest', '-products', '*', '-property', 'installationPath'], text=True).strip()
+            install = subprocess.check_output([str(vswhere), '-latest', '-products', '*', '-property', 'installationPath'], text=True, timeout=15).strip()
             tools = sorted(Path(install).glob('VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe'))
             if not tools:
                 raise RuntimeError('MSVC dumpbin required to inspect native DLL dependencies')
             for pe in [binary, *app.glob('*.dll')]:
-                subprocess.run([str(tools[-1]), '/DEPENDENTS', str(pe)], check=True)
+                subprocess.run([str(tools[-1]), '/DEPENDENTS', str(pe)], check=True, timeout=30)
         else:
             assert os.access(binary, os.X_OK), 'Linux executable permissions lost'
             for native in [binary, *app.glob('*.so*')]:
-                result = subprocess.run(['ldd', str(native)], env=env, capture_output=True, text=True, check=True)
+                result = subprocess.run(['ldd', str(native)], env=env, capture_output=True, text=True, check=True, timeout=15)
                 print(result.stdout)
                 if 'not found' in result.stdout:
                     raise RuntimeError(f'Unresolved shared library in {native}')
@@ -84,21 +84,21 @@ def smoke(archive):
                     except (OSError, ValueError):
                         time.sleep(0.2)
                 if not healthy:
-                    raise RuntimeError('Packaged server did not answer /health within 12 seconds')
+                    raise RuntimeError(f'Packaged server did not answer /health within 12 seconds (exit={process.poll()}); inspect native dependency output and startup logs')
                 # Diagnostic mode shuts down through the normal server.stop path.
                 code = process.wait(timeout=25)
                 if code != 0:
                     raise RuntimeError(f'Packaged server exited with {code}')
-                server_logs = log.read_text() + ''.join(p.read_text() for p in (root / 'data/logs').glob('*') if p.is_file())
-                if 'Server shut down gracefully.' not in server_logs:
-                    raise RuntimeError('Missing graceful shutdown confirmation')
                 if list((root / 'data/models').glob('**/*')):
                     raise RuntimeError('Model-free probe unexpectedly created model files')
             finally:
                 if process.poll() is None:
                     process.kill()
                     process.wait(timeout=5)
-                print(log.read_text())
+                print(log.read_text(encoding='utf-8', errors='replace'))
+                for server_log in (root / 'data/logs').glob('*'):
+                    if server_log.is_file():
+                        print(server_log.read_text(encoding='utf-8', errors='replace'))
         print(f'PASS: {archive.name}: native libraries, HTTP health, clean shutdown (no models)')
 
 

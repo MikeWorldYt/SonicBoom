@@ -27,15 +27,17 @@ def package(target, output):
         raise ValueError(f'Unsupported release target: {target}')
     build = ROOT / 'target' / target / 'release'
     binary = build / ('SonicBoom.exe' if windows else 'SonicBoom')
-    if not binary.is_file() or binary.stat().st_size == 0:
+    exact_names = {path.name for path in build.iterdir()} if build.is_dir() else set()
+    if binary.name not in exact_names or not binary.is_file() or binary.stat().st_size == 0:
         raise RuntimeError(f'Missing/nonempty release executable required: {binary}')
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as temporary:
         stage = Path(temporary)
         shutil.copy2(binary, stage / binary.name)
         (stage / binary.name).chmod(0o755)
-        for source, name in [('LICENSE', 'LICENSE'), ('README.md', 'README.md'), ('docs/RELEASING.md', 'RELEASING.md'),
+        for source, name in [('LICENSE', 'LICENSE'), ('README.md', 'README.md'), ('docs/RELEASING.md', 'docs/RELEASING.md'),
                              ('models.sha256.json', 'models.sha256.json')]:
+            (stage / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / source, stage / name)
         # Cargo's ort/copy-dylibs places required runtime libraries beside the
         # executable. Preserve SONAME names, dereferencing symlinks into files.
