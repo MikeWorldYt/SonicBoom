@@ -1,10 +1,8 @@
 import { createApp } from 'vue';
 import App from './App.vue';
 import type { PageData } from './types';
-import './home.css';
-import './setup.css';
-import './admin.css';
-import './studio.css';
+import './styles/tokens.css';
+import './styles/ui.css';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root?.dataset.page) throw new Error('Missing SonicBoom page data');

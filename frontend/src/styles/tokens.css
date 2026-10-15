@@ -1,0 +1,60 @@
+/* Semantic tokens shared by the studio, setup and administration. */
+:root {
+  color-scheme: light dark;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  --page: #f4f6f8;
+  --surface: #ffffff;
+  --surface-raised: #f8fafb;
+  --text: #203340;
+  --text-secondary: #4d6070;
+  --text-muted: #5f7281;
+  --border: #c5d0d8;
+  --border-subtle: #e1e7ec;
+  --accent: #076c77;
+  --accent-hover: #04535e;
+  --on-accent: #ffffff;
+  --accent-surface: #e0f0ee;
+  --success: #246642;
+  --success-surface: #e8f4ec;
+  --warning: #775400;
+  --warning-surface: #fff3cf;
+  --danger: #a12731;
+  --danger-surface: #fff0f0;
+  --focus: #076c77;
+  --shadow: 0 3px 18px rgb(24 42 55 / 6%);
+  --radius: 12px;
+  --radius-control: 8px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --content-max: 1440px;
+  --nav-width: 192px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #10191f;
+    --surface: #17242d;
+    --surface-raised: #1d2d38;
+    --text: #edf3f7;
+    --text-secondary: #c5d2dd;
+    --text-muted: #aabcc9;
+    --border: #566d7b;
+    --border-subtle: #344b59;
+    --accent: #8cdecc;
+    --accent-hover: #b2eddf;
+    --on-accent: #10352f;
+    --accent-surface: #193d38;
+    --success: #a3e4b8;
+    --success-surface: #203b2d;
+    --warning: #f3d383;
+    --warning-surface: #3b321c;
+    --danger: #ffb2b9;
+    --danger-surface: #442930;
+    --focus: #8cdecc;
+    --shadow: 0 3px 18px rgb(0 0 0 / 15%);
+  }
+}
