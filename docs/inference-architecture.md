@@ -72,6 +72,15 @@ written into these records. Native offline loads use the same integrity pins.
 
 ## Voice caches
 
+The GGUF/ONNX backend (`qwen3-gguf`, opt-in build) mirrors the same ownership
+shape: one native worker thread owns the GGUF contexts, ONNX sessions,
+embeddings and tokenizer; requests cross as plain data; `Drop` joins the
+owner thread so cancellation never releases the model mid-computation. Its
+reference cache keys on backend id, pinned model revision, voice identity,
+reference hash, transcript and cloning mode, and is cleared at safe
+boundaries on voice invalidation. GPU initialization failures fall back to
+CPU before any synthesis, and the fallback reason travels in provider status.
+
 Qwen's worker promotes conditioning on preparation/synthesis access and evicts
 least recently used entries. Entries are bounded by configured count (1..=1024)
 and 64 MiB. Identity includes provider, reviewed implementation/model revision,

@@ -1,8 +1,13 @@
 # Qwen3-TTS GGUF / ONNX native integration audit
 
-Status: **Phase 1 incomplete; production backend not implemented.** Audit date:
-2026-10-15. No CPU speech, cloning quality, native GGUF loading, GPU inference,
-fallback, or packaging acceptance is claimed. Existing providers are unchanged.
+Status: **Phase 1 complete; CPU backend validated and registered behind the
+opt-in `qwen-gguf` feature.** Audit date: 2026-10-15; backend validation
+2026-10-15/16. Native CPU generation produces EOS-terminated finite PCM
+(41 frames / 3.28 s, seed-fixed determinism, conditioning reuse verified);
+the `qwen3-gguf` provider owns `qwen3-tts-1.7b-base` in the registry with
+background download/verify/load lifecycle. GPU inference, Vulkan packaging
+and x-vector cloning acceptance are not claimed. Existing providers are
+unchanged.
 
 ## Immutable sources and licensing
 
@@ -98,22 +103,28 @@ chosen revision; do not copy ctypes struct layouts into Rust against an arbitrar
 system library. Downloaded GGUF metadata confirms talker architecture `qwen3vl`, embedding
 dimension 2048, acoustic vocabulary 3072, and predictor architecture `qwen3`,
 embedding dimension 1024, acoustic vocabulary 30720. Native loading, hidden
-state extraction and text tokenizer parity still require real artifact tests.
+state extraction (talker/predictor init probes at load) and text tokenizer
+parity (mel/scipy fixture tests) are validated by real-artifact tests; the
+full EOS-terminated CPU synthesis run is recorded in
+`benchmarks/results/2026-10-15-qwen-gguf/`.
 
-ICL and zero-shot speaker-only paths exist in source; neither cloning mode has
-passed SonicBoom real-model validation. CustomVoice, VoiceDesign and arbitrary
-GGUF exports are outside the proposed Base-cloning backend scope.
+ICL and zero-shot speaker-only paths exist in source; ICL has passed
+SonicBoom real-model validation (end-to-end CPU synthesis with cache reuse
+and cancellation recovery). X-vector remains rejected until validated.
+CustomVoice, VoiceDesign and arbitrary GGUF exports are outside the
+proposed Base-cloning backend scope.
 
 ## SonicBoom integration boundaries
 
 Reviewed `qwen.rs`, `registry.rs`, `pool.rs`, `worker.rs`, `assets.rs`, `types.rs`
 and `Cargo.toml` on main:
 
-- Keep Candle under `qwen`, including its existing saved-voice behavior. The
-  existing provider advertises the 1.7B model ID but rejects its absent manifest.
-- Registry model IDs currently overwrite earlier ownership on registration.
-  Backend routing must resolve this deliberately before registering another
-  provider for the same ID; never depend on registration order.
+- Keep Candle under `qwen`, including its existing saved-voice behavior. With
+  `qwen-gguf` compiled in, Candle advertises only 0.6B and `qwen3-gguf` owns
+  the 1.7B model ID; without it, Candle still accepts 1.7B for routing but
+  rejects its absent manifest.
+- Registry model IDs overwrite earlier ownership on registration, so the
+  split above is compile-time deliberate, never registration order.
 - Reuse the pool's resident model lifecycle and serialized model-load guard,
   bounded worker pattern, request-carried reference PCM, inference controls,
   conditioning identity and verified atomic downloader.
@@ -132,6 +143,21 @@ and `Cargo.toml` on main:
 `1.4.354`. This proves enumeration only, not llama.cpp initialization, supported
 shader operations, offload, speed, output correctness or ONNX acceleration.
 No benchmark numbers are available for this backend.
+
+Vulkan build notes (opt-in `qwen-gguf-vulkan`): besides the Vulkan driver,
+headers (`vulkan-headers`), `glslc` and a `SPIRV-Headers` CMake package are
+required. The pinned llama.cpp revision finds the SPIRV-Headers package but
+does not add its include directory to the `ggml-vulkan` target, so the
+headers must additionally be visible via `CXXFLAGS=-I<spirv-include>`
+(or a system install); llama.cpp stays an untouched submodule.
+
+Measured 2026-10-16 on this host (release, `qwen-gguf-vulkan`, seed 42,
+256 tokens): Vulkan initializes on Vulkan0 with expected compute buffers,
+reaches EOS with finite PCM (34 frames / 2.72 s), repeats bit-identically,
+and generates ~28× faster than CPU. CPU/Vulkan content equivalence is not
+established (near-zero waveform correlation, 41 vs 34 frames), so Vulkan
+counts as functional, not as validated speech quality. Record:
+`benchmarks/results/2026-10-15-qwen-gguf/bc250-vulkan-vs-cpu.json`.
 
 The complete INT8 precision set, selected GGUF/embedding/tokenizer hashes and
 GGUF metadata have now been inspected. Prototype native ABI validation is in

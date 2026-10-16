@@ -220,6 +220,42 @@ store_dir = "./voices"
 max_upload_bytes = 8388608
 ```
 
+### Native GGUF/ONNX backend (`qwen3-gguf`, opt-in build)
+
+Compiled only with `--features qwen-gguf` (not in default builds). It owns
+`qwen3-tts-1.7b-base` end to end — ICL cloning, EOS-terminated generation,
+reference-conditioning cache with reuse, cancellation recovery — and the
+Candle provider stops advertising that identifier in such builds, so the
+registry never indexes one model under two providers.
+
+```toml
+[providers.qwen3_gguf]
+enabled = false
+model_dir = "./models/qwen3-tts-1.7b-gguf"  # separate from the Candle bundle
+device = "auto"          # cpu | auto | vulkan (needs qwen-gguf-vulkan) | cuda (needs qwen-gguf-cuda)
+gpu_layers = -1          # -1 offloads all layers, 0 is CPU
+threads = 4              # 1-256
+max_concurrent = 1
+cache_entries = 16
+max_tokens = 512         # acoustic frames per synthesis (1-1024)
+```
+
+CPU status: **measured** — 41 frames / 3.28 s audio, EOS reached, finite
+PCM, conditioning cache hit on repeat (1.64 s → 0.004 s), bit-identical
+output for the same seed/reference; GPU failures fall back to CPU with the
+reason reported in `/api/providers/qwen3-gguf/status` (never silent).
+X-vector cloning is rejected explicitly until validated against the
+reference implementation.
+
+Vulkan status (BC-250/RADV, release, seed 42): **initializes and runs** —
+34 frames / 2.72 s audio, EOS, finite PCM, bit-identical across repeated
+runs, ~28× faster generation than CPU (2.8 s vs 77.7 s for 256 tokens).
+**Content equivalence with the validated CPU path is not established**:
+outputs differ substantially from the first samples, so Vulkan is proven
+functional but not proven correct — CPU remains the reference path and
+Vulkan stays opt-in. Full numbers and limits in
+`benchmarks/results/2026-10-15-qwen-gguf/bc250-vulkan-vs-cpu.json`.
+
 No passwords or tokens live in TOML. Invalid provider updates keep the
 last healthy state and surface actionable status via
 `/api/providers/{id}/status` and `/api/config/status`.
@@ -248,10 +284,12 @@ last healthy state and surface actionable status via
   reference+synthesis, SHA-256-verified downloads). CPU smoke-test results
   are recorded in `benchmarks/providers.md`; rows stay pending until
   measured. No fake/silent fallbacks exist anywhere in the new code.
-- Qwen 1.7B Base, GPT-SoVITS v2/v2ProPlus bundles, Japanese for
+- Qwen 1.7B Base via Candle, GPT-SoVITS v2/v2ProPlus bundles, Japanese for
   GPT-SoVITS, V5 bundles, GPU EPs for GPT-SoVITS, ROCm/CUDA on BC-250,
   and FLAC/MP3 reference uploads are explicitly unsupported and rejected
-  with actionable errors.
+  with actionable errors. Qwen 1.7B via the GGUF/ONNX backend is CPU-validated
+  (see above); Vulkan runs but its output equivalence is unvalidated, CUDA
+  is unmeasured, and x-vector mode remains unsupported until measured.
 
 ## Reliable native synthesis jobs
 

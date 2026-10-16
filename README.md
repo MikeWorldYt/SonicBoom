@@ -152,7 +152,9 @@ The server will:
 | `POST`   | `/api/voices/{id}/preview`    | Synthesize text with a profile           |
 
 See [docs/providers.md](docs/providers.md) for Qwen3-TTS and GPT-SoVITS
-setup (disabled by default; CPU works without GPU).
+setup (disabled by default; CPU works without GPU). An opt-in
+`--features qwen-gguf` build adds the native 1.7B GGUF/ONNX backend
+(`qwen3-gguf`, ICL cloning only, CPU-validated).
 
 ### Admin Panel
 
