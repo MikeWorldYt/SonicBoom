@@ -447,5 +447,11 @@
   "Pick a supported Pocket model.": "Pick a supported Pocket model.",
   "Activate a language model to download it if needed. Pocket uses one active model at a time; switching keeps your voices and downloaded models.": "Activate a language model to download it if needed. Pocket uses one active model at a time; switching keeps your voices and downloaded models.",
   "Preparing the selected model. This page updates automatically; the first download may take a few minutes.": "Preparing the selected model. This page updates automatically; the first download may take a few minutes.",
-  "Loading…": "Loading…"
+  "Loading…": "Loading…",
+  "Previous generation: {text}": "Previous generation: {text}",
+  "Resume previous generation": "Resume previous generation",
+  "Generation diagnostics": "Generation diagnostics",
+  "Seed: not exposed by this API": "Seed: not exposed by this API",
+  "Qwen ICL needs the exact words, punctuation and language of the recording. A mismatched transcript can cause reference words to be repeated. Speaker-only mode is not validated.": "Qwen ICL needs the exact words, punctuation and language of the recording. A mismatched transcript can cause reference words to be repeated. Speaker-only mode is not validated.",
+  "Pocket uses the recording without a transcript. Each language needs its own model; select a matching model and language.": "Pocket uses the recording without a transcript. Each language needs its own model; select a matching model and language."
 }

@@ -10,6 +10,7 @@ function fixture() {
   const inputs: unknown[][] = [];
   const downloads: string[] = [];
   let failAudio = false;
+  let stage = 'completed';
   let release: (() => void) | undefined;
   const studio = {
     text: ref('hola'), voice: ref('A'), language: ref('es'), token: ref(''),
@@ -17,7 +18,7 @@ function fixture() {
     info: ref(null),
     api: {
       createJob: async (...args: unknown[]) => { inputs.push(args.slice(0, 4)); return { id: `job-${inputs.length}` }; },
-      job: async (id: string) => ({ id, stage: 'completed' }),
+      job: async (id: string) => ({ id, stage }),
       jobAudio: async (id: string) => {
         if (failAudio) throw new ApiError(503, 'offline');
         downloads.push(id);
@@ -29,7 +30,7 @@ function fixture() {
   } as unknown as Studio;
   const synthesis = useSynthesis(studio);
   return { studio, synthesis, inputs, downloads, fail: (value: boolean) => { failAudio = value; },
-    delay: () => { release = () => {}; }, release: () => release?.() };
+    stage: (value: string) => { stage = value; }, delay: () => { release = () => {}; }, release: () => release?.() };
 }
 
 test('hola -> test -> mundo get independent jobs and old audio clears immediately', async () => {
@@ -97,4 +98,39 @@ test('API maps exact body, language and profile versus built-in voice', async ()
   const builtin = new URL(calls[1].path, 'http://localhost').searchParams;
   assert.equal(builtin.get('voice'), 'M1');
   assert.equal(builtin.has('profile'), false);
+});
+
+
+test('confirmed cancellation clears resumability and permits a distinct new job', async () => {
+  const f = fixture();
+  try {
+    f.fail(true);
+    await f.synthesis.generate();
+    f.stage('cancelled');
+    await f.synthesis.cancel();
+    assert.equal(f.synthesis.jobId.value, null);
+    assert.equal(f.synthesis.complete.value, false);
+    assert.ok(f.synthesis.error.value);
+    f.stage('completed');
+    f.fail(false);
+    f.studio.text.value = 'test';
+    await f.synthesis.generate();
+    assert.deepEqual(f.downloads, ['job-2']);
+  } finally { f.synthesis.dispose(); }
+});
+
+test('server failure retains error and never fetches audio; next request is new', async () => {
+  const f = fixture();
+  try {
+    f.stage('failed');
+    await f.synthesis.generate();
+    assert.equal(f.synthesis.jobId.value, null);
+    assert.equal(f.downloads.length, 0);
+    assert.ok(f.synthesis.error.value);
+    f.stage('completed');
+    await f.synthesis.generate(true);
+    assert.equal(f.inputs.length, 2);
+    assert.notEqual(f.inputs[0][0], f.inputs[1][0]);
+    assert.equal(f.synthesis.error.value, null);
+  } finally { f.synthesis.dispose(); }
 });
