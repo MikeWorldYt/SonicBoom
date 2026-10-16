@@ -808,9 +808,29 @@ use ort::session::SessionOutputs;
 #[cfg(feature = "pocket-tts")]
 use ort::value::DynValue;
 
+/// Up-front reservation for the AR latent buffer, capped at the output
+/// sample bound so a degenerate frame count cannot turn the reservation
+/// itself into a huge allocation. The buffer still grows past the cap when
+/// generation legitimately needs more room.
+#[cfg(feature = "pocket-tts")]
+fn latents_capacity(frame_limit: usize, latent_dim: usize) -> usize {
+    frame_limit
+        .saturating_mul(latent_dim)
+        .min(POCKET_MAX_SAMPLES)
+}
+
 /// Owned KV-cache/state tensor. ORT outputs borrow the session, so every
 /// step extracts into these and rebuilds inputs for the next step. Shapes
 /// always come from the bundle manifest.
+///
+/// On ORT ownership and the per-frame copies in [`push_states`]: ORT's
+/// `Tensor::from_array` takes ownership of its buffer while the state must
+/// also persist for the next frame, so the state-to-tensor clone is
+/// semantically mandatory without I/O binding (which ORT 2.x sessions here
+/// do not expose safely); likewise `extract_states` must copy out of the
+/// borrowed session outputs before they are dropped. The bindings that *are*
+/// avoidable — the output `latents` reallocations and the per-frame flow
+/// scratch buffer — are reused instead (see `run_chunk`).
 #[cfg(feature = "pocket-tts")]
 #[derive(Debug, Clone)]
 enum StateTensor {
@@ -1193,7 +1213,15 @@ impl PocketNative {
             .unwrap_or_else(StdRng::from_os_rng);
         let dt = 1.0 / lsd_steps.max(1) as f32;
         let mut curr = vec![f32::NAN; latent_dim];
-        let mut latents: Vec<f32> = Vec::new();
+        // Reserve the full frame budget up front (capped at the output
+        // sample bound) so per-frame appends never reallocate. The cap keeps
+        // a corrupt/degenerate `frame_limit` from turning the reservation
+        // itself into a huge allocation; growth beyond the cap still works.
+        let mut latents: Vec<f32> = Vec::with_capacity(latents_capacity(frame_limit, latent_dim));
+        // Reused across AR frames: every element is rewritten below on each
+        // frame (zeros when temperature is 0), so reuse is value-identical
+        // to a fresh allocation.
+        let mut x = vec![0.0f32; latent_dim];
         let mut eos_step: Option<usize> = None;
         for step in 0..frame_limit {
             if control.is_some_and(|c| c.stopped()) {
@@ -1234,7 +1262,9 @@ impl PocketNative {
                 break;
             }
             // Temperature sampling: x ~ N(0, sqrt(T)) per dim (Box-Muller).
-            let mut x = vec![0.0f32; latent_dim];
+            // `x` is the frame-reused scratch buffer: the sampling loop
+            // below rewrites every element, and the zero-temperature path
+            // resets it, so each frame starts from identical values.
             if temperature > 0.0 {
                 let std = temperature.sqrt();
                 for v in x.iter_mut() {
@@ -1243,6 +1273,8 @@ impl PocketNative {
                     let z = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
                     *v = (z * std as f64) as f32;
                 }
+            } else {
+                x.fill(0.0);
             }
             // LSD Euler integration over the flow head.
             for j in 0..lsd_steps.max(1) {
@@ -1292,7 +1324,10 @@ impl PocketNative {
                 }
             }
             latents.extend_from_slice(&x);
-            curr = x;
+            // Double-buffer swap instead of a move: `curr` takes the new
+            // frame (identical values to `curr = x`), while `x` reclaims the
+            // previous frame's buffer for reuse next frame.
+            std::mem::swap(&mut curr, &mut x);
             if control.is_some_and(|c| !c.update("generating", latents.len() / latent_dim)) {
                 return Err(ProviderError::inference_failed(
                     "inference cancelled or deadline exceeded",
@@ -2358,6 +2393,70 @@ mod tests {
             sample_rate: 24000,
         });
         request
+    }
+
+    #[test]
+    #[cfg(feature = "pocket-tts")]
+    fn push_states_rebuilds_inputs_without_changing_state() {
+        let manifest = vec![
+            StateEntry {
+                input_name: "past_key_0".to_string(),
+                output_name: "next_key_0".to_string(),
+                dtype: StateDtype::F32,
+                fill: StateFill::Zeros,
+                shape: vec![1, 2, 2],
+            },
+            StateEntry {
+                input_name: "past_mask".to_string(),
+                output_name: "next_mask".to_string(),
+                dtype: StateDtype::I64,
+                fill: StateFill::Ones,
+                shape: vec![1, 4],
+            },
+            StateEntry {
+                input_name: "past_flag".to_string(),
+                output_name: "next_flag".to_string(),
+                dtype: StateDtype::Bool,
+                fill: StateFill::Zeros,
+                shape: vec![1, 1],
+            },
+        ];
+        let states = vec![
+            StateTensor::F32(vec![1.0, 2.0, 3.0, 4.0]),
+            StateTensor::I64(vec![1, 1, 1, 1]),
+            StateTensor::Bool(vec![true]),
+        ];
+        let mut inputs = vec![(
+            "sequence".to_string(),
+            Tensor::from_array(([1, 0, 2], Vec::<f32>::new()))
+                .unwrap()
+                .into(),
+        )];
+        push_states(&mut inputs, &manifest, &states).unwrap();
+        assert_eq!(inputs.len(), 4);
+        assert_eq!(inputs[1].0, "past_key_0");
+        assert_eq!(inputs[2].0, "past_mask");
+        assert_eq!(inputs[3].0, "past_flag");
+        // Values round-trip exactly and the source states are untouched
+        // (the tensor owns a copy; the state persists for the next frame).
+        let (_, f32_values) = inputs[1].1.try_extract_tensor::<f32>().unwrap();
+        assert_eq!(f32_values, &[1.0, 2.0, 3.0, 4.0]);
+        let (_, i64_values) = inputs[2].1.try_extract_tensor::<i64>().unwrap();
+        assert_eq!(i64_values, &[1, 1, 1, 1]);
+        let (_, bool_values) = inputs[3].1.try_extract_tensor::<bool>().unwrap();
+        assert_eq!(bool_values, &[true]);
+        assert!(matches!(&states[0], StateTensor::F32(v) if v == &[1.0, 2.0, 3.0, 4.0]));
+    }
+
+    #[test]
+    #[cfg(feature = "pocket-tts")]
+    fn latents_reservation_is_bounded_and_exact_for_ordinary_shapes() {
+        assert_eq!(latents_capacity(100, 128), 12_800);
+        assert_eq!(latents_capacity(0, 128), 0);
+        // Degenerate geometry can never turn the reservation into a huge
+        // allocation: it saturates and caps at the output sample bound.
+        assert_eq!(latents_capacity(usize::MAX, usize::MAX), POCKET_MAX_SAMPLES);
+        assert_eq!(latents_capacity(1_000_000, 1_000_000), POCKET_MAX_SAMPLES);
     }
 
     #[test]

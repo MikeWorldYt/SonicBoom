@@ -165,18 +165,24 @@ impl SonicBoomEngine {
         if !self.model.voice_styles.contains_key(&request.voice) {
             return Err(anyhow!("voice '{}' is not available", request.voice));
         }
-        let _guard = self
-            .inference_lock
-            .lock()
-            .map_err(|_| anyhow!("inference lock poisoned"))?;
-        let samples = inference::synthesize(
-            &self.model,
-            request.text.trim(),
-            &request.language,
-            &request.voice,
-            request.inference_steps,
-            crate::tts::text::DEFAULT_MAX_CHUNK_CHARS,
-        )?;
+        // The lock guards the ONNX sessions, which are touched only by
+        // `inference::synthesize`. WAV encoding touches no session state, so
+        // the lock is released first: encoding must never block the next
+        // model inference.
+        let samples = {
+            let _guard = self
+                .inference_lock
+                .lock()
+                .map_err(|_| anyhow!("inference lock poisoned"))?;
+            inference::synthesize(
+                &self.model,
+                request.text.trim(),
+                &request.language,
+                &request.voice,
+                request.inference_steps,
+                crate::tts::text::DEFAULT_MAX_CHUNK_CHARS,
+            )?
+        };
         let sample_rate = self.model.sample_rate();
         let wav = audio::encode_audio(&samples, sample_rate, audio::AudioFormat::Wav)?;
         Ok(SynthesisResult { wav, sample_rate })
