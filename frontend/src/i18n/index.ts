@@ -1,6 +1,6 @@
 import { ref, watch } from 'vue';
-import en from './en.json';
-import es from './es.json';
+import en from './en.json' with { type: 'json' };
+import es from './es.json' with { type: 'json' };
 
 export const locales = [{ code: 'en', name: 'English' }, { code: 'es', name: 'Español' }] as const;
 export type Locale = typeof locales[number]['code'];

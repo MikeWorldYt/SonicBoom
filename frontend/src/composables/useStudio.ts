@@ -1,6 +1,6 @@
 import { computed, inject, onMounted, onUnmounted, ref, shallowRef, watch, type InjectionKey } from 'vue';
 import { createHttpClient, ApiError } from '../services/http';
-import { createApi } from '../services/api';
+import { createApi, type Api } from '../services/api';
 import { modelLanguages } from '../services/providerLanguages';
 import { activatePocketModel as activatePocketBundle } from '../services/pocketActivation';
 import type { HomeData } from '../types';
@@ -12,7 +12,15 @@ export function getPath(object: JsonObject | undefined, path: string): Json | un
 export function nestedChange(path: string, value: Json): JsonObject {
   return path.split('.').reverse().reduce<Json>((result, key) => ({ [key]: result }), value) as JsonObject;
 }
-export function createStudio(data: HomeData) {
+/** Fast background cadence: provider/job-facing status only. */
+export const STUDIO_FAST_MS = 5000;
+/** Slow background cadence: low-frequency metadata (voice list, snapshots). */
+export const STUDIO_SLOW_EVERY = 6;
+/** Decides whether the slow metadata refresh is due on a fast tick. */
+export function slowRefreshDue(tick: number): boolean {
+  return tick % STUDIO_SLOW_EVERY === 0;
+}
+export function createStudio(data: HomeData, overrides?: { api?: Api }) {
   const token = ref('');
   const info = shallowRef<ServerInfo | null>(null);
   const providers = shallowRef<ProviderStatus[]>(data.providers.map(entry => entry.status));
@@ -31,43 +39,74 @@ export function createStudio(data: HomeData) {
   const language = ref('en');
   const text = ref('');
   const preview = ref(0);
-  const api = createApi(createHttpClient(() => token.value, () => info.value?.auth.required ?? true));
+  const api = overrides?.api ?? createApi(createHttpClient(() => token.value, () => info.value?.auth.required ?? true));
   let disposed = false;
   let refreshing = false;
   let queued = false;
+  let slowQueued = false;
+  let tick = 0;
+  // Generation guard: responses from an older token (or a disposed studio)
+  // never overwrite newer state. Bumped on token change and disposal.
+  let generation = 0;
+  // Last model status that triggered a built-in voices fetch. Immutable
+  // voices are re-fetched only when readiness changes, not every tick.
+  let lastVoicesStatus: string | null = null;
   async function load(area: string, action: () => Promise<void>) {
-    try { await action(); errors.value[area] = undefined; }
-    catch (error) { if (!disposed) errors.value[area] = errorMessage(error); }
+    const gen = generation;
+    try { await action(); if (gen !== generation || disposed) return; errors.value[area] = undefined; }
+    catch (error) { if (gen !== generation || disposed) return; errors.value[area] = errorMessage(error); }
   }
   async function refreshInfo() {
+    const gen = generation;
     await load('info', async () => {
       const result = await api.info();
-      if (disposed) return;
+      if (gen !== generation || disposed) return;
       info.value = result;
-      if (result.model.status === 'ready') builtinVoices.value = await api.builtinVoices();
+      // Built-in voices are immutable for a model state: refetch only when
+      // readiness changes (first load, or a ready transition), never on
+      // every ready-state tick.
+      if (result.model.status === 'ready' && lastVoicesStatus !== 'ready') {
+        const voices = await api.builtinVoices();
+        if (gen !== generation || disposed) return;
+        builtinVoices.value = voices;
+      }
+      lastVoicesStatus = result.model.status;
     });
   }
   async function refreshProviders() {
-    await load('providers', async () => { const result = await api.providers(); if (disposed) return; providers.value = result.providers; capabilities.value = result.capabilities; diagnostics.value = result.diagnostics; });
+    const gen = generation;
+    await load('providers', async () => { const result = await api.providers(); if (gen !== generation || disposed) return; providers.value = result.providers; capabilities.value = result.capabilities; diagnostics.value = result.diagnostics; });
   }
-  async function refreshVoices() { await load('voices', async () => { const result = await api.voices(); if (!disposed) voices.value = result; }); }
+  async function refreshVoices() { const gen = generation; await load('voices', async () => { const result = await api.voices(); if (gen !== generation || disposed) return; voices.value = result; }); }
   async function refreshConfig(force = false) {
+    const gen = generation;
     await load('settings', async () => {
       const result = await api.configStatus();
-      if (disposed) return;
+      if (gen !== generation || disposed) return;
       status.value = result;
       if (force || !config.value || result.revision !== config.value.revision || !Object.keys(schema.value).length) {
         const [snapshot, definitions] = await Promise.all([api.config(), api.schema()]);
-        if (!disposed) { config.value = snapshot; schema.value = definitions; }
+        if (gen !== generation || disposed) return;
+        config.value = snapshot; schema.value = definitions;
       }
     });
   }
-  async function refresh() {
-    if (refreshing) { queued = true; return; }
+  async function refreshFast() {
+    // Frequently changing provider/job status only.
+    await Promise.all([refreshInfo(), refreshProviders(), refreshConfig()]);
+  }
+  async function refreshSlow() {
+    // Low-frequency metadata: voice list plus the conditional snapshot.
+    await Promise.all([refreshVoices(), refreshConfig()]);
+  }
+  async function refresh(forceSlow = true) {
+    if (refreshing) { queued = true; if (forceSlow) slowQueued = true; return; }
     refreshing = true;
     loading.value = true;
-    try { await Promise.all([refreshInfo(), refreshProviders(), refreshVoices(), refreshConfig()]); }
-    finally { refreshing = false; loading.value = false; if (queued && !disposed) { queued = false; void refresh(); } }
+    const slow = forceSlow || slowQueued;
+    slowQueued = false;
+    try { await Promise.all(slow ? [refreshFast(), refreshSlow()] : [refreshFast()]); }
+    finally { refreshing = false; loading.value = false; if (queued && !disposed) { queued = false; void refresh(slowQueued); } }
   }
   async function saveSetting(path: string, value: Json) {
     await api.patchConfig(nestedChange(path, value), config.value?.revision);
@@ -101,15 +140,23 @@ export function createStudio(data: HomeData) {
   watch(availableVoices, value => { if (!value.some(item => item.id === voice.value)) voice.value = value[0]?.id || ''; });
   watch(voice, value => { const profile = voices.value.find(item => item.id === value); if (profile) language.value = profile.language; });
   watch(selectedModel, value => { if (value.languages.length && !value.languages.includes(language.value)) language.value = value.languages[0]; });
-  watch(token, () => void refresh());
+  watch(token, () => { generation++; void refresh(); });
+  function dispose() { disposed = true; generation++; clearInterval(timer); }
   function selectProfile(profile: Voice, previewAudio = false) { model.value = profile.model; voice.value = profile.id; language.value = profile.language; if (previewAudio) preview.value++; }
   onMounted(() => {
     void refresh();
     void api.audioDevices().then(value => { if (!disposed) devices.value = value; }).catch(() => {});
   });
-  const timer = setInterval(() => { if (!disposed && !document.hidden) void refresh(); }, 5000);
-  onUnmounted(() => { disposed = true; clearInterval(timer); });
-  return { api, token, info, providers, capabilities, diagnostics, builtinVoices, voices, config, status, schema, devices, errors, loading, model, voice, language, text, preview, models, selectedModel, availableVoices, refresh, refreshConfig, refreshProviders, refreshVoices, saveSetting, toggleProvider, activatePocketModel, selectProfile };
+  // Fast status ticks every 5s while visible; slow metadata every 6th tick.
+  // In-flight refreshes are deduped, stale token generations are dropped,
+  // and unmount clears the timer so no requests or rejections outlive it.
+  const timer = setInterval(() => {
+    if (disposed || typeof document !== 'undefined' && document.hidden) return;
+    tick++;
+    void refresh(slowRefreshDue(tick));
+  }, STUDIO_FAST_MS);
+  onUnmounted(dispose);
+  return { api, token, info, providers, capabilities, diagnostics, builtinVoices, voices, config, status, schema, devices, errors, loading, model, voice, language, text, preview, models, selectedModel, availableVoices, refresh, refreshConfig, refreshProviders, refreshVoices, saveSetting, toggleProvider, activatePocketModel, selectProfile, dispose };
 }
 export type Studio = ReturnType<typeof createStudio>;
 export const studioKey: InjectionKey<Studio> = Symbol('SonicBoom studio');

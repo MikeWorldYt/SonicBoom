@@ -1,5 +1,8 @@
 export class ApiError extends Error {
-  constructor(public readonly status: number, message: string) { super(message); this.name = 'ApiError'; }
+  readonly status: number;
+  // Plain field assignment (no parameter property) so the class also loads
+  // under node's strip-only TypeScript mode used by frontend tests.
+  constructor(status: number, message: string) { super(message); this.name = 'ApiError'; this.status = status; }
 }
 export function createHttpClient(token: () => string = () => '', authRequired: () => boolean = () => true) {
   async function response(path: string, options: RequestInit = {}): Promise<Response> {
