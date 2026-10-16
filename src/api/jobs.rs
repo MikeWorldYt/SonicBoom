@@ -373,9 +373,16 @@ pub async fn create(
                                 j.status.stage = "completed".into();
                             }
                         } else if let Some(j) = entries.get_mut(&job_id) {
-                            j.status.stage = "failed".into();
-                            j.status.error =
-                                Some("Job failed or audio retention capacity reached".into());
+                            if j.control.stopped() {
+                                j.status.stage = "cancelled".into();
+                                j.status.cancellation_requested =
+                                    j.control.cancellation_requested();
+                                j.status.deadline_exceeded = j.control.deadline_exceeded();
+                            } else {
+                                j.status.stage = "failed".into();
+                                j.status.error =
+                                    Some("Job failed or audio retention capacity reached".into());
+                            }
                         }
                     }
                     Ok(Err(error)) => {

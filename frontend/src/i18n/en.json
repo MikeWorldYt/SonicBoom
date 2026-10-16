@@ -453,5 +453,6 @@
   "Generation diagnostics": "Generation diagnostics",
   "Seed: not exposed by this API": "Seed: not exposed by this API",
   "Qwen ICL needs the exact words, punctuation and language of the recording. A mismatched transcript can cause reference words to be repeated. Speaker-only mode is not validated.": "Qwen ICL needs the exact words, punctuation and language of the recording. A mismatched transcript can cause reference words to be repeated. Speaker-only mode is not validated.",
-  "Pocket uses the recording without a transcript. Each language needs its own model; select a matching model and language.": "Pocket uses the recording without a transcript. Each language needs its own model; select a matching model and language."
+  "Pocket uses the recording without a transcript. Each language needs its own model; select a matching model and language.": "Pocket uses the recording without a transcript. Each language needs its own model; select a matching model and language.",
+  "Generated duration: {seconds}s": "Generated duration: {seconds}s"
 }
