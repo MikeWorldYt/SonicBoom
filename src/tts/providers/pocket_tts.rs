@@ -2324,10 +2324,11 @@ impl TtsProvider for PocketTtsProvider {
             let mut audio: Vec<f32> = Vec::new();
             // One request-local random stream, continued across sentences, like
             // the exporter's np.random stream. Never restart each chunk at seed.
-            let mut rng = request
-                .seed
-                .map(StdRng::seed_from_u64)
-                .unwrap_or_else(StdRng::from_os_rng);
+            let seed = request.seed.unwrap_or_else(rand::random);
+            if let Some(control) = &control {
+                control.set_seed(seed);
+            }
+            let mut rng = StdRng::seed_from_u64(seed);
             for chunk in &chunks {
                 if control.as_ref().is_some_and(|c| c.stopped()) {
                     return Err(ProviderError::inference_failed(

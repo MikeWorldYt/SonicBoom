@@ -115,7 +115,7 @@ fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
     if args.len() < 6 || args.iter().any(|arg| arg == "--help") {
         println!(
-            "tts-quality-audit PROVIDER MODEL LANGUAGE MODEL_DIR NEW_OUTPUT_DIR [AUTHORIZED_REFERENCE_WAV]\nProviders: mock, pocket, qwen (feature required). Reference positional argument explicitly certifies authorized diagnostic use. Qwen requires exact QWEN_REFERENCE_TRANSCRIPT. No outputs overwritten. CPU, seed 42, default sampling. Writes hashed inputs only."
+            "tts-quality-audit PROVIDER MODEL LANGUAGE MODEL_DIR NEW_OUTPUT_DIR [AUTHORIZED_REFERENCE_WAV]\nProviders: mock, pocket, qwen (feature required). Reference positional argument explicitly certifies authorized diagnostic use. Qwen requires exact QWEN_REFERENCE_TRANSCRIPT. No outputs overwritten. CPU, default seed 42 (AUDIT_SEED overrides), default sampling. Writes hashed inputs only."
         );
         return Ok(());
     }
@@ -127,7 +127,12 @@ fn main() -> Result<()> {
         PathBuf::from(&args[5]),
     );
     let mut request = ProviderRequest::new(model, "audit-authorized-A", "", language);
-    request.seed = Some(42);
+    request.seed = Some(
+        std::env::var("AUDIT_SEED")
+            .unwrap_or_else(|_| "42".into())
+            .parse::<u64>()
+            .context("AUDIT_SEED must be a u64")?,
+    );
     let reference_hash = if provider != "mock" {
         let path = Path::new(args.get(6).context("supply authorized reference WAV")?);
         let bytes = fs::read(path)?;
@@ -252,7 +257,7 @@ fn main() -> Result<()> {
             .sum::<f64>()
             / n)
             .sqrt();
-        let row = json!({"request_id":uuid::Uuid::new_v4().to_string(),"job_id":null,"boundary":"direct-provider","provider":provider,"model":model,"revision":revision,"inference_binary_sha256":executable_hash,"ort_build":ort::info(),"git_sha":String::from_utf8_lossy(&git.stdout).trim(),"effective_device":"cpu","language":language,"voice":request.voice,"reference_hash":effective_reference_hash,"text_hash":hash(text.as_bytes()),"seed":42,"reference_preprocessing":sonicboom::tts::audio::REFERENCE_RESAMPLER_VERSION,"mode":request.clone_mode.map(|m|m.as_str()),"pocket_steps":std::env::var("AUDIT_POCKET_STEPS").unwrap_or_else(|_|"1".into()),"pocket_temperature":std::env::var("AUDIT_POCKET_TEMPERATURE").unwrap_or_else(|_|"0.7".into()),"chunk_index":null,"sample_count":audio.samples.len(),"sample_rate":audio.sample_rate,"wav_hash":wav_hash,"output":name,"elapsed_secs":elapsed,"duration_secs":audio.duration_secs(),"rtf":elapsed/audio.duration_secs(),"peak":audio.samples.iter().fold(0f32,|a,b|a.max(b.abs())),"rms":rms,"dc_offset":audio.samples.iter().map(|s| *s as f64).sum::<f64>()/n,"clipping_fraction":audio.samples.iter().filter(|s|s.abs()>=1.0).count() as f64/n,"same_as_first_test":if *text=="test" {Some(test_hash.as_ref()==Some(&wav_hash))}else{None},"metrics":metrics,"content_review":"NOT RUN"});
+        let row = json!({"request_id":uuid::Uuid::new_v4().to_string(),"job_id":null,"boundary":"direct-provider","provider":provider,"model":model,"revision":revision,"inference_binary_sha256":executable_hash,"ort_build":ort::info(),"git_sha":String::from_utf8_lossy(&git.stdout).trim(),"effective_device":"cpu","language":language,"voice":request.voice,"reference_hash":effective_reference_hash,"text_hash":hash(text.as_bytes()),"seed":request.seed,"reference_preprocessing":sonicboom::tts::audio::REFERENCE_RESAMPLER_VERSION,"mode":request.clone_mode.map(|m|m.as_str()),"pocket_steps":std::env::var("AUDIT_POCKET_STEPS").unwrap_or_else(|_|"1".into()),"pocket_temperature":std::env::var("AUDIT_POCKET_TEMPERATURE").unwrap_or_else(|_|"0.7".into()),"chunk_index":null,"sample_count":audio.samples.len(),"sample_rate":audio.sample_rate,"wav_hash":wav_hash,"output":name,"elapsed_secs":elapsed,"duration_secs":audio.duration_secs(),"rtf":elapsed/audio.duration_secs(),"peak":audio.samples.iter().fold(0f32,|a,b|a.max(b.abs())),"rms":rms,"dc_offset":audio.samples.iter().map(|s| *s as f64).sum::<f64>()/n,"clipping_fraction":audio.samples.iter().filter(|s|s.abs()>=1.0).count() as f64/n,"same_as_first_test":if *text=="test" {Some(test_hash.as_ref()==Some(&wav_hash))}else{None},"metrics":metrics,"content_review":"NOT RUN"});
         writeln!(manifest, "{row}")?;
         manifest.flush()?;
         index.push_str(&format!(

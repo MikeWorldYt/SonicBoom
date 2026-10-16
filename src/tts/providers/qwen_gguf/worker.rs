@@ -305,6 +305,9 @@ impl State {
         )?;
         metrics.prompt_secs = started.elapsed().as_secs_f64();
         let seed = request.seed.unwrap_or_else(rand::random);
+        if let Some(control) = crate::tts::control::current() {
+            control.set_seed(seed);
+        }
         let started = Instant::now();
         let generated = generation::generate(
             &mut self.runtime,

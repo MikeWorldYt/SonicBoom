@@ -1,8 +1,23 @@
 //! Model-independent end-to-end diagnostic artifact ownership.
+fn runner() -> std::process::Command {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_tts-quality-audit"));
+    for key in [
+        "AUDIT_SEED",
+        "AUDIT_TEXTS_JSON",
+        "AUDIT_ALT_REFERENCE_WAV",
+        "AUDIT_ALT_REFERENCE_TRANSCRIPT",
+        "AUDIT_POCKET_STEPS",
+        "AUDIT_POCKET_TEMPERATURE",
+    ] {
+        command.env_remove(key);
+    }
+    command
+}
+
 #[test]
 fn mock_sequence_preserves_independent_wavs_and_manifest() {
     let output = std::env::temp_dir().join(format!("sonicboom-audit-{}", uuid::Uuid::new_v4()));
-    let status = std::process::Command::new(env!("CARGO_BIN_EXE_tts-quality-audit"))
+    let status = runner()
         .args(["mock", "mock-v1", "es", "."])
         .arg(&output)
         .status()
@@ -30,7 +45,7 @@ fn mock_sequence_preserves_independent_wavs_and_manifest() {
     }
     // A second invocation refuses to overwrite independently produced outputs.
     assert!(
-        !std::process::Command::new(env!("CARGO_BIN_EXE_tts-quality-audit"))
+        !runner()
             .args(["mock", "mock-v1", "es", "."])
             .arg(&output)
             .status()

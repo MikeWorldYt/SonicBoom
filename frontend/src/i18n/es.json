@@ -457,5 +457,6 @@
   "Generated duration: {seconds}s": "Duración generada: {seconds}s",
   "The reference recording is nearly silent. Choose a clearer recording.": "La grabación de referencia es casi silenciosa. Elige una grabación más clara.",
   "The reference recording has heavy clipping. Try recording at a lower input level.": "La grabación de referencia tiene mucha saturación. Prueba grabar con un nivel de entrada menor.",
-  "The reference recording has a large DC offset. Check the recording source.": "La grabación de referencia tiene un gran desplazamiento de corriente continua. Revisa la fuente de grabación."
+  "The reference recording has a large DC offset. Check the recording source.": "La grabación de referencia tiene un gran desplazamiento de corriente continua. Revisa la fuente de grabación.",
+  "Seed: {seed}": "Semilla: {seed}"
 }

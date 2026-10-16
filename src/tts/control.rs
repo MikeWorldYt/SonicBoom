@@ -15,6 +15,9 @@ pub struct ExecutionContext {
     pub model: String,
     pub voice: String,
     pub effective_device: String,
+    /// Decimal string preserves all u64 bits in browser JSON clients.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,7 +76,18 @@ impl InferenceControl {
             model: model.into(),
             voice: voice.into(),
             effective_device: device.into(),
+            seed: None,
         });
+    }
+    pub fn set_seed(&self, seed: u64) {
+        if let Some(context) = &mut self
+            .progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .context
+        {
+            context.seed = Some(seed.to_string());
+        }
     }
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
@@ -148,6 +162,15 @@ pub fn lock_cancellable<T>(mutex: &Mutex<T>) -> Result<std::sync::MutexGuard<'_,
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn diagnostic_seed_preserves_full_u64_precision() {
+        let control = InferenceControl::new(Duration::from_secs(1));
+        control.set_context("pocket-tts", "pocket-tts-en", "voice", "cpu");
+        control.set_seed(u64::MAX);
+        let value = serde_json::to_value(control.snapshot()).unwrap();
+        assert_eq!(value["context"]["seed"], "18446744073709551615");
+    }
+
     #[test]
     fn cancellation_and_deadline_are_observed_at_checkpoints() {
         let control = InferenceControl::new(Duration::from_secs(1));

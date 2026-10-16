@@ -12,7 +12,7 @@ export interface SettingSchema { path: string; description: string; type: 'strin
 export type Schema = Record<string, SettingSchema>;
 export interface ConfigStatus { revision: number; config_path: string; watcher?: string; last_reload?: string; last_error?: string; pending_applies?: string[]; apply_failures?: { path: string; error: string; active: Json }[] }
 export interface AudioDevice { id: string; name: string }
-export interface Job { id?: string; stage: string; elapsed_secs?: number; audio_secs?: number; rtf?: number; frames?: number; cancellation_requested?: boolean; deadline_exceeded?: boolean; error?: string; context?: { provider: string; model: string; voice: string; effective_device: string } }
+export interface Job { id?: string; stage: string; elapsed_secs?: number; audio_secs?: number; rtf?: number; frames?: number; cancellation_requested?: boolean; deadline_exceeded?: boolean; error?: string; context?: { provider: string; model: string; voice: string; effective_device: string; seed?: string } }
 export interface CloneInput { name: string; provider: string; model: string; language: string; mode: string; consent_basis: string; transcript?: string }
 export interface SetupStatus { model: { cache_dir: string }; server: { port: number } }
 export interface SetupInput { usage_mode: string; audio_device: string; inference_steps: number; model_cache_dir: string | null; bind: string | null; port: number | null; auth_mode: string | null; admin_username: string; admin_password: string }
