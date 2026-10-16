@@ -17,7 +17,7 @@ path = "src/lib.rs"
 # Native voice-cloning backends ship in default builds so every engine works
 # without a rebuild; providers stay disabled by default, so only the
 # Supertonic weights download until an engine is enabled.
-default = ["server", "playback", "gpt-sovits", "qwen-gguf"]
+default = ["server", "playback", "qwen-gguf", "pocket-tts"]
 server = [
     "dep:axum",
     "dep:tower",
@@ -48,12 +48,14 @@ cuda = ["ort/cuda"]
 rocm = ["ort/rocm"]
 # NOTE: `coreml`, `cuda`, and `rocm` are mutually exclusive per platform.
 # Enable at most one of them when building, e.g. `cargo build --release --features cuda`.
-# Optional native voice-cloning providers. GPT-SoVITS compiles into default
+# Optional native voice-cloning providers. Pocket TTS compiles into default
 # builds but stays disabled by default; Supertonic 3 is the default provider.
 # Both run in-process with no Python/PyTorch.
-# `gpt-sovits` enables the GPT-SoVITS ONNX provider (CPU execution provider
-# only; the `rocm`/`cuda` ORT flags do not accelerate it).
-gpt-sovits = ["dep:gpt-sovits-onnx-rs"]
+# `pocket-tts` enables the Pocket TTS ONNX provider (CPU execution provider
+# only; pure-Rust unigram tokenizer, no new native dependencies). It ships
+# in default builds but stays disabled by default; weights download only
+# after `[providers.pocket_tts] enabled=true`.
+pocket-tts = []
 # Native Qwen3-TTS 1.7B GGUF/ONNX backend (opt-in; ICL cloning only).
 qwen-gguf = ["dep:tokenizers", "dep:rustfft", "dep:half", "dep:sonicboom-qwen-llama"]
 qwen-gguf-vulkan = ["qwen-gguf", "sonicboom-qwen-llama/vulkan"]
@@ -161,20 +163,6 @@ ksni = { version = "0.3", features = ["blocking"], optional = true }
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 tray-icon = { version = "0.19", optional = true }
 tao = { version = "0.30", optional = true }
-
-# Native voice-cloning providers (optional; disabled by default).
-#
-# GPT-SoVITS ONNX (native Rust, in-process, no Python): reviewed 2026-10-13
-# at https://github.com/bailu-obj/gpt-sovits-onnx-rs rev
-# 204ae4abcd218113aad86f6f9a66bdba92adcfd7 (upstream HEAD). Pins
-# ort =2.0.0-rc.13 + ndarray 0.17.2, identical to this workspace: a single
-# shared ONNX Runtime serves Supertonic and GPT-SoVITS (CPU execution
-# provider only; the workspace `cuda`/`rocm` flags do not accelerate it).
-[dependencies.gpt-sovits-onnx-rs]
-git = "https://github.com/bailu-obj/gpt-sovits-onnx-rs"
-rev = "204ae4abcd218113aad86f6f9a66bdba92adcfd7"
-optional = true
-default-features = false
 
 # Pinned to an immutable revision of the `remake` branch (retrieved 2026-09-16).
 # Update intentionally via `cargo update -p tiktools-plugin-sdk` and review the diff.

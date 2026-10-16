@@ -51,8 +51,8 @@ curl -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: text/plain' \
 Jobs begin `queued`, progress through observable `preparing`, `generating`,
 `decoding` and `encoding` stages, and end `completed`, `failed` or `cancelled`.
 Backend stages without an available hook remain within the enclosing measured
-native stage: GPT-SoVITS reports sentence-level generation, including its VITS
-decoding, rather than inventing fine-grained progress. Frame counts refer to
+native stage: Pocket TTS reports sentence-level generation, including its
+Mimi decoding, rather than inventing fine-grained progress. Frame counts refer to
 Qwen codec frames; Supertonic denoising iterations are not labeled frames.
 
 `cancellation_requested` and `deadline_exceeded` describe stop requests.
@@ -85,8 +85,8 @@ makes old IDs unavailable (`404`); jobs do not resume after restart. Shutdown
 requests cancellation of active jobs. Graceful shutdown and resource ownership
 wait for native work to return. Native kernels cannot be forcibly interrupted;
 Qwen checks between frames, acoustic predictions and preparation layers;
-Supertonic checks between denoising steps/chunks; GPT-SoVITS uses upstream's
-supported cancellation boundary between sentences. A blocked native kernel must
+Supertonic checks between denoising steps/chunks; Pocket TTS checks between
+autoregressive frames and sentences. A blocked native kernel must
 be diagnosed through elapsed state and worker warnings, never killed unsafely.
 
 ## Progress and streaming

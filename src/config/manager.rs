@@ -151,6 +151,15 @@ impl ConfigManager {
                 path.display()
             );
         }
+        if config.providers.gpt_sovits != super::model::DeprecatedGptSovitsSection::default() {
+            tracing::warn!(
+                "Ignoring removed [providers.gpt_sovits] section (the GPT-SoVITS provider was retired \
+                 and replaced by Pocket TTS); delete it from {} and use [providers.pocket_tts] instead. \
+                 Existing GPT-SoVITS voice profiles are kept but unavailable: recreate them as Pocket \
+                 profiles from their stored reference audio",
+                path.display()
+            );
+        }
         let file_revision = config.revision.max(1);
         let (tx, _) = broadcast::channel(64);
         let manager = Arc::new(Self {

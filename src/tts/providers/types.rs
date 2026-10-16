@@ -39,6 +39,9 @@ pub enum CloneMode {
     Icl,
     /// X-vector embedding: reference WAV without a transcript (Qwen only).
     XVector,
+    /// Audio-prompt conditioning: reference WAV without a transcript,
+    /// encoded to voice embeddings (Pocket TTS only).
+    AudioPrompt,
 }
 
 impl CloneMode {
@@ -46,6 +49,16 @@ impl CloneMode {
         match self {
             Self::Icl => "icl",
             Self::XVector => "x_vector",
+            Self::AudioPrompt => "audio_prompt",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "icl" => Some(Self::Icl),
+            "x_vector" | "xvector" => Some(Self::XVector),
+            "audio_prompt" | "audioprompt" => Some(Self::AudioPrompt),
+            _ => None,
         }
     }
 }
@@ -111,7 +124,7 @@ pub struct ReferenceAudio {
 /// Extensible per-request synthesis input.
 ///
 /// `voice` is either a built-in style name (Supertonic `F1`–`F5`/`M1`–`M5`,
-/// OpenAI aliases) or an authorized voice-profile ID (Qwen/GPT-SoVITS).
+/// OpenAI aliases) or an authorized voice-profile ID (Qwen/Pocket TTS).
 /// Provider-specific options stay out of the global Supertonic constraints:
 /// each provider validates its own voice names, languages and options.
 #[derive(Debug, Clone)]
@@ -122,7 +135,7 @@ pub struct ProviderRequest {
     pub language: String,
     pub device: DevicePreference,
     pub clone_mode: Option<CloneMode>,
-    /// Exact reference transcript (required for ICL and GPT-SoVITS).
+    /// Exact reference transcript (required for ICL; unused by Pocket TTS).
     pub reference_transcript: Option<String>,
     /// Decoded reference PCM for cloning providers (`None` for Supertonic).
     pub reference_audio: Option<ReferenceAudio>,

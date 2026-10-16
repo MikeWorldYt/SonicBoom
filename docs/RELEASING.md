@@ -1,7 +1,7 @@
 # Releases and runtime requirements
 
 Release binaries are CPU builds with default features plus `gui`: Supertonic,
-Qwen3-TTS, GPT-SoVITS, playback, HTTP server and tray support are retained.
+Qwen3-TTS, Pocket TTS, playback, HTTP server and tray support are retained.
 Models are downloaded separately on normal startup; no credentials, user
 configuration, downloaded voices/models or caches belong in release archives.
 
@@ -37,7 +37,7 @@ ORT builds use shared libraries they must appear beside the built executable
 
 GPU acceleration is not enabled in these packages. CUDA/ROCm/CoreML builds
 require separate SDKs, provider libraries, driver compatibility and hardware
-validation. Qwen CUDA is an independent opt-in feature; GPT-SoVITS uses CPU
+validation. Qwen CUDA is an independent opt-in feature; Pocket TTS uses CPU
 ORT even if other provider acceleration is selected. CI does not certify
 model inference quality, GPU execution, tray interaction or audio playback.
 

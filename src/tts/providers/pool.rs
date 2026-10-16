@@ -1,28 +1,28 @@
 //! Persistent optional-provider singletons.
 //!
-//! The GPT-SoVITS and GGUF/ONNX models are large (gigabytes of weights);
-//! they must load once and stay resident between requests — never reload
-//! per request. This pool owns the singletons and syncs their
-//! configuration from the live `AppConfig` on every registry build, so
-//! hot-reload applies without restarts and a failed reload keeps the last
-//! healthy state.
+//! The Pocket TTS and GGUF/ONNX models are large (hundreds of megabytes
+//! to gigabytes of weights); they must load once and stay resident
+//! between requests — never reload per request. This pool owns the
+//! singletons and syncs their configuration from the live `AppConfig` on
+//! every registry build, so hot-reload applies without restarts and a
+//! failed reload keeps the last healthy state.
 
 use std::sync::Arc;
 
 use super::TtsProviderRegistry;
-use super::gptsovits::{GptSovitsConfig, GptSovitsProvider};
+use super::pocket_tts::{PocketTtsConfig, PocketTtsProvider};
 #[cfg(feature = "qwen-gguf")]
 use super::qwen_gguf::provider::{QwenGgufConfig, QwenGgufProvider};
 use super::supertonic::SupertonicProvider;
 
-type DesiredProviders = Option<(u64, GptSovitsConfig)>;
+type DesiredProviders = Option<(u64, PocketTtsConfig)>;
 
 /// Resident optional providers shared by all requests.
 pub struct ProviderPool {
     desired: Arc<std::sync::Mutex<DesiredProviders>>,
     retrying: Arc<std::sync::atomic::AtomicBool>,
-    /// GPT-SoVITS singleton (model + reference state behind one lock).
-    pub gpt: Arc<GptSovitsProvider>,
+    /// Pocket TTS singleton (sessions + voice embeddings behind one lock).
+    pub pocket: Arc<PocketTtsProvider>,
     /// Qwen3-TTS 1.7B GGUF/ONNX singleton (native worker, cached
     /// reference conditioning). Compiled only with `qwen-gguf`.
     #[cfg(feature = "qwen-gguf")]
@@ -34,7 +34,7 @@ impl Default for ProviderPool {
         Self {
             desired: Arc::new(std::sync::Mutex::new(None)),
             retrying: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            gpt: GptSovitsProvider::new(GptSovitsConfig::default()),
+            pocket: PocketTtsProvider::new(PocketTtsConfig::default()),
             #[cfg(feature = "qwen-gguf")]
             qwen_gguf: QwenGgufProvider::new(QwenGgufConfig::default()),
         }
@@ -46,11 +46,12 @@ impl ProviderPool {
         Self::default()
     }
 
-    /// Sync singleton configuration from freshly mapped provider configs.
-    /// Only genuinely changed providers are reconfigured (which drops
-    /// their loaded model); unchanged providers keep serving.
-    pub fn sync_from(&self, gpt: GptSovitsConfig) {
-        self.gpt.sync_config(gpt);
+    /// Sync the Pocket TTS singleton configuration (reconfiguration drops
+    /// its loaded sessions; unchanged configs keep serving). Only a
+    /// genuinely changed config reconfigures; unchanged providers keep
+    /// serving.
+    pub fn sync_pocket_config(&self, pocket: PocketTtsConfig) {
+        self.pocket.sync_config(pocket);
     }
 
     /// Sync the GGUF singleton configuration (reconfiguration drops its
@@ -65,7 +66,7 @@ impl ProviderPool {
 
     /// Reject request-scoped snapshots older than the most recently adopted
     /// server configuration. Equal versions retry deferred busy-model changes.
-    pub fn sync_versioned(&self, generation: u64, gpt: GptSovitsConfig) {
+    pub fn sync_versioned(&self, generation: u64, pocket: PocketTtsConfig) {
         let mut current = self.desired.lock().unwrap_or_else(|e| e.into_inner());
         if current
             .as_ref()
@@ -73,14 +74,14 @@ impl ProviderPool {
         {
             return;
         }
-        *current = Some((generation, gpt.clone()));
-        self.sync_from(gpt);
+        *current = Some((generation, pocket.clone()));
+        self.sync_pocket_config(pocket);
         drop(current);
         self.retry_deferred();
     }
     fn retry_deferred(&self) {
         use std::sync::atomic::Ordering;
-        if !self.gpt.reload_pending() {
+        if !self.pocket.reload_pending() {
             return;
         }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
@@ -91,7 +92,7 @@ impl ProviderPool {
         }
         let desired = self.desired.clone();
         let retrying = self.retrying.clone();
-        let gpt = self.gpt.clone();
+        let pocket = self.pocket.clone();
         runtime.spawn(async move {
             struct Reset(Arc<std::sync::atomic::AtomicBool>, bool);
             impl Drop for Reset {
@@ -105,11 +106,11 @@ impl ProviderPool {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 let current = desired.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some((_, g)) = current.as_ref() {
-                    gpt.sync_config(g.clone());
+                if let Some((_, p)) = current.as_ref() {
+                    pocket.sync_config(p.clone());
                 }
-                gpt.kick_ensure_if_needed(None);
-                if !gpt.reload_pending() {
+                pocket.kick_ensure_if_needed(None);
+                if !pocket.reload_pending() {
                     // Publish idle while holding the same lock used by new
                     // versions; a concurrent update cannot lose its retry.
                     reset.0.store(false, Ordering::Release);
@@ -125,7 +126,7 @@ impl ProviderPool {
     /// Never blocks. `hf_token` covers gated repositories; the pinned
     /// public bundles need none.
     pub fn kick_ensure_if_needed(&self, hf_token: Option<String>) {
-        self.gpt.kick_ensure_if_needed(hf_token.clone());
+        self.pocket.kick_ensure_if_needed(hf_token.clone());
         #[cfg(feature = "qwen-gguf")]
         self.qwen_gguf.kick_ensure_if_needed(hf_token);
     }
@@ -135,7 +136,7 @@ impl ProviderPool {
     pub fn registry(&self, supertonic: Arc<SupertonicProvider>) -> TtsProviderRegistry {
         let registry = TtsProviderRegistry::new();
         registry.register(supertonic);
-        registry.register(Arc::clone(&self.gpt) as Arc<dyn super::TtsProvider>);
+        registry.register(Arc::clone(&self.pocket) as Arc<dyn super::TtsProvider>);
         #[cfg(feature = "qwen-gguf")]
         registry.register(Arc::clone(&self.qwen_gguf) as Arc<dyn super::TtsProvider>);
         registry
@@ -150,14 +151,14 @@ mod tests {
     #[test]
     fn older_configuration_cannot_restore_a_retired_provider() {
         let pool = ProviderPool::new();
-        let enabled = GptSovitsConfig {
+        let enabled = PocketTtsConfig {
             enabled: true,
             ..Default::default()
         };
         pool.sync_versioned(10, enabled.clone());
-        pool.sync_versioned(11, GptSovitsConfig::default());
+        pool.sync_versioned(11, PocketTtsConfig::default());
         pool.sync_versioned(10, enabled);
-        assert!(!pool.gpt.status().enabled);
+        assert!(!pool.pocket.status().enabled);
     }
     #[test]
     fn pool_registers_all_providers() {
@@ -167,22 +168,24 @@ mod tests {
         )));
         let registry = pool.registry(supertonic);
         // No Candle provider remains: Qwen means the GGUF/ONNX backend.
+        // GPT-SoVITS is retired: no "gpt-sovits" id may appear.
         assert!(!registry.provider_ids().contains(&"qwen3".to_string()));
+        assert!(!registry.provider_ids().contains(&"gpt-sovits".to_string()));
         #[cfg(feature = "qwen-gguf")]
         assert_eq!(
             registry.provider_ids(),
-            vec!["gpt-sovits", "qwen3-gguf", "supertonic"]
+            vec!["pocket-tts", "qwen3-gguf", "supertonic"]
         );
         #[cfg(not(feature = "qwen-gguf"))]
-        assert_eq!(registry.provider_ids(), vec!["gpt-sovits", "supertonic"]);
+        assert_eq!(registry.provider_ids(), vec!["pocket-tts", "supertonic"]);
     }
 
     #[test]
     fn sync_keeps_healthy_singletons_when_config_is_unchanged() {
         let pool = ProviderPool::new();
-        pool.sync_from(GptSovitsConfig::default());
+        pool.sync_pocket_config(PocketTtsConfig::default());
         // No loaded model, no error, disabled by default: sync is a no-op
         // that must not record failures.
-        assert!(!pool.gpt.status().enabled);
+        assert!(!pool.pocket.status().enabled);
     }
 }

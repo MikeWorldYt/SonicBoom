@@ -18,7 +18,7 @@ no explicit missing-file failure also made packaging/publication unreliable.
 The GitHub API confirmed v0.0.1 through v0.0.4 have no binary assets.
 
 `cargo tree --locked --features gui -i esaxx-rs` confirms the shared patched
-esaxx-rs 0.1.10 serves tokenizers 0.20.4 (GPT-SoVITS) and 0.22.2 (Qwen).
+esaxx-rs 0.1.10 serves tokenizers 0.20.4 (retired GPT-SoVITS) and 0.22.2 (Qwen).
 knf-rs-sys 0.3.2 defaults KNF_STATIC_CRT to false. The vendor provenance hashes
 confirm build.rs is the only modified original esaxx file. Both static_crt
 calls use false; no linker suppression or provider/test removal was used.
@@ -85,7 +85,7 @@ platform packages. The implementation deliberately refuses a partial set.
   fxhash 0.2.1 (RUSTSEC-2025-0057), and unsound rand 0.7.3
   (RUSTSEC-2026-0097). Existing yanked-crate warnings are also reported.
   These are unchanged locked dependencies. rustls is not selected in the local
-  default+GUI graph; fxhash comes via GPT-SoVITS/jieba, and rand 0.7.3 via
+  default+GUI graph; fxhash comes via jieba, and rand 0.7.3 via
   arpabet's PHF build dependencies. No new audit exceptions were added, and
   unrelated dependencies were not silently upgraded. The audit gate remains
   red and must be resolved deliberately before release approval.
@@ -96,7 +96,7 @@ platform packages. The implementation deliberately refuses a partial set.
   release compilation, native DLL resolution and ZIP startup/shutdown remain
   unverified. No successful hosted Ubuntu result is claimed.
 * Model-dependent tests remain explicitly ignored by the existing suite.
-  Real Supertonic/Qwen/GPT-SoVITS inference, GPU execution, physical playback
+  Real Supertonic/Qwen/Pocket TTS inference, GPU execution, physical playback
   and interactive tray behavior were not certified by a model-free probe.
 * No merge, new tag, release upload or published-asset API validation has
   occurred. Existing tags/releases remain unchanged. Published-asset checks

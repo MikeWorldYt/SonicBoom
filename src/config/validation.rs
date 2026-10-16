@@ -337,44 +337,38 @@ fn validate_providers(config: &AppConfig) -> Result<(), String> {
     if gguf.model_dir.as_os_str().is_empty() {
         return Err("providers.qwen3_gguf.model_dir must not be empty".to_string());
     }
-    let gpt = &config.providers.gpt_sovits;
-    if !["cpu", "auto"].contains(&gpt.device.as_str()) {
-        return Err("providers.gpt_sovits.device must be one of: cpu, auto \
-             (GPU execution providers are unsupported for GPT-SoVITS)"
+    let pocket = &config.providers.pocket_tts;
+    if !["cpu", "auto"].contains(&pocket.device.as_str()) {
+        return Err("providers.pocket_tts.device must be one of: cpu, auto \
+             (GPU execution providers are unsupported for Pocket TTS)"
             .to_string());
     }
-    if gpt.model_id.trim().is_empty() || gpt.model_id.len() > 64 {
-        return Err("providers.gpt_sovits.model_id must be 1-64 characters".to_string());
+    if pocket.model_id.trim().is_empty() || pocket.model_id.len() > 64 {
+        return Err("providers.pocket_tts.model_id must be 1-64 characters".to_string());
     }
-    if gpt.revision.trim().is_empty() || gpt.revision.len() > 128 {
-        return Err("providers.gpt_sovits.revision must be 1-128 characters".to_string());
+    if pocket.revision.trim().is_empty() || pocket.revision.len() > 128 {
+        return Err("providers.pocket_tts.revision must be 1-128 characters".to_string());
     }
-    if gpt.max_concurrent != 1 {
-        return Err("providers.gpt_sovits.max_concurrent must be 1: mutable reference conditioning is serialized".to_string());
-    }
-    if !(1..=1024).contains(&gpt.cache_entries) {
-        return Err("providers.gpt_sovits.cache_entries must be between 1 and 1024".to_string());
-    }
-    if gpt.top_k > 100 {
+    if pocket.max_concurrent != 1 {
         return Err(
-            "providers.gpt_sovits.top_k must be between 0 and 100 (0 disables)".to_string(),
+            "providers.pocket_tts.max_concurrent must be 1: mutable model state is serialized"
+                .to_string(),
         );
     }
-    if !(0.0..=1.0).contains(&gpt.top_p) || !gpt.top_p.is_finite() {
-        return Err(
-            "providers.gpt_sovits.top_p must be between 0.0 and 1.0 (0.0 disables)".to_string(),
-        );
+    if !(1..=1024).contains(&pocket.cache_entries) {
+        return Err("providers.pocket_tts.cache_entries must be between 1 and 1024".to_string());
     }
-    if !(0.0..=2.0).contains(&gpt.temperature) || !gpt.temperature.is_finite() {
-        return Err("providers.gpt_sovits.temperature must be between 0.0 and 2.0".to_string());
+    if !(0.0..=2.0).contains(&pocket.temperature) || !pocket.temperature.is_finite() {
+        return Err("providers.pocket_tts.temperature must be between 0.0 and 2.0".to_string());
     }
-    if !(0.1..=2.0).contains(&gpt.repetition_penalty) || !gpt.repetition_penalty.is_finite() {
-        return Err(
-            "providers.gpt_sovits.repetition_penalty must be between 0.1 and 2.0".to_string(),
-        );
+    if !(1..=8).contains(&pocket.lsd_steps) {
+        return Err("providers.pocket_tts.lsd_steps must be between 1 and 8".to_string());
     }
-    if gpt.model_dir.as_os_str().is_empty() {
-        return Err("providers.gpt_sovits.model_dir must not be empty".to_string());
+    if !(1..=32).contains(&pocket.cpu_threads) {
+        return Err("providers.pocket_tts.cpu_threads must be between 1 and 32".to_string());
+    }
+    if pocket.model_dir.as_os_str().is_empty() {
+        return Err("providers.pocket_tts.model_dir must not be empty".to_string());
     }
     Ok(())
 }
@@ -565,12 +559,17 @@ mod tests {
 
     #[test]
     fn provider_devices_are_constrained() {
-        // GPT-SoVITS is CPU-only: GPU values are rejected, not reinterpreted.
+        // Pocket TTS is CPU-only: GPU values are rejected, not reinterpreted.
         let mut config = valid_config();
-        config.providers.gpt_sovits.device = "cuda".to_string();
+        config.providers.pocket_tts.device = "cuda".to_string();
         assert!(validate(&config).is_err());
         let mut config = valid_config();
-        config.providers.gpt_sovits.device = "rocm".to_string();
+        config.providers.pocket_tts.device = "rocm".to_string();
         assert!(validate(&config).is_err());
+        // A leftover [providers.gpt_sovits] section is tolerated and ignored.
+        let mut config = valid_config();
+        config.providers.gpt_sovits.enabled = true;
+        config.providers.gpt_sovits.device = Some("cuda".to_string());
+        assert!(validate(&config).is_ok());
     }
 }

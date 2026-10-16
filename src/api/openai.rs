@@ -28,16 +28,25 @@ pub const SUPPORTED_OPENAI_MODELS: &[&str] = &[
     "tts-1-hd",
     "supertonic-3",
     "qwen3-tts-1.7b-base",
-    "gpt-sovits-v2-onnx",
-    "gpt-sovits-v2pro-onnx",
-    "gpt-sovits-v2proplus-onnx",
+    "pocket-tts-en",
+    "pocket-tts-es",
 ];
 
 /// Whether `model` selects a voice-cloning provider (voice must be an
 /// authorized profile ID) rather than Supertonic built-in voices.
 /// The removed 0.6B Candle model is no longer a cloning model.
+/// Model IDs of the retired GPT-SoVITS provider. They are rejected with
+/// an explicit retired-model error, never silently rerouted to Pocket TTS
+/// or Supertonic.
+pub const RETIRED_GPT_SOVITS_MODELS: &[&str] = &[
+    "gpt-sovits-v2-onnx",
+    "gpt-sovits-v2pro-onnx",
+    "gpt-sovits-v2proplus-onnx",
+];
+
 pub fn is_cloning_model(model: &str) -> bool {
-    sonicboom::tts::providers::gptsovits::GPTSOVITS_MODELS.contains(&model) || is_gguf_model(model)
+    sonicboom::tts::providers::pocket_tts::POCKET_TTS_MODELS.contains(&model)
+        || is_gguf_model(model)
 }
 
 /// The 1.7B identifier routes to the GGUF backend only in builds that
@@ -93,10 +102,18 @@ fn default_format() -> String {
     "opus".to_string()
 }
 
-/// Validate the requested model identifier.
+/// Validate the requested model identifier. Retired GPT-SoVITS IDs get
+/// an explicit retired-model error instead of the generic unknown-model
+/// message, and are never rerouted to another provider.
 pub fn validate_model(model: &str) -> Result<(), AppError> {
     if SUPPORTED_OPENAI_MODELS.contains(&model) {
         Ok(())
+    } else if RETIRED_GPT_SOVITS_MODELS.contains(&model) {
+        Err(AppError::BadRequest(format!(
+            "model '{model}' is retired (GPT-SoVITS was replaced by Pocket TTS); \
+             use one of: {}",
+            SUPPORTED_OPENAI_MODELS.join(", ")
+        )))
     } else {
         Err(AppError::BadRequest(format!(
             "unsupported model '{model}' (expected one of: {})",
@@ -160,7 +177,7 @@ pub fn map_voice(openai_voice: &str) -> Result<String, AppError> {
 }
 
 /// Synthesize speech with a cloning provider for `POST /v1/audio/speech`
-/// when `model` selects Qwen3-TTS or GPT-SoVITS. `voice` must be an
+/// when `model` selects Qwen3-TTS or Pocket TTS. `voice` must be an
 /// authorized voice-profile ID owned by the calling token; the stored
 /// reference audio and transcript travel with the request.
 async fn post_speech_cloning(
@@ -193,6 +210,13 @@ async fn post_speech_cloning(
     let (profile, reference) =
         super::voices::owned_reference(state, profile_id.to_string(), token.rate_limit_key())
             .await?;
+    if profile.provider == "gpt-sovits" {
+        return Err(AppError::BadRequest(
+            "voice profile uses the retired GPT-SoVITS provider and is unavailable; recreate it \
+             as a pocket-tts profile (mode audio_prompt) from its stored reference audio"
+                .into(),
+        ));
+    }
     if profile.model_revision != super::voices::config_revision_for(&config, &profile.provider) {
         return Err(AppError::BadRequest(
             "voice profile belongs to an incompatible model revision; create a new profile".into(),
@@ -355,7 +379,7 @@ pub async fn get_models() -> impl IntoResponse {
                 if is_gguf_model(id) {
                     "local:qwen3-gguf"
                 } else {
-                    "local:gpt-sovits"
+                    "local:pocket-tts"
                 }
             } else {
                 "local"
@@ -426,16 +450,16 @@ mod tests {
         for model in ["tts-1", "tts-1-hd", "supertonic-3"] {
             assert!(!is_cloning_model(model), "{model} must stay supertonic");
         }
-        for model in [
-            "qwen3-tts-1.7b-base",
-            "gpt-sovits-v2-onnx",
-            "gpt-sovits-v2pro-onnx",
-            "gpt-sovits-v2proplus-onnx",
-        ] {
+        for model in ["qwen3-tts-1.7b-base", "pocket-tts-en", "pocket-tts-es"] {
             assert!(
                 is_cloning_model(model),
                 "{model} must route to a cloning provider"
             );
+        }
+        // Retired GPT-SoVITS IDs are rejected, never rerouted.
+        for model in RETIRED_GPT_SOVITS_MODELS {
+            assert!(!is_cloning_model(model), "{model} must stay retired");
+            assert!(validate_model(model).is_err(), "{model} must be rejected");
         }
         // The removed 0.6B Candle model is neither listed nor cloning.
         assert!(validate_model("qwen3-tts-0.6b-base").is_err());

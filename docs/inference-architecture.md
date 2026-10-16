@@ -1,7 +1,7 @@
 # Native inference ownership and cache policy
 
 SonicBoom remains Rust-native: Qwen 1.7B uses GGUF (llama.cpp) plus ONNX
-Runtime, GPT-SoVITS and Supertonic use ONNX Runtime. No Python/PyTorch
+Runtime, Pocket TTS and Supertonic use ONNX Runtime. No Python/PyTorch
 runtime or model subprocess is introduced. The llama.cpp dependency is a
 pinned submodule; the GGUF/ONNX bundle revision is recorded in
 `src/tts/providers/qwen_gguf/models.rs`. (The former Candle Qwen backend
@@ -34,7 +34,7 @@ serializes manifest mutations across server instances.
 
 Large optional model construction is serialized across providers. Each provider
 loads once, and retired Qwen workers are joined before replacement. A failed
-Qwen load does not poison construction for GPT-SoVITS. Keep sufficient free RAM
+Qwen load does not poison construction for Pocket TTS. Keep sufficient free RAM
 for every enabled resident model; this is not an automatic offloading policy.
 
 ## Configuration versions and reloads
@@ -48,7 +48,7 @@ candidates, and do not discard a compatible load for a sampling/cache-only
 change. Maximum-frame/cache/sampling changes preserve loaded weights.
 
 Providers are serialized: `providers.qwen3.max_concurrent` and
-`providers.gpt_sovits.max_concurrent` must be **1**. Older values that implied
+`providers.pocket_tts.max_concurrent` must be **1**. Older values that implied
 parallel model execution were never effective; set them to 1 before upgrading.
 Global admission can still allow distinct providers to run concurrently.
 
@@ -94,7 +94,7 @@ safe worker boundary.
 The server caches one manifest plus a decoded-reference LRU (16 entries/64 MiB).
 Manifest and WAV identities detect changes, and create/delete operations keep
 invalidation coherent. Profile directories are owner-private; manifests and
-reference writes remain atomic. GPT-SoVITS retains only its last conditioned
+reference writes remain atomic. Pocket TTS retains only its last conditioned
 profile/reference under its serialized model transaction and invalidates that
 reuse on changes/deletion. Its native data is replaced at the next safe reference
 preparation rather than unloading healthy weights.
@@ -105,7 +105,7 @@ Authenticated `/api/providers` includes actual selected device, model residency,
 load count and Qwen conditioning counters. Jobs expose measured stage durations,
 frames, elapsed time, timestamps and actual provider/model/voice/device context.
 Logs identify request paths and job IDs, not request bodies, query transcripts,
-credentials or recordings. Upstream GPT debug events containing text are filtered
+credentials or recordings. No provider logs raw reference audio or transcripts
 independently of configured verbosity.
 
 Qwen logs prefill, acoustic prediction, talker, sampling and tokenizer decoding
@@ -124,7 +124,7 @@ cargo run --release --no-default-features --features qwen --example cache_benchm
 # The cache example checks the pinned 0.6B model digest.
 QWEN_MODEL_DIR=./models/qwen3-tts \
   /usr/bin/time -v cargo run --release --no-default-features \
-  --features qwen,gpt-sovits --example tts_benchmark -- all
+  --features qwen-gguf,pocket-tts --example tts_benchmark -- all
 # Linux perf needs host permission and symbols; profile the built binary:
 perf record -g target/release/examples/tts_benchmark all
 perf report

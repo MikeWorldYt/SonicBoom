@@ -51,8 +51,9 @@ fn parse_clone_mode(raw: &str) -> Result<CloneMode, AppError> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "icl" => Ok(CloneMode::Icl),
         "x_vector" | "x-vector" | "xvector" => Ok(CloneMode::XVector),
+        "audio_prompt" | "audio-prompt" | "audioprompt" => Ok(CloneMode::AudioPrompt),
         other => Err(AppError::BadRequest(format!(
-            "unsupported clone mode '{other}' (expected one of: icl, x_vector)"
+            "unsupported clone mode '{other}' (expected one of: icl, x_vector, audio_prompt)"
         ))),
     }
 }
@@ -381,25 +382,26 @@ async fn post_clones_inner(
     let provider = query.provider.trim().to_ascii_lowercase();
     // The Candle provider is gone: Qwen cloning means the GGUF/ONNX backend.
     #[cfg(feature = "qwen-gguf")]
-    let cloning = provider == "qwen3-gguf" || provider == "gpt-sovits";
+    let cloning = provider == "qwen3-gguf" || provider == "pocket-tts";
     #[cfg(not(feature = "qwen-gguf"))]
-    let cloning = provider == "gpt-sovits";
+    let cloning = provider == "pocket-tts";
     if !cloning {
         return Err(AppError::BadRequest(format!(
             "unsupported provider '{}' for voice cloning \
              (expected one of: {}; supertonic uses built-in style voices)",
             query.provider,
             if cfg!(feature = "qwen-gguf") {
-                "qwen3-gguf, gpt-sovits"
+                "qwen3-gguf, pocket-tts"
             } else {
-                "gpt-sovits"
+                "pocket-tts"
             }
         )));
     }
     let mode = parse_clone_mode(&query.mode)?;
-    if provider == "gpt-sovits" && mode != CloneMode::Icl {
+    if provider == "pocket-tts" && mode != CloneMode::AudioPrompt {
         return Err(AppError::BadRequest(
-            "gpt-sovits supports only icl mode (reference WAV plus exact transcript)".to_string(),
+            "pocket-tts supports only audio_prompt mode (reference WAV, no transcript needed)"
+                .to_string(),
         ));
     }
     let transcript = query
@@ -463,8 +465,8 @@ async fn post_clones_inner(
             )
             .map_err(provider_error_to_app)?
         }
-        "gpt-sovits" => {
-            sonicboom::tts::providers::gptsovits::GptSovitsProvider::validate_reference(&pcm, rate)
+        "pocket-tts" => {
+            sonicboom::tts::providers::pocket_tts::PocketTtsProvider::validate_reference(&pcm, rate)
                 .map_err(provider_error_to_app)?
         }
         _ => {}
@@ -508,7 +510,11 @@ pub(crate) fn config_revision_for(
     match provider {
         #[cfg(feature = "qwen-gguf")]
         "qwen3-gguf" => sonicboom::tts::providers::qwen_gguf::models::REVISION.to_string(),
-        _ => config.providers.gpt_sovits.revision.clone(),
+        "pocket-tts" => config.providers.pocket_tts.revision.clone(),
+        // Retired providers (GPT-SoVITS) and anything unknown: a revision
+        // that matches nothing, so legacy profiles fail closed with an
+        // explicit retired/incompatible error instead of being reused.
+        _ => "retired:unknown-provider".to_string(),
     }
 }
 
@@ -597,8 +603,8 @@ pub async fn delete_voice(
             state.providers.qwen_gguf.as_ref(),
             id.trim(),
         ),
-        "gpt-sovits" => sonicboom::tts::providers::TtsProvider::invalidate_voice(
-            state.providers.gpt.as_ref(),
+        "pocket-tts" => sonicboom::tts::providers::TtsProvider::invalidate_voice(
+            state.providers.pocket.as_ref(),
             id.trim(),
         ),
         _ => {}
@@ -667,6 +673,17 @@ async fn post_preview_inner(
     }
     let (profile, reference) =
         owned_reference(&state, id.trim().to_string(), token.rate_limit_key()).await?;
+    // Legacy GPT-SoVITS profiles are preserved on disk but unusable: their
+    // conditioning is not Pocket conditioning and must never be silently
+    // reinterpreted. The owner can recreate them as Pocket profiles from
+    // the stored reference audio (see GET /api/voices/{id}).
+    if profile.provider == "gpt-sovits" {
+        return Err(AppError::BadRequest(
+            "voice profile uses the retired GPT-SoVITS provider and is unavailable; recreate it \
+             as a pocket-tts profile (mode audio_prompt) from its stored reference audio"
+                .into(),
+        ));
+    }
     if profile.model_revision != config_revision_for(&config, &profile.provider) {
         return Err(AppError::BadRequest(
             "voice profile belongs to an incompatible model revision; create a new profile".into(),

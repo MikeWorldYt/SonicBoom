@@ -41,7 +41,18 @@ differ — their rows stay pending until measured there.
 |---|---|---|---|---|---|---|
 | RTX 3060, `icl` | pending | pending (record 6/8/12 GB) | pending | pending | pending | **pending** — no NVIDIA hardware on the measurement machine; `qwen-cuda` builds only where the CUDA toolkit exists |
 
-## GPT-SoVITS (`gpt-sovits-v2pro-onnx`, CPU, 9 ONNX sessions)
+## Pocket TTS (`pocket-tts-en` / `pocket-tts-es`, CPU, 5 ONNX sessions + pure-Rust unigram)
+
+| Case | Load | Peak RSS | Synth | Audio | RTF | Result |
+|---|---|---|---|---|---|---|
+| English reference + audio prompt (provider E2E, seed `0xC10C`) | ~0.7 s | ~1.2 GB full loop / ~0.4 GB per-graph (VmHWM) | ~2.0 s | 3.44 s @ 24 kHz | ~1.5 | **pass** — audible, finite PCM, voice-sensitive (centroid 1707 Hz vs 2134 Hz across references) |
+| Spanish reference + audio prompt (provider E2E, seed `0xC10C`) | ~0.7 s | ~1.2 GB full loop | ~2.3 s | 2.80 s @ 24 kHz | ~1.5 | **pass** — audible, finite PCM |
+
+Hardware: AMD BC-250, 14 GB RAM, Linux, Rust 1.99, release `ort =2.0.0-rc.13`
+CPU EP. No Python/subprocess at runtime; offline Python validated the same
+bundles first (EN 3.12 s, ES 3.36 s, RTF ~1.5–1.7x).
+
+## GPT-SoVITS (RETIRED — historical rows kept, provider removed)
 
 | Case | Load | Peak RSS | Synth | Audio | RTF | Result |
 |---|---|---|---|---|---|---|
@@ -70,13 +81,13 @@ nonzero, quarter-second RMS trace
 - Two distinct voice profiles issued concurrently never share cache keys
   (`concurrent_references_use_distinct_cache_keys`); Qwen prompts are
   cached per `(provider, revision, reference hash, transcript, mode)` in
-  the model-owning worker thread; GPT-SoVITS prepares + synthesizes
+  the model-owning worker thread; Pocket TTS prepares + synthesizes
   atomically under one lock acquisition.
-- Qwen `icl` without transcript, GPT-SoVITS without transcript, GPT-SoVITS
-  `language=ja`/`es`, raw `.pth` loads, unverified 1.7B/v2/v2ProPlus
-  manifests, GPU requests for GPT-SoVITS, CUDA for Qwen without
-  `qwen-cuda`, malformed bundles, and traversal profile IDs are all
-  rejected with explicit codes (see `cargo test`).
+- Qwen `icl` without transcript, Pocket TTS with `icl`/`x_vector` mode,
+  Pocket TTS `language=fr/de/nl`, unverified 1.7B manifests, GPU requests
+  for Pocket TTS, CUDA for Qwen without `qwen-cuda`, malformed bundles,
+  and traversal profile IDs are all rejected with explicit codes
+  (see `cargo test`).
 - Legacy `POST /api/tts`, `/v1/audio/speech` aliases, `GET /v1/models`,
   401/429/503 contracts, queue/playback, `/ready`, config reload, and the
   TikTools plugin shape are regression-tested unchanged.
@@ -85,9 +96,8 @@ nonzero, quarter-second RMS trace
 
 - BC-250 (`gfx1013`) CPU rows for both providers.
 - NVIDIA RTX 3060 CUDA rows for Qwen.
-- GPT-SoVITS Chinese (`zh`) model-backed run (pipeline identical to the
-  proven English path; needs an authorized Chinese reference + transcript).
-- GPT-SoVITS-only peak RSS (VmHWM capture).
+- ~~GPT-SoVITS Chinese (`zh`) model-backed run~~ — retired with the provider.
+- ~~GPT-SoVITS-only peak RSS (VmHWM capture)~~ — retired with the provider.
 
 
 ## 2026-10-13 BC-250 refactor measurements

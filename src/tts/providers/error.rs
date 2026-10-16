@@ -154,7 +154,7 @@ mod tests {
                 "unsupported_model",
             ),
             (
-                ProviderError::unsupported_language("gpt-sovits", "ja", &["zh", "en"]),
+                ProviderError::unsupported_language("pocket-tts", "fr", &["en", "es"]),
                 400,
                 "unsupported_language",
             ),
@@ -188,9 +188,9 @@ mod tests {
     }
 
     #[test]
-    fn japanese_rejection_names_supported_languages() {
-        let error = ProviderError::unsupported_language("gpt-sovits", "ja", &["zh", "en"]);
-        assert!(error.message().contains("ja"));
-        assert!(error.message().contains("zh"));
+    fn french_rejection_names_supported_languages() {
+        let error = ProviderError::unsupported_language("pocket-tts", "fr", &["en", "es"]);
+        assert!(error.message().contains("fr"));
+        assert!(error.message().contains("en"));
     }
 }

@@ -3,9 +3,9 @@
 Local, in-process voice cloning with no Python, PyTorch, `tch`, upstream
 CLI, network TTS service, or sidecar process at runtime. Supertonic 3
 (`ort`-based ONNX) stays the default provider; Qwen3-TTS 1.7B GGUF/ONNX
-(opt-in build) and GPT-SoVITS (ONNX Runtime) are optional and disabled by
-default. The Candle Qwen backend was removed; only the native GGUF/ONNX
-backend remains.
+(opt-in build) and Pocket TTS (ONNX Runtime) are optional and disabled by
+default. The Candle Qwen backend and GPT-SoVITS were removed; Pocket TTS
+is the audio-prompt cloning provider.
 
 Upstream implementations under review (revalidate before pinning a
 dependency revision):
@@ -13,11 +13,11 @@ dependency revision):
 | Provider | Source | Reviewed revision | Reality |
 |---|---|---|---|
 | Qwen3-TTS GGUF/ONNX | https://huggingface.co/Emerald7664/Qwen3-TTS-ONNX (ref: https://github.com/HaujetZhao/Qwen3-TTS-GGUF) | `0a36d692562f83a862466b0bf8c12154ddf1965d` | Native Rust + llama.cpp GGUF + ONNX INT8; 1.7B Base ICL cloning only (x-vector explicitly rejected); CPU validated, Vulkan functional but output-equivalence unvalidated |
-| GPT-SoVITS | https://github.com/bailu-obj/gpt-sovits-onnx-rs | `204ae4abcd218113aad86f6f9a66bdba92adcfd7` | Rust ONNX runtime; v2/v2Pro/v2ProPlus; CPU sessions; reference WAV plus transcript |
+| Pocket TTS | https://huggingface.co/KevinAHM/pocket-tts-onnx (export of https://github.com/kyutai-labs/pocket-tts) | `58a6d00cf13d239b6748cb0769f35c580a8f606c` | Pure-Rust driver over 5 ONNX graphs per language; CPU sessions; reference WAV, no transcript (audio-prompt mode) |
 
 ONNX Runtime's packaged native library is the only native-code exception
-and is shared by all providers (initialized once). Python may be used
-**offline only** to export a GPT-SoVITS ONNX bundle, never by SonicBoom.
+and is shared by all providers (initialized once). Python was used
+**offline only** to validate the Pocket TTS ONNX bundles, never by SonicBoom.
 
 ## What is implemented in this tree
 
@@ -31,7 +31,7 @@ and is shared by all providers (initialized once). Python may be used
 - `SupertonicProvider`: adapter preserving all ten style voices, `alloy`
   aliases, formats, auth, rate limits, and the engine API. No second
   synthesis path: the registry routes to the same inference code.
-- `QwenGgufProvider` / `GptSovitsProvider`: asset validation, language/mode
+- `QwenGgufProvider` / `PocketTtsProvider`: asset validation, language/mode
   validation, device resolution with effective-device reporting,
   per-model serialization so concurrent voices never swap reference data,
   and a bounded conditioning cache keyed by
@@ -39,11 +39,13 @@ and is shared by all providers (initialized once). Python may be used
 - `src/tts/voices.rs`: persistent `VoiceProfileStore` (opaque UUID, consent
   metadata, `<uuid>.wav` references, no arbitrary client filenames, no
   transcript/audio logging).
-- Config `[providers.qwen3_gguf]` / `[providers.gpt_sovits]` (`enabled=false`
+- Config `[providers.qwen3_gguf]` / `[providers.pocket_tts]` (`enabled=false`
   by default) and `[voices]`; schema, validation, hot reload (per-request
-  reads, last-healthy state retained on failure). A leftover `[providers.qwen3]`
-  Candle section is tolerated for boot compatibility but ignored (with a
-  startup warning): delete it from old files.
+  reads, last-healthy state retained on failure). Leftover `[providers.qwen3]`
+  Candle and `[providers.gpt_sovits]` sections are tolerated for boot
+  compatibility but ignored (with a startup warning): delete them from old
+  files. Old GPT-SoVITS voice profiles are kept on disk but unavailable;
+  recreate them as Pocket profiles from their stored reference audio.
 - Endpoints: `GET /api/providers`, `GET /api/providers/{id}/status`,
   `POST /api/voices/clones`, `GET /api/voices`, `GET /api/voices/{id}`,
   `DELETE /api/voices/{id}`, `POST /api/voices/{id}/preview`; extended
@@ -58,12 +60,12 @@ and is shared by all providers (initialized once). Python may be used
 
 | Feature | Effect |
 |---|---|
-| (default) | Supertonic 3 + GPT-SoVITS compiled; optional providers disabled, no weights fetched |
+| (default) | Supertonic 3 + Pocket TTS compiled; optional providers disabled, no weights fetched |
 | `qwen-gguf` | Qwen3-TTS 1.7B GGUF/ONNX provider, CPU (`device=cpu\|auto`) |
 | `qwen-gguf-vulkan` | Additionally allow GGUF `device=vulkan` on Vulkan-capable GPUs (implies `qwen-gguf`) |
 | `qwen-gguf-cuda` | Additionally allow GGUF `device=cuda` (NVIDIA only; implies `qwen-gguf`) |
-| `gpt-sovits` | GPT-SoVITS ONNX provider, CPU execution provider only |
-| `cuda` / `rocm` / `coreml` | Existing ORT flags for Supertonic; they do **not** accelerate GPT-SoVITS |
+| `pocket-tts` | Pocket TTS ONNX provider, CPU execution provider only |
+| `cuda` / `rocm` / `coreml` | Existing ORT flags for Supertonic; they do **not** accelerate Pocket TTS |
 
 AMD BC-250 (`gfx1013`) is CPU-only for the acceptance criteria. Do not
 imply CUDA runs on AMD, and do not claim ROCm/MIGraphX support without
@@ -74,15 +76,18 @@ proof. `coreml`/`cuda`/`rocm` stay mutually exclusive.
 - Qwen3-TTS 1.7B Base (GGUF/ONNX): `en`, `de`, `es`, `zh`, `ja`, `fr`,
   `ko`, `ru`, `it`, `pt`. Japanese (`language=ja`) synthesizes through the
   Base model in ICL clone mode.
-- GPT-SoVITS: `zh` and `en` only. The reviewed port exposes
-  `Lang::{Zh,En}`: `language=ja` and `language=es` return an explicit
-  `unsupported_language` error — never Chinese phonemes, never a
-  Supertonic fallback. No V5, no Japanese phonemization claim.
+- Pocket TTS: `en` (`pocket-tts-en`) and `es` (`pocket-tts-es`) only —
+  each validated independently end to end. Unvalidated bundles
+  (`fr`/`de`/`it`/`pt`, `*_24l` variants, Dutch — which has no ONNX
+  export) return an explicit `unsupported_language` error — never another
+  language's output, never a Supertonic fallback.
+- GPT-SoVITS is retired: its model IDs return an explicit retired-model
+  error and its old voice profiles are unavailable (recreate as Pocket).
 - Supertonic: unchanged (English synthesis; legacy voice aliases).
 
 Unknown provider/model/voice/language, incompatible variants (non-1.7B
-Qwen bundles, x-vector mode on the GGUF backend, raw GPT-SoVITS `.pth`
-checkpoints), missing assets, and unavailable devices all return explicit,
+Qwen bundles, x-vector mode on the GGUF backend, non-`audio_prompt` mode
+on Pocket TTS), missing assets, and unavailable devices all return explicit,
 actionable errors. Configured `cpu` fallback from `auto` is allowed where
 supported, and the effective device is always reported.
 
@@ -135,39 +140,40 @@ server before loading (full hashes in
 `src/tts/providers/qwen_gguf/models.rs` `MANIFEST`): talker
 `qwen3_tts_talker.q5_k.gguf`, predictor `qwen3_tts_predictor.q8_0.gguf`,
 speaker/codec/decode INT8 ONNX bundles, embeddings, tokenizer.
-GPT-SoVITS v2Pro (`mikv39/gpt-sovits-onnx-custom`
-`69063da489c62f34fffc40acd10e2167623509aa`): required `vits.onnx`,
-`ssl.onnx`, `t2s_encoder.onnx`, `t2s_fs_decoder.onnx`,
-`t2s_s_decoder.onnx`; quality optionals `bert.onnx`, `g2pW.onnx`,
-`g2p_en/{encoder,decoder}_model.onnx`, `sv.onnx` (full hashes in
-`src/tts/providers/gptsovits.rs` `GPTSOVITS_V2PRO_MANIFEST`).
+Pocket TTS per-language bundles (`KevinAHM/pocket-tts-onnx`
+`58a6d00cf13d239b6748cb0769f35c580a8f606c`, CC-BY-4.0): `bundle.json`,
+`tokenizer.model`, `bos_before_voice.npy`, `text_conditioner.onnx`,
+`mimi_encoder.onnx`, `flow_lm_main_int8.onnx`, `flow_lm_flow_int8.onnx`,
+`mimi_decoder_int8.onnx` (full hashes in
+`src/tts/providers/pocket_tts.rs` `POCKET_TTS_EN_MANIFEST` /
+`POCKET_TTS_ES_MANIFEST`).
 
-## GPT-SoVITS setup (CPU smoke test)
+## Pocket TTS setup (CPU smoke test)
 
-1. Set `[providers.gpt_sovits] enabled = true`, `model_id =
-   gpt-sovits-v2pro-onnx`, hot-reload (or restart): the server downloads
-   the pinned prebuilt bundle recommended by the reviewed port and
-   verifies every file. Offline self-export with the upstream tooling
-   remains supported: place a complete bundle in `model_dir` and verified
-   local files are reused without re-downloading. Raw `.pth` files are
-   rejected with export guidance; never place them in the bundle directory
-   expecting them to load. Only `gpt-sovits-v2pro-onnx` has a verified
-   manifest today; v2/v2ProPlus fail with explicit guidance.
-2. No special build: the GPT-SoVITS backend ships in default builds (lean
-   builds add `--features gpt-sovits`). CPU execution provider
-   only; GPU EPs are experimental/unsupported for this provider.
-3. Watch `/api/providers/gpt-sovits/status` until `ready`.
-4. Create a profile — reference WAV **and exact transcript are required**:
+1. Set `[providers.pocket_tts] enabled = true`, `model_id =
+   pocket-tts-en` (or `pocket-tts-es`), hot-reload (or restart): the
+   server downloads the pinned export bundle and verifies every file
+   against `POCKET_TTS_EN_MANIFEST` / `POCKET_TTS_ES_MANIFEST`.
+   Place a complete bundle under `model_dir` (`onnx/english_2026-04`,
+   `onnx/spanish`) and verified local files are reused without
+   re-downloading. Only `pocket-tts-en` and `pocket-tts-es` have verified
+   manifests today; every other bundle fails with explicit guidance.
+2. No special build: the Pocket TTS backend ships in default builds (lean
+   builds add `--features pocket-tts`). CPU execution provider
+   only; GPU EPs are unsupported for this provider.
+3. Watch `/api/providers/pocket-tts/status` until `ready`.
+4. Create a profile — reference WAV only, **no transcript needed**
+   (`audio_prompt` is the only supported mode):
 
 ```bash
-curl -X POST 'http://127.0.0.1:17842/api/voices/clones?name=en-voice&provider=gpt-sovits&model=gpt-sovits-v2pro-onnx&language=en&mode=icl&transcript=<exact-transcript>&consent_basis=owner' \
+curl -X POST 'http://127.0.0.1:17842/api/voices/clones?name=en-voice&provider=pocket-tts&model=pocket-tts-en&language=en&mode=audio_prompt&consent_basis=owner' \
   -H 'Authorization: Bearer <token>' -H 'Content-Type: audio/wav' \
   --data-binary @reference.wav
 ```
 
 ```json
 {
-  "model": "gpt-sovits-v2pro-onnx",
+  "model": "pocket-tts-en",
   "voice": "<profile-id>",
   "language": "en",
   "input": "Hello, this is a local voice cloning test.",
@@ -175,12 +181,22 @@ curl -X POST 'http://127.0.0.1:17842/api/voices/clones?name=en-voice&provider=gp
 }
 ```
 
-CPU smoke-test status: **measured** — English synthesis with model
-reuse across successive requests passes on CPU (3.1 s + 3.6 s @ 32 kHz,
-RTF ~1.2–1.4, load 8.5 s; see `benchmarks/providers.md`). Concurrency
+CPU smoke-test status: **measured** — English (3.44 s @ 24 kHz) and
+Spanish (2.80 s @ 24 kHz) cloned synthesis with model reuse passes on
+CPU at ~1.5x real time (see `benchmarks/providers.md`). Concurrency
 isolation (distinct references under simultaneous requests,
-missing/broken bundle handling) is covered by unit tests; the Chinese
-model-backed run is opt-in and pending an authorized Chinese reference.
+missing/broken bundle handling) is covered by unit tests.
+
+## GPT-SoVITS retirement
+
+GPT-SoVITS was removed and replaced by Pocket TTS. Its model IDs
+(`gpt-sovits-v2-onnx`, `gpt-sovits-v2pro-onnx`, `gpt-sovits-v2proplus-onnx`)
+return an explicit retired-model error (never a silent reroute), a
+leftover `[providers.gpt_sovits]` config section boots with a warning
+and is otherwise ignored, and old GPT-SoVITS voice profiles are kept on
+disk but unavailable: recreate them as `pocket-tts` profiles
+(`mode=audio_prompt`) from their stored reference audio. The old
+`models/gpt-sovits-v2pro` cache is left inert for manual removal.
 
 ## Configuration reference
 
@@ -195,18 +211,17 @@ max_concurrent = 1
 cache_entries = 16
 max_tokens = 512         # acoustic frames per synthesis (1-1024)
 
-[providers.gpt_sovits]
+[providers.pocket_tts]
 enabled = false
-model_dir = "./models/gpt-sovits-v2pro"
-model_id = "gpt-sovits-v2pro-onnx"
-revision = "69063da489c62f34fffc40acd10e2167623509aa"
+model_dir = "./models/pocket-tts"
+model_id = "pocket-tts-en"   # pocket-tts-en | pocket-tts-es
+revision = "58a6d00cf13d239b6748cb0769f35c580a8f606c"
 device = "auto"          # cpu | auto only
 max_concurrent = 1
 cache_entries = 16
-top_k = 4                # 0 disables
-top_p = 0.9              # 0.0 disables
-temperature = 1.0
-repetition_penalty = 1.0 # 1.0 disables
+temperature = 0.7        # 0.0 disables noise
+lsd_steps = 1            # 1-8
+cpu_threads = 4          # 1-32
 
 [voices]
 store_dir = "./voices"
@@ -277,8 +292,8 @@ last healthy state and surface actionable status via
   are recorded in `benchmarks/providers.md`; rows stay pending until
   measured. No fake/silent fallbacks exist anywhere in the new code.
 - Non-1.7B Qwen bundles (including the retired 0.6B Candle model),
-  GPT-SoVITS v2/v2ProPlus bundles, Japanese for GPT-SoVITS, V5 bundles,
-  GPU EPs for GPT-SoVITS, ROCm/CUDA on BC-250, and FLAC/MP3 reference
+  unvalidated Pocket TTS bundles, non-`audio_prompt` Pocket modes,
+  GPU EPs for Pocket TTS, ROCm/CUDA on BC-250, and FLAC/MP3 reference
   uploads are explicitly unsupported and rejected with actionable errors.
   Qwen 1.7B via the GGUF/ONNX backend is CPU-validated (see above);
   Vulkan runs but its output equivalence is unvalidated, CUDA is

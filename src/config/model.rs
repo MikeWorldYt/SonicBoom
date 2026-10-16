@@ -308,44 +308,38 @@ pub struct DeprecatedQwen3Section {
     pub max_tokens: Option<usize>,
 }
 
-/// Optional GPT-SoVITS provider settings (`[providers.gpt_sovits]`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GptSovitsConfig {
-    /// Enable the GPT-SoVITS provider (default `false`).
+/// Removed GPT-SoVITS `[providers.gpt_sovits]` section, kept only so old
+/// configuration files still boot. Every field is accepted and ignored;
+/// the server logs a warning pointing at `[providers.pocket_tts]`.
+/// Do not add new fields here and do not read this anywhere: it carries
+/// no runtime meaning since the GPT-SoVITS provider was retired. Stored
+/// voice profiles that reference GPT-SoVITS models are never reinterpreted
+/// as Pocket TTS voices; their reference WAVs stay on disk for explicit
+/// user recreation as Pocket profiles.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DeprecatedGptSovitsSection {
     #[serde(default)]
     pub enabled: bool,
-    /// Directory holding the exported ONNX bundle (never raw `.pth`).
-    #[serde(default = "default_gptsovits_model_dir")]
-    pub model_dir: PathBuf,
-    /// Model identifier (`gpt-sovits-v2-onnx`, `gpt-sovits-v2pro-onnx`,
-    /// `gpt-sovits-v2proplus-onnx`).
-    #[serde(default = "default_gptsovits_model_id")]
-    pub model_id: String,
-    /// Pinned bundle revision.
-    #[serde(default = "default_gptsovits_revision")]
-    pub revision: String,
-    /// CPU only: `cpu` or `auto`. GPU values are rejected explicitly.
-    #[serde(default = "default_provider_device")]
-    pub device: String,
-    /// Maximum concurrent GPT-SoVITS syntheses (serialized per model).
-    #[serde(default = "default_provider_concurrency")]
-    pub max_concurrent: usize,
-    /// Voice-conditioning cache entries.
-    #[serde(default = "default_provider_cache")]
-    pub cache_entries: usize,
-    /// Sampling top-k (`0` disables, upstream default off).
-    #[serde(default = "default_gpt_top_k")]
-    pub top_k: usize,
-    /// Sampling top-p (`0.0` disables, upstream default off).
-    #[serde(default = "default_gpt_top_p")]
-    pub top_p: f32,
-    /// Sampling temperature.
-    #[serde(default = "default_gpt_temperature")]
-    pub temperature: f32,
-    /// Repetition penalty (`1.0` disables).
-    #[serde(default = "default_gpt_repetition_penalty")]
-    pub repetition_penalty: f32,
+    #[serde(default)]
+    pub model_dir: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub revision: Option<String>,
+    #[serde(default)]
+    pub device: Option<String>,
+    #[serde(default)]
+    pub max_concurrent: Option<usize>,
+    #[serde(default)]
+    pub cache_entries: Option<usize>,
+    #[serde(default)]
+    pub top_k: Option<usize>,
+    #[serde(default)]
+    pub top_p: Option<f32>,
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    #[serde(default)]
+    pub repetition_penalty: Option<f32>,
 }
 
 /// Native Qwen3-TTS 1.7B GGUF/ONNX provider settings
@@ -382,19 +376,63 @@ pub struct Qwen3GgufConfig {
     pub max_tokens: usize,
 }
 
-/// Provider section grouping (`[providers.gpt_sovits]`,
-/// `[providers.qwen3_gguf]`). A leftover `[providers.qwen3]` Candle section
-/// is tolerated for boot compatibility but ignored (see
-/// [`DeprecatedQwen3Section`]): delete it from old configuration files.
+/// Native Pocket TTS ONNX provider settings (`[providers.pocket_tts]`).
+/// Additive: older configuration files without this section keep working
+/// via `#[serde(default)]`. Disabled by default; weights download only
+/// after `enabled = true`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PocketTtsConfig {
+    /// Enable the Pocket TTS provider (default `false`).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Directory holding the verified per-language ONNX bundles
+    /// (`onnx/english_2026-04`, `onnx/spanish`).
+    #[serde(default = "default_pocket_model_dir")]
+    pub model_dir: PathBuf,
+    /// Model identifier (`pocket-tts-en`, `pocket-tts-es`).
+    #[serde(default = "default_pocket_model_id")]
+    pub model_id: String,
+    /// Pinned export revision.
+    #[serde(default = "default_pocket_revision")]
+    pub revision: String,
+    /// CPU only: `cpu` or `auto`. GPU values are rejected explicitly.
+    #[serde(default = "default_provider_device")]
+    pub device: String,
+    /// Maximum concurrent Pocket TTS syntheses (serialized per model).
+    #[serde(default = "default_provider_concurrency")]
+    pub max_concurrent: usize,
+    /// Voice-embedding cache entries.
+    #[serde(default = "default_provider_cache")]
+    pub cache_entries: usize,
+    /// Sampling temperature (`0.0` disables noise, upstream default `0.7`).
+    #[serde(default = "default_pocket_temperature")]
+    pub temperature: f32,
+    /// Flow-matching integration steps (upstream default `1`).
+    #[serde(default = "default_pocket_lsd_steps")]
+    pub lsd_steps: usize,
+    /// ORT intra-op threads (clamped to 1..=32).
+    #[serde(default = "default_pocket_cpu_threads")]
+    pub cpu_threads: usize,
+}
+
+/// Provider section grouping (`[providers.qwen3_gguf]`,
+/// `[providers.pocket_tts]`). Leftover `[providers.qwen3]` Candle and
+/// `[providers.gpt_sovits]` sections are tolerated for boot compatibility
+/// but ignored (see [`DeprecatedQwen3Section`] and
+/// [`DeprecatedGptSovitsSection`]): delete them from old configuration
+/// files.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProvidersConfig {
     #[serde(default)]
-    pub gpt_sovits: GptSovitsConfig,
-    #[serde(default)]
     pub qwen3_gguf: Qwen3GgufConfig,
+    #[serde(default)]
+    pub pocket_tts: PocketTtsConfig,
     #[serde(default, skip_serializing)]
     pub qwen3: DeprecatedQwen3Section,
+    #[serde(default, skip_serializing)]
+    pub gpt_sovits: DeprecatedGptSovitsSection,
 }
 
 /// Voice-profile store settings (`[voices]`).
@@ -588,15 +626,6 @@ fn default_temp_audio_dir() -> String {
 fn default_token_store_path() -> String {
     "./tokens.json".to_string()
 }
-fn default_gptsovits_model_dir() -> PathBuf {
-    PathBuf::from("./models/gpt-sovits-v2pro")
-}
-fn default_gptsovits_model_id() -> String {
-    "gpt-sovits-v2pro-onnx".to_string()
-}
-fn default_gptsovits_revision() -> String {
-    "69063da489c62f34fffc40acd10e2167623509aa".to_string()
-}
 fn default_provider_device() -> String {
     "auto".to_string()
 }
@@ -618,6 +647,41 @@ fn default_qwen_gguf_threads() -> usize {
 fn default_qwen_gguf_max_tokens() -> usize {
     512
 }
+fn default_pocket_model_dir() -> PathBuf {
+    PathBuf::from("./models/pocket-tts")
+}
+fn default_pocket_model_id() -> String {
+    "pocket-tts-en".to_string()
+}
+fn default_pocket_revision() -> String {
+    "58a6d00cf13d239b6748cb0769f35c580a8f606c".to_string()
+}
+fn default_pocket_temperature() -> f32 {
+    0.7
+}
+fn default_pocket_lsd_steps() -> usize {
+    1
+}
+fn default_pocket_cpu_threads() -> usize {
+    4
+}
+
+impl Default for PocketTtsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model_dir: default_pocket_model_dir(),
+            model_id: default_pocket_model_id(),
+            revision: default_pocket_revision(),
+            device: default_provider_device(),
+            max_concurrent: default_provider_concurrency(),
+            cache_entries: default_provider_cache(),
+            temperature: default_pocket_temperature(),
+            lsd_steps: default_pocket_lsd_steps(),
+            cpu_threads: default_pocket_cpu_threads(),
+        }
+    }
+}
 
 impl Default for Qwen3GgufConfig {
     fn default() -> Self {
@@ -632,18 +696,6 @@ impl Default for Qwen3GgufConfig {
             max_tokens: default_qwen_gguf_max_tokens(),
         }
     }
-}
-fn default_gpt_top_k() -> usize {
-    4
-}
-fn default_gpt_top_p() -> f32 {
-    0.9
-}
-fn default_gpt_temperature() -> f32 {
-    1.0
-}
-fn default_gpt_repetition_penalty() -> f32 {
-    1.0
 }
 fn default_max_voice_profiles() -> usize {
     256
@@ -721,24 +773,6 @@ impl Default for AppConfig {
             },
             providers: ProvidersConfig::default(),
             voices: VoicesConfig::default(),
-        }
-    }
-}
-
-impl Default for GptSovitsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            model_dir: default_gptsovits_model_dir(),
-            model_id: default_gptsovits_model_id(),
-            revision: default_gptsovits_revision(),
-            device: default_provider_device(),
-            max_concurrent: default_provider_concurrency(),
-            cache_entries: default_provider_cache(),
-            top_k: default_gpt_top_k(),
-            top_p: default_gpt_top_p(),
-            temperature: default_gpt_temperature(),
-            repetition_penalty: default_gpt_repetition_penalty(),
         }
     }
 }

@@ -143,9 +143,9 @@ and empty assignments are rejected.
 enabled = false            # Qwen3-TTS 1.7B GGUF/ONNX, needs --features qwen-gguf
 device = "auto"            # cpu | auto | vulkan (needs qwen-gguf-vulkan) | cuda (needs qwen-gguf-cuda)
 
-[providers.gpt_sovits]
-enabled = false            # GPT-SoVITS ONNX, CPU only (cpu|auto)
-model_id = "gpt-sovits-v2pro-onnx"
+[providers.pocket_tts]
+enabled = false            # Pocket TTS ONNX, CPU only (cpu|auto)
+model_id = "pocket-tts-en"
 
 [voices]
 store_dir = "./voices"

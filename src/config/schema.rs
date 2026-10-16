@@ -572,8 +572,8 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
     });
 
     add(SettingSchema {
-        path: "providers.gpt_sovits.enabled".to_string(),
-        description: "Enable the GPT-SoVITS voice-cloning provider (default false)".to_string(),
+        path: "providers.pocket_tts.enabled".to_string(),
+        description: "Enable the Pocket TTS voice-cloning provider (default false)".to_string(),
         type_name: "boolean",
         apply: ApplyStrategy::Hot,
         min: None,
@@ -602,16 +602,16 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
             "Directory holding the verified Qwen3-TTS 1.7B GGUF/ONNX bundle",
         ),
         (
-            "providers.gpt_sovits.model_dir",
-            "Directory holding the exported GPT-SoVITS ONNX bundle",
+            "providers.pocket_tts.model_dir",
+            "Directory holding the verified Pocket TTS ONNX bundles",
         ),
         (
-            "providers.gpt_sovits.model_id",
-            "GPT-SoVITS model identifier (v2/v2Pro/v2ProPlus ONNX bundles)",
+            "providers.pocket_tts.model_id",
+            "Pocket TTS model identifier (pocket-tts-en, pocket-tts-es)",
         ),
         (
-            "providers.gpt_sovits.revision",
-            "Pinned GPT-SoVITS bundle revision",
+            "providers.pocket_tts.revision",
+            "Pinned Pocket TTS export revision",
         ),
         (
             "voices.store_dir",
@@ -651,8 +651,8 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
         allowed_values_source: None,
     });
     add(SettingSchema {
-        path: "providers.gpt_sovits.device".to_string(),
-        description: "GPT-SoVITS device: cpu or auto (GPU is unsupported for this provider)"
+        path: "providers.pocket_tts.device".to_string(),
+        description: "Pocket TTS device: cpu or auto (GPU is unsupported for this provider)"
             .to_string(),
         type_name: "string",
         apply: ApplyStrategy::Hot,
@@ -663,13 +663,8 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
         secret: false,
         allowed_values_source: None,
     });
+
     for (path, desc, min, max) in [
-        (
-            "providers.gpt_sovits.max_concurrent",
-            "GPT-SoVITS uses one serialized mutable model",
-            1.0,
-            1.0,
-        ),
         (
             "providers.qwen3_gguf.max_concurrent",
             "Qwen3-TTS GGUF/ONNX uses one serialized model-owning worker",
@@ -701,16 +696,28 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
             1024.0,
         ),
         (
-            "providers.gpt_sovits.cache_entries",
-            "GPT-SoVITS voice-conditioning cache entries",
+            "providers.pocket_tts.max_concurrent",
+            "Pocket TTS uses one serialized mutable model",
+            1.0,
+            1.0,
+        ),
+        (
+            "providers.pocket_tts.cache_entries",
+            "Pocket TTS voice-embedding cache entries",
             1.0,
             1024.0,
         ),
         (
-            "providers.gpt_sovits.top_k",
-            "GPT-SoVITS sampling top-k (0 disables)",
-            0.0,
-            100.0,
+            "providers.pocket_tts.lsd_steps",
+            "Pocket TTS flow-matching integration steps",
+            1.0,
+            8.0,
+        ),
+        (
+            "providers.pocket_tts.cpu_threads",
+            "Pocket TTS ORT intra-op threads",
+            1.0,
+            32.0,
         ),
         (
             "voices.max_upload_bytes",
@@ -732,39 +739,18 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
             allowed_values_source: None,
         });
     }
-    for (path, desc, min, max) in [
-        (
-            "providers.gpt_sovits.top_p",
-            "GPT-SoVITS sampling top-p (0.0 disables)",
-            0.0,
-            1.0,
-        ),
-        (
-            "providers.gpt_sovits.temperature",
-            "GPT-SoVITS sampling temperature",
-            0.0,
-            2.0,
-        ),
-        (
-            "providers.gpt_sovits.repetition_penalty",
-            "GPT-SoVITS repetition penalty (1.0 disables)",
-            0.1,
-            2.0,
-        ),
-    ] {
-        add(SettingSchema {
-            path: path.to_string(),
-            description: desc.to_string(),
-            type_name: "number",
-            apply: ApplyStrategy::Hot,
-            min: Some(min),
-            max: Some(max),
-            allowed_values: None,
-            nullable: false,
-            secret: false,
-            allowed_values_source: None,
-        });
-    }
+    add(SettingSchema {
+        path: "providers.pocket_tts.temperature".to_string(),
+        description: "Pocket TTS sampling temperature (0.0 disables noise)".to_string(),
+        type_name: "number",
+        apply: ApplyStrategy::Hot,
+        min: Some(0.0),
+        max: Some(2.0),
+        allowed_values: None,
+        nullable: false,
+        secret: false,
+        allowed_values_source: None,
+    });
 
     // Secrets (stored in the secret store, never in config.toml).
     add(SettingSchema {

@@ -1,6 +1,6 @@
 //! In-process worker-thread helper for non-`Send` model internals.
 //!
-//! Some model handles (notably GPT-SoVITS mutable reference conditioning)
+//! Some model handles (notably Pocket TTS mutable KV-cache states)
 //! cannot be shared across threads. This helper encapsulates such state in
 //! a dedicated Rust thread with a bounded channel — in-process, never a
 //! subprocess — and serializes `(prepare_reference + synthesize)` atomically
@@ -82,6 +82,14 @@ impl ConditioningCache {
         self.entries.retain(|(k, _)| !k.starts_with(&prefix));
     }
 
+    /// Drop a single entry (voice-profile deletion/rotation). Missing keys
+    /// are a no-op so double deletion stays idempotent.
+    pub fn remove(&mut self, key: &str) {
+        if let Some(pos) = self.entries.iter().position(|(k, _)| k == key) {
+            self.entries.remove(pos);
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -119,6 +127,12 @@ impl SharedConditioningCache {
             cache.invalidate_model(provider, model_revision);
         }
     }
+
+    pub fn remove(&self, key: &str) {
+        if let Ok(mut cache) = self.inner.lock() {
+            cache.remove(key);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -152,8 +166,20 @@ mod tests {
 
     #[test]
     fn distinct_references_have_distinct_keys() {
-        let a = ConditioningCache::cache_key("gpt-sovits", "r", "hash-a", Some("hello"), "icl");
-        let b = ConditioningCache::cache_key("gpt-sovits", "r", "hash-b", Some("hello"), "icl");
+        let a = ConditioningCache::cache_key("pocket-tts", "r", "hash-a", None, "audio_prompt");
+        let b = ConditioningCache::cache_key("pocket-tts", "r", "hash-b", None, "audio_prompt");
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn single_key_removal_is_idempotent() {
+        let mut cache = ConditioningCache::new(8);
+        cache.insert("voice-a".into(), vec![1]);
+        cache.insert("voice-b".into(), vec![2]);
+        cache.remove("voice-a");
+        assert!(cache.get("voice-a").is_none());
+        assert_eq!(cache.get("voice-b"), Some(vec![2]));
+        cache.remove("voice-a");
+        assert_eq!(cache.len(), 1);
     }
 }

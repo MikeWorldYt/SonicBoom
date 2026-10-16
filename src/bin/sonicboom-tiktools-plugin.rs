@@ -224,11 +224,11 @@ impl SonicBoomPlugin {
             return Err(PluginError::invalid_request(format!(
                 "unsupported provider '{provider}' in this plugin build \
                  (only 'supertonic' is embedded; configure the SonicBoom server \
-                 with [providers.qwen3_gguf]/[providers.gpt_sovits] for voice cloning)"
+                 with [providers.qwen3_gguf]/[providers.pocket_tts] for voice cloning)"
             )));
         }
         if let Some(model) = optional_string(config, "model")
-            && (sonicboom::tts::providers::gptsovits::GPTSOVITS_MODELS.contains(&model.as_str())
+            && (sonicboom::tts::providers::pocket_tts::POCKET_TTS_MODELS.contains(&model.as_str())
                 || is_gguf_model(&model))
         {
             return Err(PluginError::invalid_request(format!(

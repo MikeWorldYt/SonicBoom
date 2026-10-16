@@ -73,14 +73,7 @@ pub fn init(
     let (reloadable_filter, reload_handle) = reload::Layer::new(env_filter);
 
     // Base subscriber
-    // Upstream GPT-SoVITS debug events include raw synthesis text. This
-    // privacy filter cannot be undone by a hot-reloaded verbosity setting;
-    // SonicBoom's own stage/health events remain available.
-    let base = tracing_subscriber::registry().with(reloadable_filter).with(
-        tracing_subscriber::filter::filter_fn(|metadata| {
-            !metadata.target().starts_with("gpt_sovits_onnx_rs")
-        }),
-    );
+    let base = tracing_subscriber::registry().with(reloadable_filter);
 
     if log_to_file && log_to_stdout {
         // File writer - detailed format

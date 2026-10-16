@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use sonicboom::tts::model::ModelHandle;
 use sonicboom::tts::providers::TtsProviderRegistry;
-use sonicboom::tts::providers::gptsovits::GptSovitsConfig;
 use sonicboom::tts::providers::supertonic::SupertonicProvider;
 use sonicboom::tts::providers::types::DevicePreference;
 
@@ -40,18 +39,19 @@ pub fn map_qwen_gguf_config(
     }
 }
 
-pub fn map_gpt_config(gpt: &crate::config::model::GptSovitsConfig) -> GptSovitsConfig {
-    GptSovitsConfig {
-        enabled: gpt.enabled,
-        model_dir: gpt.model_dir.clone(),
-        model_id: gpt.model_id.clone(),
-        revision: gpt.revision.clone(),
-        device: parse_device(&gpt.device),
-        cache_capacity: gpt.cache_entries.max(1),
-        top_k: gpt.top_k,
-        top_p: gpt.top_p,
-        temperature: gpt.temperature,
-        repetition_penalty: gpt.repetition_penalty,
+pub fn map_pocket_config(
+    pocket: &crate::config::model::PocketTtsConfig,
+) -> sonicboom::tts::providers::pocket_tts::PocketTtsConfig {
+    sonicboom::tts::providers::pocket_tts::PocketTtsConfig {
+        enabled: pocket.enabled,
+        model_dir: pocket.model_dir.clone(),
+        model_id: pocket.model_id.clone(),
+        revision: pocket.revision.clone(),
+        device: parse_device(&pocket.device),
+        cache_capacity: pocket.cache_entries.max(1),
+        temperature: pocket.temperature,
+        lsd_steps: pocket.lsd_steps.max(1),
+        cpu_threads: pocket.cpu_threads.clamp(1, 32),
     }
 }
 
@@ -68,7 +68,7 @@ pub fn build_registry(
     supertonic_handle: Option<Arc<ModelHandle>>,
     pool: &sonicboom::tts::providers::ProviderPool,
 ) -> TtsProviderRegistry {
-    pool.sync_from(map_gpt_config(&config.providers.gpt_sovits));
+    pool.sync_pocket_config(map_pocket_config(&config.providers.pocket_tts));
     #[cfg(feature = "qwen-gguf")]
     pool.sync_gguf_config(map_qwen_gguf_config(&config.providers.qwen3_gguf));
     // Hot-reload path: no HF token at request time (public bundles need
@@ -88,7 +88,7 @@ pub async fn build_registry_for_state(state: &crate::AppState) -> TtsProviderReg
     let (generation, config) = state.config.versioned_snapshot().await;
     state
         .providers
-        .sync_versioned(generation, map_gpt_config(&config.providers.gpt_sovits));
+        .sync_versioned(generation, map_pocket_config(&config.providers.pocket_tts));
     #[cfg(feature = "qwen-gguf")]
     state
         .providers
@@ -119,7 +119,7 @@ pub async fn get_providers(
     let registry = build_registry_for_state(&state).await;
     let capabilities = [
         registry.get("supertonic").map(|p| p.capabilities()),
-        registry.get("gpt-sovits").map(|p| p.capabilities()),
+        registry.get("pocket-tts").map(|p| p.capabilities()),
     ]
     .into_iter()
     .chain(
@@ -157,7 +157,7 @@ pub async fn get_provider_status(
             ))
         }
         None => Err(crate::error::AppError::BadRequest(format!(
-            "unknown provider '{id}' (expected one of: supertonic, gpt-sovits{})",
+            "unknown provider '{id}' (expected one of: supertonic, pocket-tts{})",
             if cfg!(feature = "qwen-gguf") {
                 ", qwen3-gguf"
             } else {
@@ -206,13 +206,15 @@ mod tests {
         let registry = build_registry(&config, None, &pool);
         // The Candle provider is gone: no "qwen3" id may appear.
         assert!(!registry.provider_ids().contains(&"qwen3".to_string()));
+        // GPT-SoVITS is retired: it must never appear as a provider id.
+        assert!(!registry.provider_ids().contains(&"gpt-sovits".to_string()));
         #[cfg(feature = "qwen-gguf")]
         assert_eq!(
             registry.provider_ids(),
-            vec!["gpt-sovits", "qwen3-gguf", "supertonic"]
+            vec!["pocket-tts", "qwen3-gguf", "supertonic"]
         );
         #[cfg(not(feature = "qwen-gguf"))]
-        assert_eq!(registry.provider_ids(), vec!["gpt-sovits", "supertonic"]);
+        assert_eq!(registry.provider_ids(), vec!["pocket-tts", "supertonic"]);
         for status in registry.statuses() {
             if status.provider_id == "supertonic" {
                 assert_eq!(status.effective_device.as_deref(), Some("cpu"));
@@ -239,19 +241,19 @@ mod tests {
         // Supertonic keeps serving.
         // Uses an isolated empty dir: the workspace `./models` may hold
         // real downloaded weights, which must not flip this expectation.
-        let dir = std::env::temp_dir().join(format!("gpt-no-weights-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("pocket-no-weights-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut config = AppConfig::default();
-        config.providers.gpt_sovits.enabled = true;
-        config.providers.gpt_sovits.model_dir = dir.clone();
+        config.providers.pocket_tts.enabled = true;
+        config.providers.pocket_tts.model_dir = dir.clone();
         // Built without the background kick on purpose: kicking would
         // start a real download in this test.
         let pool = sonicboom::tts::providers::ProviderPool::new();
-        pool.sync_from(map_gpt_config(&config.providers.gpt_sovits));
+        pool.sync_pocket_config(map_pocket_config(&config.providers.pocket_tts));
         let supertonic =
             std::sync::Arc::new(SupertonicProvider::new(config.model.cache_dir.clone()));
         let registry = pool.registry(supertonic);
-        let status = registry.get("gpt-sovits").unwrap().status();
+        let status = registry.get("pocket-tts").unwrap().status();
         assert!(status.enabled);
         assert_eq!(
             status.state,

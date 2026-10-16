@@ -811,14 +811,14 @@ mod tests {
             ("GET", "/api/providers", "application/json", ""),
             (
                 "GET",
-                "/api/providers/gpt-sovits/status",
+                "/api/providers/pocket-tts/status",
                 "application/json",
                 "",
             ),
             ("GET", "/api/voices", "application/json", ""),
             (
                 "POST",
-                "/api/voices/clones?name=t&provider=gpt-sovits&model=gpt-sovits-v2pro-onnx&language=en&mode=icl&consent_basis=owner",
+                "/api/voices/clones?name=t&provider=pocket-tts&model=pocket-tts-en&language=en&mode=audio_prompt&consent_basis=owner",
                 "audio/wav",
                 "",
             ),
@@ -873,7 +873,8 @@ mod tests {
             .map(|p| p["provider_id"].as_str().unwrap().to_string())
             .collect();
         assert!(!ids.contains(&"qwen3".to_string()));
-        assert!(ids.contains(&"gpt-sovits".to_string()));
+        assert!(!ids.contains(&"gpt-sovits".to_string()));
+        assert!(ids.contains(&"pocket-tts".to_string()));
         assert!(ids.contains(&"supertonic".to_string()));
         let _ = std::fs::remove_dir_all(&store_dir);
     }
@@ -898,7 +899,7 @@ mod tests {
         let (app, valid, store_dir) = voices_test_app().await;
         let request = raw_request(
             "POST",
-            "/api/voices/clones?name=t&provider=gpt-sovits&model=gpt-sovits-v2pro-onnx&language=en&mode=icl&consent_basis=owner",
+            "/api/voices/clones?name=t&provider=pocket-tts&model=pocket-tts-en&language=en&mode=audio_prompt&consent_basis=owner",
             Some(&valid),
             "application/json",
             b"{}",
@@ -913,7 +914,7 @@ mod tests {
         let (app, valid, store_dir) = voices_test_app().await;
         let request = raw_request(
             "POST",
-            "/api/voices/clones?name=t&provider=gpt-sovits&model=gpt-sovits-v2pro-onnx&language=en&mode=icl&consent_basis=owner",
+            "/api/voices/clones?name=t&provider=pocket-tts&model=pocket-tts-en&language=en&mode=audio_prompt&consent_basis=owner",
             Some(&valid),
             "audio/wav",
             b"not-a-wav-file",
@@ -963,7 +964,8 @@ mod tests {
             "tts-1-hd",
             "supertonic-3",
             "qwen3-tts-1.7b-base",
-            "gpt-sovits-v2pro-onnx",
+            "pocket-tts-en",
+            "pocket-tts-es",
         ] {
             assert!(
                 ids.contains(&expected.to_string()),

@@ -1,13 +1,13 @@
 //! Native TTS provider framework.
 //!
 //! Object-safe provider contract shared by Supertonic 3 (default),
-//! Qwen3-TTS 1.7B GGUF/ONNX (opt-in) and GPT-SoVITS (ONNX). All inference runs in the SonicBoom
+//! Qwen3-TTS 1.7B GGUF/ONNX (opt-in) and Pocket TTS (ONNX, opt-in). All inference runs in the SonicBoom
 //! process: non-`Send` model internals are encapsulated in dedicated
 //! in-process worker threads with bounded channels, never subprocesses.
 
 pub mod assets;
 pub mod error;
-pub mod gptsovits;
+pub mod pocket_tts;
 pub mod pool;
 #[cfg(feature = "qwen-gguf")]
 pub mod qwen_gguf;
@@ -27,11 +27,11 @@ pub use types::{
 /// Object-safe voice-cloning provider contract.
 ///
 /// Implementations must be `Send + Sync`. Model internals that are not
-/// `Sync` (e.g. GPT-SoVITS mutable reference conditioning) are serialized
+/// `Sync` (e.g. Pocket TTS mutable KV-cache states) are serialized
 /// inside the provider behind a worker/mutex so concurrent callers can
 /// never observe or corrupt each other's reference data.
 pub trait TtsProvider: Send + Sync {
-    /// Stable provider identifier, e.g. `supertonic`, `qwen3`, `gpt-sovits`.
+    /// Stable provider identifier, e.g. `supertonic`, `qwen3-gguf`, `pocket-tts`.
     fn id(&self) -> &'static str;
     /// Static capability metadata (models, languages, modes, devices).
     fn capabilities(&self) -> ProviderCapabilities;

@@ -68,7 +68,7 @@ COPY models.sha256.json ./models.sha256.json
 
 # Cloning backends ride along so every engine works out of the box.
 # Providers stay disabled by default: only Supertonic weights download.
-RUN cargo build --release --locked --no-default-features --features server,qwen,gpt-sovits
+RUN cargo build --release --locked --no-default-features --features server,qwen,pocket-tts
 
 # Stage the ONNX Runtime shared library (if dynamically linked) at a known
 # path for the runtime image. Fail the build if it is needed but missing.
@@ -174,7 +174,7 @@ COPY models.sha256.json ./models.sha256.json
 
 # The `cuda` feature enables the ONNX Runtime CUDA execution provider.
 # Cloning backends ride along (CPU) so every engine works out of the box.
-RUN cargo build --release --locked --no-default-features --features server,cuda,qwen,gpt-sovits
+RUN cargo build --release --locked --no-default-features --features server,cuda,qwen,pocket-tts
 
 RUN set -eu; \
     mkdir -p /build/ort-dist; \

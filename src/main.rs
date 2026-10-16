@@ -56,7 +56,7 @@ pub struct AppState {
     pub rate_limiter: Arc<RateLimiterManager>,
     /// Model lifecycle owner (download, load, reload).
     pub model_service: Arc<ModelService>,
-    /// Resident optional voice-cloning providers (Qwen3-TTS, GPT-SoVITS).
+    /// Resident optional voice-cloning providers (Qwen3-TTS, Pocket TTS).
     /// Singletons load once and stay resident; per-request registries borrow
     /// them after syncing live configuration (hot reload without restarts).
     pub providers: Arc<sonicboom::tts::providers::ProviderPool>,
@@ -858,8 +858,8 @@ async fn run_server_inner(config_path: std::path::PathBuf, smoke: bool) -> anyho
     // when enabled (deduplicated background tasks; progress via
     // `/api/providers/{id}/status`). Supertonic is unaffected.
     {
-        use crate::api::providers::map_gpt_config;
-        provider_pool.sync_from(map_gpt_config(&current.providers.gpt_sovits));
+        use crate::api::providers::map_pocket_config;
+        provider_pool.sync_pocket_config(map_pocket_config(&current.providers.pocket_tts));
         #[cfg(feature = "qwen-gguf")]
         provider_pool.sync_gguf_config(crate::api::providers::map_qwen_gguf_config(
             &current.providers.qwen3_gguf,
