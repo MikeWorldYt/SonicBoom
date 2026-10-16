@@ -156,14 +156,6 @@ pub const ALL_CONFIG_PATHS: &[&str] = &[
     "security.cookie_secure",
     "security.enable_hsts",
     "security.allow_insecure_remote",
-    "providers.qwen3.enabled",
-    "providers.qwen3.model_dir",
-    "providers.qwen3.model_id",
-    "providers.qwen3.revision",
-    "providers.qwen3.device",
-    "providers.qwen3.max_concurrent",
-    "providers.qwen3.cache_entries",
-    "providers.qwen3.max_tokens",
     "providers.qwen3_gguf.enabled",
     "providers.qwen3_gguf.model_dir",
     "providers.qwen3_gguf.device",
@@ -827,6 +819,23 @@ mod tests {
     fn parse_toml_rejects_unknown_keys() {
         let err = parse_toml("[nonsense]\nfoo = 1\n").expect_err("unknown key");
         assert!(err.message.contains("unknown top-level key"));
+    }
+
+    #[test]
+    fn parse_toml_tolerates_removed_qwen3_section() {
+        // Boot compatibility: files written before the Candle removal keep
+        // their [providers.qwen3] section; it parses and is ignored (the
+        // manager warns), so the server starts instead of failing.
+        let config = parse_toml(
+            "[providers.qwen3]\nenabled = true\nmodel_id = \"qwen3-tts-0.6b-base\"\ndevice = \"cuda\"\n",
+        )
+        .unwrap();
+        assert!(config.providers.qwen3.enabled);
+        assert_eq!(
+            config.providers.qwen3.model_id.as_deref(),
+            Some("qwen3-tts-0.6b-base")
+        );
+        assert!(!config.providers.qwen3_gguf.enabled);
     }
 
     #[test]

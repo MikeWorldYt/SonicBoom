@@ -2,15 +2,17 @@
 
 Local, in-process voice cloning with no Python, PyTorch, `tch`, upstream
 CLI, network TTS service, or sidecar process at runtime. Supertonic 3
-(`ort`-based ONNX) stays the default provider; Qwen3-TTS (Candle) and
-GPT-SoVITS (ONNX Runtime) are optional and disabled by default.
+(`ort`-based ONNX) stays the default provider; Qwen3-TTS 1.7B GGUF/ONNX
+(opt-in build) and GPT-SoVITS (ONNX Runtime) are optional and disabled by
+default. The Candle Qwen backend was removed; only the native GGUF/ONNX
+backend remains.
 
 Upstream implementations under review (revalidate before pinning a
 dependency revision):
 
 | Provider | Source | Reviewed revision | Reality |
 |---|---|---|---|
-| Qwen3-TTS | https://github.com/TrevorS/qwen3-tts-rs | `711ceee07cad92673f86de8997bdf54c30caa49f` | Candle, native Rust; Base variants support reference-audio ICL and x-vector cloning; CPU/CUDA/Metal features |
+| Qwen3-TTS GGUF/ONNX | https://huggingface.co/Emerald7664/Qwen3-TTS-ONNX (ref: https://github.com/HaujetZhao/Qwen3-TTS-GGUF) | `0a36d692562f83a862466b0bf8c12154ddf1965d` | Native Rust + llama.cpp GGUF + ONNX INT8; 1.7B Base ICL cloning only (x-vector explicitly rejected); CPU validated, Vulkan functional but output-equivalence unvalidated |
 | GPT-SoVITS | https://github.com/bailu-obj/gpt-sovits-onnx-rs | `204ae4abcd218113aad86f6f9a66bdba92adcfd7` | Rust ONNX runtime; v2/v2Pro/v2ProPlus; CPU sessions; reference WAV plus transcript |
 
 ONNX Runtime's packaged native library is the only native-code exception
@@ -29,17 +31,19 @@ and is shared by all providers (initialized once). Python may be used
 - `SupertonicProvider`: adapter preserving all ten style voices, `alloy`
   aliases, formats, auth, rate limits, and the engine API. No second
   synthesis path: the registry routes to the same inference code.
-- `QwenProvider` / `GptSovitsProvider`: asset validation, language/mode
+- `QwenGgufProvider` / `GptSovitsProvider`: asset validation, language/mode
   validation, device resolution with effective-device reporting,
   per-model serialization so concurrent voices never swap reference data,
   and a bounded conditioning cache keyed by
-  `(provider, model revision, reference hash, transcript, mode)`.
+  `(provider, model revision, voice identity, reference hash, transcript, mode)`.
 - `src/tts/voices.rs`: persistent `VoiceProfileStore` (opaque UUID, consent
   metadata, `<uuid>.wav` references, no arbitrary client filenames, no
   transcript/audio logging).
-- Config `[providers.qwen3]` / `[providers.gpt_sovits]` (`enabled=false`
+- Config `[providers.qwen3_gguf]` / `[providers.gpt_sovits]` (`enabled=false`
   by default) and `[voices]`; schema, validation, hot reload (per-request
-  reads, last-healthy state retained on failure).
+  reads, last-healthy state retained on failure). A leftover `[providers.qwen3]`
+  Candle section is tolerated for boot compatibility but ignored (with a
+  startup warning): delete it from old files.
 - Endpoints: `GET /api/providers`, `GET /api/providers/{id}/status`,
   `POST /api/voices/clones`, `GET /api/voices`, `GET /api/voices/{id}`,
   `DELETE /api/voices/{id}`, `POST /api/voices/{id}/preview`; extended
@@ -54,9 +58,10 @@ and is shared by all providers (initialized once). Python may be used
 
 | Feature | Effect |
 |---|---|
-| (default) | Supertonic 3 only; optional providers disabled, no weights fetched |
-| `qwen` | Qwen3-TTS provider, CPU (`device=cpu\|auto`) |
-| `qwen-cuda` | Additionally allow Qwen `device=cuda` (NVIDIA only; never implies `ort/cuda`) |
+| (default) | Supertonic 3 + GPT-SoVITS compiled; optional providers disabled, no weights fetched |
+| `qwen-gguf` | Qwen3-TTS 1.7B GGUF/ONNX provider, CPU (`device=cpu\|auto`) |
+| `qwen-gguf-vulkan` | Additionally allow GGUF `device=vulkan` on Vulkan-capable GPUs (implies `qwen-gguf`) |
+| `qwen-gguf-cuda` | Additionally allow GGUF `device=cuda` (NVIDIA only; implies `qwen-gguf`) |
 | `gpt-sovits` | GPT-SoVITS ONNX provider, CPU execution provider only |
 | `cuda` / `rocm` / `coreml` | Existing ORT flags for Supertonic; they do **not** accelerate GPT-SoVITS |
 
@@ -66,45 +71,41 @@ proof. `coreml`/`cuda`/`rocm` stay mutually exclusive.
 
 ## Language support (explicit, no silent substitution)
 
-- Qwen3-TTS Base: `en`, `ja`, `es`, `zh`, `ko`, `fr`, `de`. Japanese
-  (`language=ja`) synthesizes through the Base model in clone mode.
+- Qwen3-TTS 1.7B Base (GGUF/ONNX): `en`, `de`, `es`, `zh`, `ja`, `fr`,
+  `ko`, `ru`, `it`, `pt`. Japanese (`language=ja`) synthesizes through the
+  Base model in ICL clone mode.
 - GPT-SoVITS: `zh` and `en` only. The reviewed port exposes
   `Lang::{Zh,En}`: `language=ja` and `language=es` return an explicit
   `unsupported_language` error — never Chinese phonemes, never a
   Supertonic fallback. No V5, no Japanese phonemization claim.
 - Supertonic: unchanged (English synthesis; legacy voice aliases).
 
-Unknown provider/model/voice/language, incompatible variants (Qwen
-CustomVoice/VoiceDesign for cloning, raw GPT-SoVITS `.pth` checkpoints),
-missing assets, and unavailable devices all return explicit, actionable
-errors. Configured `cpu` fallback from `auto` is allowed where
+Unknown provider/model/voice/language, incompatible variants (non-1.7B
+Qwen bundles, x-vector mode on the GGUF backend, raw GPT-SoVITS `.pth`
+checkpoints), missing assets, and unavailable devices all return explicit,
+actionable errors. Configured `cpu` fallback from `auto` is allowed where
 supported, and the effective device is always reported.
 
-## Qwen3-TTS setup (CPU smoke test)
+## Qwen3-TTS 1.7B GGUF/ONNX setup (CPU smoke test)
 
-1. No special build: the Qwen backend ships in default builds (lean
-   `--no-default-features` builds add `--features qwen`).
-2. Press Enable on the qwen3 card (or set `enabled = true` and hot-reload):
-   the server downloads
-   the pinned bundle into `[providers.qwen3] model_dir`
-   (`./models/qwen3-tts`) in parallel with serving, verifying every file
-   against the manifest below. For **Qwen3-TTS-12Hz-0.6B-Base** the bundle
-   is `config.json`, `vocab.json`, `merges.txt`, `model.safetensors`,
-   `speech_tokenizer/model.safetensors` — all present in the single source
-   repo `Qwen/Qwen3-TTS-12Hz-0.6B-Base` at revision
-   `5d83992436eae1d760afd27aff78a71d676296fc` (no separate tokenizer-repo
-   download: the local `vocab.json`/`merges.txt` pair is used directly).
-   CustomVoice/VoiceDesign checkpoints are rejected for cloning, and the
-   1.7B Base has no verified manifest yet (explicit error, not silence).
-3. Watch `/api/providers/qwen3/status` until `ready` (progress reported
-   while downloading/loading; failures name the cause).
-4. Record or reuse a recording you own (3–10 s recommended, 1–30 s
-   accepted; 24 kHz reference handling per upstream) **plus the exact
-   reference transcript** for `icl` mode (`x_vector` needs no transcript).
+1. Special build required: `cargo build --features qwen-gguf` (add
+   `qwen-gguf-vulkan` for AMD Vulkan). Default builds cannot serve Qwen.
+2. Press Enable on the qwen3-gguf card (or set `enabled = true` and
+   hot-reload): the server downloads the pinned bundle into
+   `[providers.qwen3_gguf] model_dir` (`./models/qwen3-tts-1.7b-gguf`) in
+   parallel with serving, verifying every file against the manifest in
+   `src/tts/providers/qwen_gguf/models.rs` (repo
+   `Emerald7664/Qwen3-TTS-ONNX` at revision
+   `0a36d692562f83a862466b0bf8c12154ddf1965d`). Only the 1.7B Base bundle
+   is supported; anything else fails explicitly.
+3. Watch `/api/providers/qwen3-gguf/status` until `ready` (progress
+   reported while downloading/loading; failures name the cause).
+4. Record or reuse a recording you own (1–30 s accepted) **plus the exact
+   reference transcript** (`icl` is the only supported mode).
 5. Create a profile:
 
 ```bash
-curl -X POST 'http://127.0.0.1:17842/api/voices/clones?name=my-voice&provider=qwen3&model=qwen3-tts-0.6b-base&language=ja&mode=icl&transcript=<exact-transcript>&consent_basis=owner' \
+curl -X POST 'http://127.0.0.1:17842/api/voices/clones?name=my-voice&provider=qwen3-gguf&model=qwen3-tts-1.7b-base&language=en&mode=icl&transcript=<exact-transcript>&consent_basis=owner' \
   -H 'Authorization: Bearer <token>' -H 'Content-Type: audio/wav' \
   --data-binary @reference.wav
 ```
@@ -113,35 +114,27 @@ curl -X POST 'http://127.0.0.1:17842/api/voices/clones?name=my-voice&provider=qw
 
 ```json
 {
-  "model": "qwen3-tts-0.6b-base",
+  "model": "qwen3-tts-1.7b-base",
   "voice": "<profile-id>",
-  "language": "ja",
-  "input": "こんにちは。今日は音声合成のテストです。",
+  "language": "en",
+  "input": "Hello, this is a local voice cloning test.",
   "response_format": "wav"
 }
 ```
 
-CPU smoke-test status: **measured** — `icl` Japanese (3.0 s @ 24 kHz,
-synth 962 s, RTF ~320 on a 2-CPU dev box) and `x_vector` English (1.8 s
-@ 24 kHz, synth 440 s, RTF ~240) both pass with speech-verified
-envelopes; load ~30 s, peak RSS 4.8 GB qwen-only. See
-`benchmarks/providers.md`. BC-250 rows stay pending until measured there.
+CPU smoke-test status: **measured** — 41 frames / 3.28 s audio, EOS
+reached, finite PCM, conditioning cache hit on repeat, bit-identical
+output for the same seed/reference. See
+`benchmarks/results/2026-10-15-qwen-gguf/`.
 
 ## Pinned download manifests
 
-Qwen3-TTS 0.6B-Base (`Qwen/Qwen3-TTS-12Hz-0.6B-Base`
-`5d83992436eae1d760afd27aff78a71d676296fc`), SHA-256 verified by the
-server before loading:
-
-| File | SHA-256 | Size |
-|---|---|---|
-| `config.json` | `2e714c78…ba011` | 4,494 |
-| `vocab.json` | `ca10d7e9…1440910` | 2,776,833 |
-| `merges.txt` | `599bab54…26f5e3` | 1,671,839 |
-| `model.safetensors` | `180b3b10…3b6946f6` | 1,829,344,272 |
-| `speech_tokenizer/model.safetensors` | `836b7b35…d30ba571258` | 682,293,092 |
-
-(Full hashes in `src/tts/providers/qwen.rs` `QWEN_06B_MANIFEST`.)
+Qwen3-TTS 1.7B GGUF/ONNX (`Emerald7664/Qwen3-TTS-ONNX`
+`0a36d692562f83a862466b0bf8c12154ddf1965d`), SHA-256 verified by the
+server before loading (full hashes in
+`src/tts/providers/qwen_gguf/models.rs` `MANIFEST`): talker
+`qwen3_tts_talker.q5_k.gguf`, predictor `qwen3_tts_predictor.q8_0.gguf`,
+speaker/codec/decode INT8 ONNX bundles, embeddings, tokenizer.
 GPT-SoVITS v2Pro (`mikv39/gpt-sovits-onnx-custom`
 `69063da489c62f34fffc40acd10e2167623509aa`): required `vits.onnx`,
 `ssl.onnx`, `t2s_encoder.onnx`, `t2s_fs_decoder.onnx`,
@@ -192,15 +185,15 @@ model-backed run is opt-in and pending an authorized Chinese reference.
 ## Configuration reference
 
 ```toml
-[providers.qwen3]
+[providers.qwen3_gguf]
 enabled = false
-model_dir = "./models/qwen3-tts"
-model_id = "qwen3-tts-0.6b-base"
-revision = "5d83992436eae1d760afd27aff78a71d676296fc"
-device = "auto"          # cpu | auto | cuda (cuda needs qwen-cuda)
+model_dir = "./models/qwen3-tts-1.7b-gguf"
+device = "auto"          # cpu | auto | vulkan (needs qwen-gguf-vulkan) | cuda (needs qwen-gguf-cuda)
+gpu_layers = -1
+threads = 4
 max_concurrent = 1
 cache_entries = 16
-max_tokens = 1024        # codec frames per synthesis (128-4096)
+max_tokens = 512         # acoustic frames per synthesis (1-1024)
 
 [providers.gpt_sovits]
 enabled = false
@@ -224,14 +217,13 @@ max_upload_bytes = 8388608
 
 Compiled only with `--features qwen-gguf` (not in default builds). It owns
 `qwen3-tts-1.7b-base` end to end — ICL cloning, EOS-terminated generation,
-reference-conditioning cache with reuse, cancellation recovery — and the
-Candle provider stops advertising that identifier in such builds, so the
-registry never indexes one model under two providers.
+reference-conditioning cache with reuse, cancellation recovery — and it is
+the only Qwen backend: the Candle provider was removed.
 
 ```toml
 [providers.qwen3_gguf]
 enabled = false
-model_dir = "./models/qwen3-tts-1.7b-gguf"  # separate from the Candle bundle
+model_dir = "./models/qwen3-tts-1.7b-gguf"
 device = "auto"          # cpu | auto | vulkan (needs qwen-gguf-vulkan) | cuda (needs qwen-gguf-cuda)
 gpu_layers = -1          # -1 offloads all layers, 0 is CPU
 threads = 4              # 1-256
@@ -279,17 +271,18 @@ last healthy state and surface actionable status via
 
 ## Open limitations (honest, not silent)
 
-- Native Candle/ONNX weight execution for both providers is wired
-  end-to-end (worker-thread model ownership, prompt caching, atomic
+- Native weight execution for both providers is wired end-to-end
+  (worker-thread model ownership, prompt caching, atomic
   reference+synthesis, SHA-256-verified downloads). CPU smoke-test results
   are recorded in `benchmarks/providers.md`; rows stay pending until
   measured. No fake/silent fallbacks exist anywhere in the new code.
-- Qwen 1.7B Base via Candle, GPT-SoVITS v2/v2ProPlus bundles, Japanese for
-  GPT-SoVITS, V5 bundles, GPU EPs for GPT-SoVITS, ROCm/CUDA on BC-250,
-  and FLAC/MP3 reference uploads are explicitly unsupported and rejected
-  with actionable errors. Qwen 1.7B via the GGUF/ONNX backend is CPU-validated
-  (see above); Vulkan runs but its output equivalence is unvalidated, CUDA
-  is unmeasured, and x-vector mode remains unsupported until measured.
+- Non-1.7B Qwen bundles (including the retired 0.6B Candle model),
+  GPT-SoVITS v2/v2ProPlus bundles, Japanese for GPT-SoVITS, V5 bundles,
+  GPU EPs for GPT-SoVITS, ROCm/CUDA on BC-250, and FLAC/MP3 reference
+  uploads are explicitly unsupported and rejected with actionable errors.
+  Qwen 1.7B via the GGUF/ONNX backend is CPU-validated (see above);
+  Vulkan runs but its output equivalence is unvalidated, CUDA is
+  unmeasured, and x-vector mode remains unsupported until measured.
 
 ## Reliable native synthesis jobs
 
@@ -298,14 +291,16 @@ inference, with progress and cooperative cancellation. The synchronous routes
 remain supported. See [ownership/cache architecture](inference-architecture.md)
 for model residency, integrity verification, reloads and cache bounds.
 
-Qwen `device=auto` selects CUDA only when `qwen-cuda` is compiled and CUDA can
-initialize; otherwise it reports CPU. Explicit `cuda` fails with an actionable
-error if build/runtime support is unavailable. `cpu` remains supported on AMD
-BC-250. ROCm acceleration for Qwen is not implemented or advertised. RTX 3060
-runtime/VRAM benchmarks remain pending on this runner.
+Qwen GGUF `device=auto` selects Vulkan/CUDA only when the matching
+`qwen-gguf-vulkan`/`qwen-gguf-cuda` build feature is compiled and the
+backend initializes; otherwise it reports CPU with the fallback reason.
+Explicit `vulkan`/`cuda` fails with an actionable error if build/runtime
+support is unavailable. `cpu` remains supported on AMD BC-250. ROCm
+acceleration is not implemented or advertised.
 
 Provider concurrency settings must be 1. Sampling, frame-limit and cache-only
 changes retain weights; genuine model/device changes coordinate with active work.
-Qwen CPU can remain substantially slower than real-time; use jobs rather than
-raising an HTTP timeout alone. Measured resident/peak RAM can be several GB per
-model; see the current benchmark rows before enabling multiple backends.
+GGUF CPU can remain substantially slower than real-time (RTF ~26 measured);
+use jobs rather than raising an HTTP timeout alone. Measured resident/peak RAM
+can be several GB per model; see the current benchmark rows before enabling
+multiple backends.

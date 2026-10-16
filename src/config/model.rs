@@ -283,35 +283,29 @@ pub struct PathsConfig {
     pub token_store: String,
 }
 
-/// Optional Qwen3-TTS provider settings (`[providers.qwen3]`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Qwen3Config {
-    /// Enable the Qwen3-TTS provider (default `false`).
+/// Removed Candle `[providers.qwen3]` section, kept only so old
+/// configuration files still boot. Every field is accepted and ignored;
+/// the server logs a warning pointing at `[providers.qwen3_gguf]`.
+/// Do not add new fields here and do not read this anywhere: it carries
+/// no runtime meaning since the Candle provider was deleted.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DeprecatedQwen3Section {
     #[serde(default)]
     pub enabled: bool,
-    /// Directory holding the verified Qwen3-TTS model bundle.
-    #[serde(default = "default_qwen_model_dir")]
-    pub model_dir: PathBuf,
-    /// Model identifier (`qwen3-tts-0.6b-base`, `qwen3-tts-1.7b-base`).
-    #[serde(default = "default_qwen_model_id")]
-    pub model_id: String,
-    /// Pinned model revision.
-    #[serde(default = "default_qwen_revision")]
-    pub revision: String,
-    /// Requested device: `cpu`, `auto` (resolves to CPU), or `cuda`
-    /// (requires the `qwen-cuda` build feature; rejected otherwise).
-    #[serde(default = "default_provider_device")]
-    pub device: String,
-    /// Maximum concurrent Qwen syntheses (serialized per model by default).
-    #[serde(default = "default_provider_concurrency")]
-    pub max_concurrent: usize,
-    /// Voice-conditioning cache entries.
-    #[serde(default = "default_provider_cache")]
-    pub cache_entries: usize,
-    /// Maximum codec frames per synthesis (upstream `SynthesisOptions.max_length`).
-    #[serde(default = "default_qwen_max_tokens")]
-    pub max_tokens: usize,
+    #[serde(default)]
+    pub model_dir: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub revision: Option<String>,
+    #[serde(default)]
+    pub device: Option<String>,
+    #[serde(default)]
+    pub max_concurrent: Option<usize>,
+    #[serde(default)]
+    pub cache_entries: Option<usize>,
+    #[serde(default)]
+    pub max_tokens: Option<usize>,
 }
 
 /// Optional GPT-SoVITS provider settings (`[providers.gpt_sovits]`).
@@ -363,8 +357,7 @@ pub struct Qwen3GgufConfig {
     /// Enable the GGUF/ONNX provider (default `false`).
     #[serde(default)]
     pub enabled: bool,
-    /// Directory holding the verified GGUF/ONNX bundle (kept separate from
-    /// the Candle bundle so the two backends never share a cache).
+    /// Directory holding the verified GGUF/ONNX bundle.
     #[serde(default = "default_qwen_gguf_model_dir")]
     pub model_dir: PathBuf,
     /// Requested device: `auto` (CPU unless a GPU backend is compiled in),
@@ -389,17 +382,19 @@ pub struct Qwen3GgufConfig {
     pub max_tokens: usize,
 }
 
-/// Provider section grouping (`[providers.qwen3]`, `[providers.gpt_sovits]`,
-/// `[providers.qwen3_gguf]`).
+/// Provider section grouping (`[providers.gpt_sovits]`,
+/// `[providers.qwen3_gguf]`). A leftover `[providers.qwen3]` Candle section
+/// is tolerated for boot compatibility but ignored (see
+/// [`DeprecatedQwen3Section`]): delete it from old configuration files.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProvidersConfig {
     #[serde(default)]
-    pub qwen3: Qwen3Config,
-    #[serde(default)]
     pub gpt_sovits: GptSovitsConfig,
     #[serde(default)]
     pub qwen3_gguf: Qwen3GgufConfig,
+    #[serde(default, skip_serializing)]
+    pub qwen3: DeprecatedQwen3Section,
 }
 
 /// Voice-profile store settings (`[voices]`).
@@ -593,15 +588,6 @@ fn default_temp_audio_dir() -> String {
 fn default_token_store_path() -> String {
     "./tokens.json".to_string()
 }
-fn default_qwen_model_dir() -> PathBuf {
-    PathBuf::from("./models/qwen3-tts")
-}
-fn default_qwen_model_id() -> String {
-    "qwen3-tts-0.6b-base".to_string()
-}
-fn default_qwen_revision() -> String {
-    "5d83992436eae1d760afd27aff78a71d676296fc".to_string()
-}
 fn default_gptsovits_model_dir() -> PathBuf {
     PathBuf::from("./models/gpt-sovits-v2pro")
 }
@@ -619,9 +605,6 @@ fn default_provider_concurrency() -> usize {
 }
 fn default_provider_cache() -> usize {
     16
-}
-fn default_qwen_max_tokens() -> usize {
-    1024
 }
 fn default_qwen_gguf_model_dir() -> PathBuf {
     PathBuf::from("./models/qwen3-tts-1.7b-gguf")
@@ -738,21 +721,6 @@ impl Default for AppConfig {
             },
             providers: ProvidersConfig::default(),
             voices: VoicesConfig::default(),
-        }
-    }
-}
-
-impl Default for Qwen3Config {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            model_dir: default_qwen_model_dir(),
-            model_id: default_qwen_model_id(),
-            revision: default_qwen_revision(),
-            device: default_provider_device(),
-            max_concurrent: default_provider_concurrency(),
-            cache_entries: default_provider_cache(),
-            max_tokens: default_qwen_max_tokens(),
         }
     }
 }

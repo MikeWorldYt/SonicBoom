@@ -144,6 +144,13 @@ impl ConfigManager {
         }
         validation::validate(&config)
             .map_err(|e| ConfigError::invalid(path.display().to_string().as_str(), e))?;
+        if config.providers.qwen3 != super::model::DeprecatedQwen3Section::default() {
+            tracing::warn!(
+                "Ignoring removed [providers.qwen3] Candle section (the Candle Qwen backend was deleted); \
+                 delete it from {} and use [providers.qwen3_gguf] with a qwen-gguf build instead",
+                path.display()
+            );
+        }
         let file_revision = config.revision.max(1);
         let (tx, _) = broadcast::channel(64);
         let manager = Arc::new(Self {
