@@ -1509,6 +1509,24 @@ impl PocketTtsProvider {
         }
     }
 
+    fn check_model_language(model: &str, language: &str) -> Result<(), ProviderError> {
+        Self::check_model(model)?;
+        Self::check_language(language)?;
+        let expected = match model {
+            "pocket-tts-en" => "en",
+            "pocket-tts-es" => "es",
+            _ => unreachable!("model validated above"),
+        };
+        if language != expected {
+            return Err(ProviderError::unsupported_language(
+                POCKET_TTS_PROVIDER_ID,
+                language,
+                &[expected],
+            ));
+        }
+        Ok(())
+    }
+
     /// Validate a downloaded bundle directory (all eight pinned members).
     pub fn validate_bundle(model_dir: &Path, model_id: &str) -> Result<(), ProviderError> {
         let subdir = bundle_subdir(model_id).ok_or_else(|| {
@@ -1614,13 +1632,19 @@ impl PocketTtsProvider {
         if self.model_change_pending() || !Self::same_model(&self.config_snapshot(), expected) {
             return Err(ProviderError::loading("obsolete pocket-tts load discarded"));
         }
-        if self
+        if let Some(loaded) = self
             .state
             .lock()
-            .map(|s| s.loaded_model.is_some())
-            .unwrap_or(false)
+            .map_err(|_| ProviderError::inference_failed("pocket-tts state lock poisoned"))?
+            .loaded_model
+            .as_deref()
         {
-            return Ok(());
+            if loaded == model_id {
+                return Ok(());
+            }
+            return Err(ProviderError::loading(format!(
+                "pocket-tts has {loaded} resident; configure model_id={model_id} before loading"
+            )));
         }
         Self::check_model(model_id)?;
         pocket_manifest(model_id)?;
@@ -2079,8 +2103,7 @@ impl TtsProvider for PocketTtsProvider {
     }
 
     fn synthesize(&self, request: &ProviderRequest) -> Result<PcmAudio, ProviderError> {
-        Self::check_model(&request.model)?;
-        Self::check_language(&request.language)?;
+        Self::check_model_language(&request.model, &request.language)?;
         if !matches!(
             request.device,
             DevicePreference::Cpu | DevicePreference::Auto
@@ -2162,6 +2185,19 @@ impl TtsProvider for PocketTtsProvider {
                 .model
                 .lock()
                 .map_err(|_| ProviderError::inference_failed("pocket-tts model lock poisoned"))?;
+            let loaded_matches = self
+                .state
+                .lock()
+                .map_err(|_| ProviderError::inference_failed("pocket-tts state lock poisoned"))?
+                .loaded_model
+                .as_deref()
+                == Some(request.model.as_str());
+            if !loaded_matches {
+                return Err(ProviderError::loading(format!(
+                    "pocket-tts requested {}; configure model_id and load that bundle first",
+                    request.model
+                )));
+            }
             let native = model
                 .as_mut()
                 .ok_or_else(|| ProviderError::loading("pocket-tts model is not loaded"))?;
@@ -2317,7 +2353,16 @@ mod tests {
     fn english_and_spanish_pass_language_validation() {
         let p = provider();
         for lang in ["en", "es"] {
-            let request = ProviderRequest::new(POCKET_TTS_MODELS[0], "profile", "hello", lang);
+            let request = ProviderRequest::new(
+                if lang == "en" {
+                    "pocket-tts-en"
+                } else {
+                    "pocket-tts-es"
+                },
+                "profile",
+                "hello",
+                lang,
+            );
             let error = p.synthesize(&with_reference(request)).unwrap_err();
             // Bundle absent in CI: explicit missing/loading, never fallback.
             assert!(
@@ -2326,6 +2371,29 @@ mod tests {
                 error
             );
         }
+    }
+
+    #[test]
+    fn model_language_pairs_are_isolated() {
+        for (model, language) in [("pocket-tts-en", "es"), ("pocket-tts-es", "en")] {
+            let request = ProviderRequest::new(model, "profile", "hello", language);
+            let error = provider().synthesize(&with_reference(request)).unwrap_err();
+            assert_eq!(error.code(), "unsupported_language");
+        }
+        assert!(PocketTtsProvider::check_model_language("pocket-tts-en", "en").is_ok());
+        assert!(PocketTtsProvider::check_model_language("pocket-tts-es", "es").is_ok());
+    }
+
+    #[test]
+    fn loading_a_different_resident_bundle_fails_explicitly() {
+        let p = provider();
+        p.state.lock().unwrap().loaded_model = Some("pocket-tts-en".to_string());
+        let config = p.config_snapshot();
+        assert!(p.load_expected("pocket-tts-en", &config).is_ok());
+        let error = p.load_expected("pocket-tts-es", &config).unwrap_err();
+        assert_eq!(error.code(), "loading");
+        assert!(error.message().contains("pocket-tts-en"));
+        assert!(error.message().contains("pocket-tts-es"));
     }
 
     #[test]
@@ -2606,9 +2674,11 @@ mod tests {
     fn real_bundle_synthesizes_audible_cloned_speech() {
         let model_dir = std::env::var("POCKET_TTS_BUNDLE_DIR").unwrap_or_default();
         let ref_wav = std::env::var("POCKET_TTS_REF_WAV").unwrap_or_default();
-        if model_dir.is_empty() || ref_wav.is_empty() {
-            return;
-        }
+        assert!(!model_dir.is_empty(), "set POCKET_TTS_BUNDLE_DIR");
+        assert!(
+            !ref_wav.is_empty(),
+            "set POCKET_TTS_REF_WAV to an authorized reference"
+        );
         let reader = hound::WavReader::open(&ref_wav).unwrap();
         let rate = reader.spec().sample_rate;
         let pcm: Vec<f32> = reader

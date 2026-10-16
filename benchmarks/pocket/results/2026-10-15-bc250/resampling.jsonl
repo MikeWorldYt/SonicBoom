@@ -1,0 +1,14 @@
+{"source_rate": 16000, "tone_hz": 1000, "candidate": "linear_numpy_mirror", "amplitude_db": -0.09907330649783345, "seconds": 0.002661923001141986, "numpy": "2.5.4", "scipy": "1.18.1"}
+{"source_rate": 16000, "tone_hz": 1000, "candidate": "scipy_polyphase_kaiser5", "amplitude_db": 0.008540622009714323, "seconds": 0.0024234679985966068, "numpy": "2.5.4", "scipy": "1.18.1"}
+{"source_rate": 22050, "tone_hz": 1000, "candidate": "linear_numpy_mirror", "amplitude_db": -0.05876965933794352, "seconds": 0.002334618999157101, "numpy": "2.5.4", "scipy": "1.18.1"}
+{"source_rate": 22050, "tone_hz": 1000, "candidate": "scipy_polyphase_kaiser5", "amplitude_db": 0.011634174995275266, "seconds": 0.0024850919980963226, "numpy": "2.5.4", "scipy": "1.18.1"}
+{"source_rate": 24000, "tone_hz": 1000, "candidate": "linear_numpy_mirror", "amplitude_db": -1.0279256308736326e-07, "seconds": 3.706899951794185e-05, "numpy": "2.5.4", "scipy": "1.18.1"}
+{"source_rate": 24000, "tone_hz": 1000, "candidate": "scipy_polyphase_kaiser5", "amplitude_db": -1.0279256308736326e-07, "seconds": 8.660700041218661e-05, "numpy": "2.5.4", "scipy": "1.18.1"}
+{"source_rate": 44100, "tone_hz": 1000, "candidate": "linear_numpy_mirror", "amplitude_db": -0.014690828357677124, "seconds": 0.0012653840021812357, "numpy": "2.5.4", "scipy": "1.18.1"}
+{"source_rate": 44100, "tone_hz": 1000, "candidate": "scipy_polyphase_kaiser5", "amplitude_db": 0.011174000950873675, "seconds": 0.003255332998378435, "numpy": "2.5.4", "scipy": "1.18.1"}
+{"source_rate": 44100, "tone_hz": 15000, "candidate": "linear_numpy_mirror", "amplitude_db": -3.120816429964892, "seconds": 0.0020688669974333607, "numpy": "2.5.4", "scipy": "1.18.1"}
+{"source_rate": 44100, "tone_hz": 15000, "candidate": "scipy_polyphase_kaiser5", "amplitude_db": -57.23310371121918, "seconds": 0.0035844920021190774, "numpy": "2.5.4", "scipy": "1.18.1"}
+{"source_rate": 48000, "tone_hz": 1000, "candidate": "linear_numpy_mirror", "amplitude_db": -1.0279256308736326e-07, "seconds": 0.0012451410002540797, "numpy": "2.5.4", "scipy": "1.18.1"}
+{"source_rate": 48000, "tone_hz": 1000, "candidate": "scipy_polyphase_kaiser5", "amplitude_db": 0.008613570474545385, "seconds": 0.002597252001578454, "numpy": "2.5.4", "scipy": "1.18.1"}
+{"source_rate": 48000, "tone_hz": 15000, "candidate": "linear_numpy_mirror", "amplitude_db": -7.43263344084373e-08, "seconds": 0.0016683229987393133, "numpy": "2.5.4", "scipy": "1.18.1"}
+{"source_rate": 48000, "tone_hz": 15000, "candidate": "scipy_polyphase_kaiser5", "amplitude_db": -57.526844633264744, "seconds": 0.002403713999228785, "numpy": "2.5.4", "scipy": "1.18.1"}

@@ -1,0 +1,58 @@
+{
+  "reference": "eSpeak NG 1.52.0 default en synthetic voice; generated locally; no human voice reference",
+  "reference_text": "This is a synthetic reference voice for reproducible speech generation testing. The quick brown fox jumps over the lazy dog.",
+  "reference_sha256": "d760d45c9c763860c28834228c30a3b69e8999d5a5c17c52ea05dc42c915b68e",
+  "text": "Hello world, this is a test of voice cloning on a CPU.",
+  "seed": 49420,
+  "temperature": 0.7,
+  "cpu_threads": 4,
+  "export_revision": "58a6d00cf13d239b6748cb0769f35c580a8f606c",
+  "summary": [
+    {
+      "steps": 1,
+      "warm_median_rtf": 1.0034917964743588,
+      "warm_median_api_ttfa": 3.130894405,
+      "peak_rss_kib": 958672,
+      "audio_seconds": 3.12
+    },
+    {
+      "steps": 2,
+      "warm_median_rtf": 0.9492552402439025,
+      "warm_median_api_ttfa": 3.113557188,
+      "peak_rss_kib": 955312,
+      "audio_seconds": 3.28
+    },
+    {
+      "steps": 4,
+      "warm_median_rtf": 1.0664160826219513,
+      "warm_median_api_ttfa": 3.497844751,
+      "peak_rss_kib": 977060,
+      "audio_seconds": 3.28
+    },
+    {
+      "steps": 8,
+      "warm_median_rtf": 1.1337045545731708,
+      "warm_median_api_ttfa": 3.718550939,
+      "peak_rss_kib": 967992,
+      "audio_seconds": 3.28
+    }
+  ],
+  "audio_hashes": {
+    "/tmp/sonicboom-pocket-synthetic/results/steps8/lsd-8-trial-3.wav": "55db9bb6385bd881759bb2d7e352b102fd6e91a8aedc409cc1994c4e07b50272",
+    "/tmp/sonicboom-pocket-synthetic/results/steps8/lsd-8-trial-2.wav": "55db9bb6385bd881759bb2d7e352b102fd6e91a8aedc409cc1994c4e07b50272",
+    "/tmp/sonicboom-pocket-synthetic/results/steps8/lsd-8-trial-1.wav": "55db9bb6385bd881759bb2d7e352b102fd6e91a8aedc409cc1994c4e07b50272",
+    "/tmp/sonicboom-pocket-synthetic/results/steps8/lsd-8-trial-0.wav": "55db9bb6385bd881759bb2d7e352b102fd6e91a8aedc409cc1994c4e07b50272",
+    "/tmp/sonicboom-pocket-synthetic/results/steps4/lsd-4-trial-3.wav": "c8fbe0cc9ae047c87f75f774dd0e235aaa20c053acad42e65519b6d9ead1de4e",
+    "/tmp/sonicboom-pocket-synthetic/results/steps4/lsd-4-trial-2.wav": "c8fbe0cc9ae047c87f75f774dd0e235aaa20c053acad42e65519b6d9ead1de4e",
+    "/tmp/sonicboom-pocket-synthetic/results/steps4/lsd-4-trial-1.wav": "c8fbe0cc9ae047c87f75f774dd0e235aaa20c053acad42e65519b6d9ead1de4e",
+    "/tmp/sonicboom-pocket-synthetic/results/steps4/lsd-4-trial-0.wav": "c8fbe0cc9ae047c87f75f774dd0e235aaa20c053acad42e65519b6d9ead1de4e",
+    "/tmp/sonicboom-pocket-synthetic/results/steps2/lsd-2-trial-3.wav": "fb1b99a2cc8f442824c856393997988b96b2f948fecf0fb999834d89fbb8b4a3",
+    "/tmp/sonicboom-pocket-synthetic/results/steps2/lsd-2-trial-2.wav": "fb1b99a2cc8f442824c856393997988b96b2f948fecf0fb999834d89fbb8b4a3",
+    "/tmp/sonicboom-pocket-synthetic/results/steps2/lsd-2-trial-1.wav": "fb1b99a2cc8f442824c856393997988b96b2f948fecf0fb999834d89fbb8b4a3",
+    "/tmp/sonicboom-pocket-synthetic/results/steps2/lsd-2-trial-0.wav": "fb1b99a2cc8f442824c856393997988b96b2f948fecf0fb999834d89fbb8b4a3",
+    "/tmp/sonicboom-pocket-synthetic/results/steps1/lsd-1-trial-3.wav": "a3d756a431513b51aef1726122f4a87b35891481aca78af4636212d5e0f0dd3b",
+    "/tmp/sonicboom-pocket-synthetic/results/steps1/lsd-1-trial-2.wav": "a3d756a431513b51aef1726122f4a87b35891481aca78af4636212d5e0f0dd3b",
+    "/tmp/sonicboom-pocket-synthetic/results/steps1/lsd-1-trial-1.wav": "a3d756a431513b51aef1726122f4a87b35891481aca78af4636212d5e0f0dd3b",
+    "/tmp/sonicboom-pocket-synthetic/results/steps1/lsd-1-trial-0.wav": "a3d756a431513b51aef1726122f4a87b35891481aca78af4636212d5e0f0dd3b"
+  }
+}
