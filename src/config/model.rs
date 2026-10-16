@@ -387,10 +387,10 @@ pub struct PocketTtsConfig {
     #[serde(default)]
     pub enabled: bool,
     /// Directory holding the verified per-language ONNX bundles
-    /// (`onnx/english_2026-04`, `onnx/spanish`).
+    /// (English, Spanish, Portuguese, German, Italian, French 24-layer preview).
     #[serde(default = "default_pocket_model_dir")]
     pub model_dir: PathBuf,
-    /// Model identifier (`pocket-tts-en`, `pocket-tts-es`).
+    /// Model identifier (`pocket-tts-en/es/pt/de/it`, `pocket-tts-fr-24l`).
     #[serde(default = "default_pocket_model_id")]
     pub model_id: String,
     /// Pinned export revision.

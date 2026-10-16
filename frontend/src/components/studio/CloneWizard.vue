@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { t, uiError } from '../../i18n';
 import { useStudio } from '../../composables/useStudio';
+import { modelLanguages } from '../../services/providerLanguages';
 import { useTask } from '../../composables/useTask';
 import FeedbackNotice from '../FeedbackNotice.vue';
 const emit = defineEmits<{ created: []; engines: [] }>();
@@ -14,6 +15,8 @@ const fileInput = ref<HTMLInputElement | null>(null);
 const name = ref(''); const consent = ref(''); const transcript = ref(''); const file = ref<File | null>(null);
 const choices = computed(() => capabilities.value.filter(cap => cap.requires_reference_audio));
 const cap = computed(() => choices.value.find(item => item.provider_id === provider.value));
+const languages = computed(() => modelLanguages(cap.value, model.value));
+watch(languages, value => { if (!value.includes(language.value)) language.value = value[0] || 'en'; });
 const needsTranscript = computed(() => mode.value === 'icl' || !!cap.value?.requires_reference_transcript);
 const engineReady = computed(() => providers.value.some(item => item.provider_id === provider.value && item.state === 'ready'));
 watch(choices, value => { if (!value.some(item => item.provider_id === provider.value)) provider.value = value[0]?.provider_id || ''; }, { immediate: true });
@@ -58,7 +61,7 @@ async function save() {
     <form id="cloneForm" :aria-busy="pending" @submit.prevent="step < 2 ? next() : save()">
       <fieldset v-show="step === 0" :disabled="step !== 0 || pending"><legend>{{ t('Choose an engine') }}</legend>
         <div class="row"><div class="field"><label for="cloneProvider">{{ t('Engine') }}</label><select id="cloneProvider" v-model="provider"><option v-if="!choices.length" value="">{{ t('No cloning engines available') }}</option><option v-for="choice in choices" :key="choice.provider_id" :value="choice.provider_id">{{ choice.provider_id }}</option></select></div><div class="field"><label for="cloneModel">{{ t('Model') }}</label><select id="cloneModel" v-model="model"><option v-for="item in cap?.models || []" :key="item" :value="item">{{ item }}</option></select></div></div>
-        <label for="cloneLang">{{ t('Language') }}</label><select id="cloneLang" v-model="language"><option v-for="code in cap?.languages.length ? cap.languages : ['en']" :key="code" :value="code">{{ t(`language.${code}`) }}</option></select>
+        <label for="cloneLang">{{ t('Language') }}</label><select id="cloneLang" v-model="language"><option v-for="code in languages" :key="code" :value="code">{{ t(`language.${code}`) }}</option></select>
         <p v-if="!engineReady" class="help-note">{{ t('You can save a reference now. Enable its engine before previewing or generating audio.') }}</p>
       </fieldset>
       <fieldset v-show="step === 1" :disabled="step !== 1 || pending"><legend>{{ t('Reference recording') }}</legend><p class="help-note">{{ t('Upload 3–10 seconds of clear speech. Only use a voice you own or have permission to use. Add the exact transcript for ICL mode; X-vector and audio-prompt modes only need the recording.') }}</p>

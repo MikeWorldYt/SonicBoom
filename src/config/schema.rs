@@ -607,7 +607,7 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
         ),
         (
             "providers.pocket_tts.model_id",
-            "Pocket TTS model identifier (pocket-tts-en, pocket-tts-es)",
+            "Pocket TTS model identifier (pocket-tts-en/es/pt/de/it, pocket-tts-fr-24l)",
         ),
         (
             "providers.pocket_tts.revision",
@@ -625,7 +625,16 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
             apply: ApplyStrategy::Hot,
             min: None,
             max: None,
-            allowed_values: None,
+            allowed_values: if path == "providers.pocket_tts.model_id" {
+                Some(
+                    sonicboom::tts::providers::pocket_tts::POCKET_TTS_MODELS
+                        .iter()
+                        .map(|s| (*s).to_string())
+                        .collect(),
+                )
+            } else {
+                None
+            },
             nullable: false,
             secret: false,
             allowed_values_source: None,

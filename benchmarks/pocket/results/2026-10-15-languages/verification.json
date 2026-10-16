@@ -1,0 +1,220 @@
+{
+  "hardware": "AMD BC-250, CPU only",
+  "build": "cargo test --lib --no-default-features --features pocket-tts (debug)",
+  "revision": "58a6d00cf13d239b6748cb0769f35c580a8f606c",
+  "reference": "../2026-10-15-bc250/reference-espeak.wav",
+  "reference_sha256": "d760d45c9c763860c28834228c30a3b69e8999d5a5c17c52ea05dc42c915b68e",
+  "seed": 49420,
+  "temperature": 0.7,
+  "lsd_steps": 1,
+  "cpu_threads": 4,
+  "results": [
+    {
+      "model": "pocket-tts-pt",
+      "language": "pt",
+      "text": "Olá mundo, esta é uma prova de síntese de voz em português.",
+      "tokenizer_cases_passed": 9,
+      "pinned_hashes_verified": 8,
+      "audible_finite_pcm": true,
+      "wav_sha256": "c8148ba2cd281b094e5d6f09060fe1e6f395cb0b76ebf34ed24f6397eb5bcc58"
+    },
+    {
+      "model": "pocket-tts-de",
+      "language": "de",
+      "text": "Hallo Welt, dies ist ein Test der deutschen Sprachsynthese.",
+      "tokenizer_cases_passed": 9,
+      "pinned_hashes_verified": 8,
+      "audible_finite_pcm": true,
+      "wav_sha256": "c1e7665cdc5debfc93aa16d59650e0178e15682ac62708a89ef0fc4073b43f64"
+    },
+    {
+      "model": "pocket-tts-it",
+      "language": "it",
+      "text": "Ciao mondo, questa è una prova di sintesi vocale in italiano.",
+      "tokenizer_cases_passed": 9,
+      "pinned_hashes_verified": 8,
+      "audible_finite_pcm": true,
+      "wav_sha256": "8b84857637c464c9e3444917803f298fc11da09d6ee90d3e613658eb0d9f3c63"
+    },
+    {
+      "model": "pocket-tts-fr-24l",
+      "language": "fr",
+      "text": "Bonjour le monde, ceci est un test de synthèse vocale en français.",
+      "tokenizer_cases_passed": 9,
+      "pinned_hashes_verified": 8,
+      "audible_finite_pcm": true,
+      "wav_sha256": "88dcb9693d5a0ef7c2af54980109e920b3cdb3c6a1bc8ee38b7ce1a78a5fb977"
+    }
+  ],
+  "files": {
+    "portuguese": [
+      {
+        "path": "onnx/portuguese/bos_before_voice.npy",
+        "size": 4224,
+        "sha256": "9396378d581d63554cc30f2861e5d5b825650ff3dd3594a9ddc73d18df0973f1"
+      },
+      {
+        "path": "onnx/portuguese/bundle.json",
+        "size": 24371,
+        "sha256": "389ab9d942f044a6a71d04e86ba89b100dee21ed91ca9d099b19ac45b122d242"
+      },
+      {
+        "path": "onnx/portuguese/flow_lm_flow_int8.onnx",
+        "size": 9962530,
+        "sha256": "53c50fc75f892687920c316513715bfbefbdb3b7642786e287c7971df53edb26"
+      },
+      {
+        "path": "onnx/portuguese/flow_lm_main_int8.onnx",
+        "size": 76341079,
+        "sha256": "119e5ce926cadc273508565143c86a7a9cd86450fa99cad6a37a79ba50f9db02"
+      },
+      {
+        "path": "onnx/portuguese/mimi_decoder_int8.onnx",
+        "size": 22684077,
+        "sha256": "691f89f074585c828914cecd5396e30e0e2a14dbfa4890bd1b5806d303daeb4e"
+      },
+      {
+        "path": "onnx/portuguese/mimi_encoder.onnx",
+        "size": 39768446,
+        "sha256": "189d737f150a3d72be0818235c2b42f921cb1ad39107d11bb2e7f605fbdc7bc5"
+      },
+      {
+        "path": "onnx/portuguese/text_conditioner.onnx",
+        "size": 16388344,
+        "sha256": "693523a9b8e8853a7130676fd0e8189939255411700f0207664715226a26c409"
+      },
+      {
+        "path": "onnx/portuguese/tokenizer.model",
+        "size": 60995,
+        "sha256": "3aa51309c55f114771c156aaeb86f6fc325991364aa3c38af74aecf1cbd0fade"
+      }
+    ],
+    "german": [
+      {
+        "path": "onnx/german/bos_before_voice.npy",
+        "size": 4224,
+        "sha256": "8c866aec4bcd5f0e6ca788f4b24eacba799b02262905e9f5d6f967409872f8df"
+      },
+      {
+        "path": "onnx/german/bundle.json",
+        "size": 24362,
+        "sha256": "7f032e4df0db3a02e24871dfa496e2b7ffa095dd98640bfcf12c04b8671ac60e"
+      },
+      {
+        "path": "onnx/german/flow_lm_flow_int8.onnx",
+        "size": 9962530,
+        "sha256": "2b0eb8381c49672ac1050c50221db02033b5dc6c346ab45c67bd05344257f06c"
+      },
+      {
+        "path": "onnx/german/flow_lm_main_int8.onnx",
+        "size": 76341079,
+        "sha256": "3d5e9cd303ecd26fc75b91e2766bce6de3d274d397d3ee9a392f6299366681ef"
+      },
+      {
+        "path": "onnx/german/mimi_decoder_int8.onnx",
+        "size": 22684077,
+        "sha256": "3fe868810d66fa0c26bb3ae0d5ee65cae83028c0fe83398bcf3d96478f68083b"
+      },
+      {
+        "path": "onnx/german/mimi_encoder.onnx",
+        "size": 39768446,
+        "sha256": "71a00b2c6270af5f99389609bcd3d4682bf692fccb8f0ff9b21c3d2e473a204b"
+      },
+      {
+        "path": "onnx/german/text_conditioner.onnx",
+        "size": 16388344,
+        "sha256": "a004c74047bc1c4208f6ca150c6337fb541ab03e154493f456d43baa0fd469f1"
+      },
+      {
+        "path": "onnx/german/tokenizer.model",
+        "size": 59837,
+        "sha256": "389079b9c67cd17ff1c565d53bc695df390b4ca8abf2300947e659585edd9d2a"
+      }
+    ],
+    "italian": [
+      {
+        "path": "onnx/italian/bos_before_voice.npy",
+        "size": 4224,
+        "sha256": "212357ca66b450e7dc2ae6cb11f1efd08b49c59e25196a6979c37962fef6cd82"
+      },
+      {
+        "path": "onnx/italian/bundle.json",
+        "size": 24365,
+        "sha256": "c779c25fd836c9b85a3fc570474774777176757bd6bec0b5bffbbe599644a9f9"
+      },
+      {
+        "path": "onnx/italian/flow_lm_flow_int8.onnx",
+        "size": 9962530,
+        "sha256": "21b2bec2f9ae4323fc545a0c7ffb274bdfa925a699fd304ed03aba53e4ca9129"
+      },
+      {
+        "path": "onnx/italian/flow_lm_main_int8.onnx",
+        "size": 76341079,
+        "sha256": "f43ce4d823471095a7bd6d9dcfcceb46145ea96b0f2b85b7d668f15816965055"
+      },
+      {
+        "path": "onnx/italian/mimi_decoder_int8.onnx",
+        "size": 22684077,
+        "sha256": "f120bc5cddca9514c511f128786f5d9e6e6893b067faae5e30f5b2bd5643aa03"
+      },
+      {
+        "path": "onnx/italian/mimi_encoder.onnx",
+        "size": 39768446,
+        "sha256": "8936e1f95baedb898941fc7a259d7ab8c031aeaf6d3746ecac3cf7b280a9adda"
+      },
+      {
+        "path": "onnx/italian/text_conditioner.onnx",
+        "size": 16388344,
+        "sha256": "692369f5ac340006fa44252155da77fe6c8a60a859848297777e0caea534068e"
+      },
+      {
+        "path": "onnx/italian/tokenizer.model",
+        "size": 60078,
+        "sha256": "6583b974a11b90e14d8a4c8e9c43f06c3861b9ede6e5023a4c27ab5a3a7d4c39"
+      }
+    ],
+    "french_24l": [
+      {
+        "path": "onnx/french_24l/bos_before_voice.npy",
+        "size": 4224,
+        "sha256": "5759269802d691d49481b8e06d6a5649da85ea01135e270bd7641e3b091c7237"
+      },
+      {
+        "path": "onnx/french_24l/bundle.json",
+        "size": 42235,
+        "sha256": "8a5fe6c59985e3ccb5a6ccb1ffb2e84ac08488c5bfa704053618851436741427"
+      },
+      {
+        "path": "onnx/french_24l/flow_lm_flow_int8.onnx",
+        "size": 9962530,
+        "sha256": "d340c549d5a1e0e7b88a0fb26fcae53c3b76486872f4418398a395bb1bc88701"
+      },
+      {
+        "path": "onnx/french_24l/flow_lm_main_int8.onnx",
+        "size": 305144125,
+        "sha256": "6130a6b98fae175147d82752263e250fb7b8483c1ef5373753ad335c16f4a129"
+      },
+      {
+        "path": "onnx/french_24l/mimi_decoder_int8.onnx",
+        "size": 22684077,
+        "sha256": "b329ff3de3aa95455d2dee1cf371943dec269dd8711008017501ca129cb18d8c"
+      },
+      {
+        "path": "onnx/french_24l/mimi_encoder.onnx",
+        "size": 39768446,
+        "sha256": "790a82fb8041e1035ec8097c6a277c834664a1f6619397d62f3bb46f71d2bfd4"
+      },
+      {
+        "path": "onnx/french_24l/text_conditioner.onnx",
+        "size": 16388344,
+        "sha256": "89d1b6ac55e618e42d2bd840438ce918bffb14960475ef091847ca39be641e65"
+      },
+      {
+        "path": "onnx/french_24l/tokenizer.model",
+        "size": 60173,
+        "sha256": "521c85bdb2da10618f4be52021ed1cb2a7a6299b040708487f133193f7b305e2"
+      }
+    ]
+  },
+  "limitations": "Synthetic English eSpeak reference used across all languages. Audibility/token compatibility smoke tests only; no intelligibility, speaker similarity or perceptual quality claim. Debug timings include cold conditioning; concurrent compilation and other processes were active."
+}

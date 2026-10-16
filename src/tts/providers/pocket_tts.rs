@@ -39,17 +39,37 @@ use super::types::{
     ProviderStatus, ProviderStatusState,
 };
 
+mod manifests;
+pub use manifests::*;
+
 /// Stable provider identifier.
 pub const POCKET_TTS_PROVIDER_ID: &str = "pocket-tts";
 /// Pinned export revision (immutable commit on `KevinAHM/pocket-tts-onnx`).
 pub const POCKET_TTS_UPSTREAM_REVISION: &str = "58a6d00cf13d239b6748cb0769f35c580a8f606c";
 pub const POCKET_TTS_REPO: &str = "KevinAHM/pocket-tts-onnx";
-/// Supported model IDs. Only these two bundles are validated; every other
-/// bundle in the export repo (including the `*_24l` variants) fails with
-/// explicit guidance until pinned and validated.
-pub const POCKET_TTS_MODELS: &[&str] = &["pocket-tts-en", "pocket-tts-es"];
-/// Languages actually validated (English and Spanish, independently).
-pub const POCKET_TTS_LANGUAGES: &[&str] = &["en", "es"];
+/// Independently pinned language bundles. French uses the larger 24-layer preview.
+pub const POCKET_TTS_MODELS: &[&str] = &[
+    "pocket-tts-en",
+    "pocket-tts-es",
+    "pocket-tts-pt",
+    "pocket-tts-de",
+    "pocket-tts-it",
+    "pocket-tts-fr-24l",
+];
+pub const POCKET_TTS_LANGUAGES: &[&str] = &["en", "es", "pt", "de", "it", "fr"];
+
+/// Exact language for a model; no cross-language fallback or three-letter aliases.
+pub fn pocket_model_language(model: &str) -> Option<&'static str> {
+    match model {
+        "pocket-tts-en" => Some("en"),
+        "pocket-tts-es" => Some("es"),
+        "pocket-tts-pt" => Some("pt"),
+        "pocket-tts-de" => Some("de"),
+        "pocket-tts-it" => Some("it"),
+        "pocket-tts-fr-24l" => Some("fr"),
+        _ => None,
+    }
+}
 /// Native sample rate of every validated bundle.
 pub const POCKET_TTS_SAMPLE_RATE: u32 = 24_000;
 /// Reference window (mirrors the upstream Python runtime's soft 1–30 s).
@@ -64,6 +84,10 @@ fn bundle_subdir(model_id: &str) -> Option<&'static str> {
     match model_id {
         "pocket-tts-en" => Some("english_2026-04"),
         "pocket-tts-es" => Some("spanish"),
+        "pocket-tts-pt" => Some("portuguese"),
+        "pocket-tts-de" => Some("german"),
+        "pocket-tts-it" => Some("italian"),
+        "pocket-tts-fr-24l" => Some("french_24l"),
         _ => None,
     }
 }
@@ -170,12 +194,16 @@ pub const POCKET_TTS_ES_MANIFEST: &[(&str, &str, u64)] = &[
 ];
 
 /// Pinned download manifest for a supported model ID. Unvalidated bundle
-/// IDs (including `*_24l` variants and Dutch, which has no ONNX export)
-/// fail with explicit guidance instead of a silent English fallback.
+/// IDs (including unavailable Chinese, Japanese and Dutch exports) fail
+/// with explicit guidance instead of a silent English fallback.
 pub fn pocket_manifest(model_id: &str) -> Result<Vec<PinnedFile>, ProviderError> {
     let table = match model_id {
         "pocket-tts-en" => POCKET_TTS_EN_MANIFEST,
         "pocket-tts-es" => POCKET_TTS_ES_MANIFEST,
+        "pocket-tts-pt" => POCKET_TTS_PT_MANIFEST,
+        "pocket-tts-de" => POCKET_TTS_DE_MANIFEST,
+        "pocket-tts-it" => POCKET_TTS_IT_MANIFEST,
+        "pocket-tts-fr-24l" => POCKET_TTS_FR_MANIFEST,
         _ => {
             return Err(ProviderError::unsupported_model(
                 POCKET_TTS_PROVIDER_ID,
@@ -1498,8 +1526,7 @@ impl PocketTtsProvider {
         if POCKET_TTS_LANGUAGES.contains(&language) {
             Ok(())
         } else {
-            // French, German, Italian, Portuguese and Dutch bundles exist
-            // upstream but are not validated here: fail explicitly instead
+            // Reject languages without an exact verified bundle instead
             // of silently synthesizing another language.
             Err(ProviderError::unsupported_language(
                 POCKET_TTS_PROVIDER_ID,
@@ -1509,14 +1536,10 @@ impl PocketTtsProvider {
         }
     }
 
-    fn check_model_language(model: &str, language: &str) -> Result<(), ProviderError> {
+    pub fn check_model_language(model: &str, language: &str) -> Result<(), ProviderError> {
         Self::check_model(model)?;
         Self::check_language(language)?;
-        let expected = match model {
-            "pocket-tts-en" => "en",
-            "pocket-tts-es" => "es",
-            _ => unreachable!("model validated above"),
-        };
+        let expected = pocket_model_language(model).expect("model validated above");
         if language != expected {
             return Err(ProviderError::unsupported_language(
                 POCKET_TTS_PROVIDER_ID,
@@ -1605,10 +1628,15 @@ impl PocketTtsProvider {
         hex::encode(hasher.finalize())
     }
 
-    fn conditioning_key(&self, reference_hash: &str, transcript: Option<&str>) -> String {
+    fn conditioning_key(
+        &self,
+        model_id: &str,
+        reference_hash: &str,
+        transcript: Option<&str>,
+    ) -> String {
         super::worker::ConditioningCache::cache_key(
             POCKET_TTS_PROVIDER_ID,
-            &self.config_snapshot().revision,
+            &format!("{}|{}", self.config_snapshot().revision, model_id),
             reference_hash,
             transcript,
             "audio_prompt",
@@ -1867,6 +1895,7 @@ impl PocketTtsProvider {
     #[cfg(feature = "pocket-tts")]
     fn voice_embeddings(
         &self,
+        model_id: &str,
         reference_pcm: &[f32],
         reference_rate: u32,
         transcript: Option<&str>,
@@ -1878,13 +1907,25 @@ impl PocketTtsProvider {
             POCKET_REFERENCE_RATE,
         );
         let hash = Self::reference_hash(&pcm24, POCKET_REFERENCE_RATE);
-        let key = self.conditioning_key(&hash, transcript);
+        let key = self.conditioning_key(model_id, &hash, transcript);
         if let Some((frames, embeddings)) = self.cached_embeddings(&key) {
             return Ok((key, frames, embeddings));
         }
         let (frames, embeddings) = {
             let _lifecycle = crate::tts::control::lock_cancellable(&self.lifecycle)
                 .map_err(ProviderError::inference_failed)?;
+            if self
+                .state
+                .lock()
+                .map_err(|_| ProviderError::inference_failed("pocket-tts state lock poisoned"))?
+                .loaded_model
+                .as_deref()
+                != Some(model_id)
+            {
+                return Err(ProviderError::loading(
+                    "Pocket reference model changed during preparation; retry",
+                ));
+            }
             let mut model = self
                 .model
                 .lock()
@@ -2090,12 +2131,18 @@ impl TtsProvider for PocketTtsProvider {
             POCKET_REFERENCE_RATE,
         );
         let hash = Self::reference_hash(&pcm24, POCKET_REFERENCE_RATE);
-        let key = self.conditioning_key(&hash, transcript);
+        let key = self.conditioning_key(model_id, &hash, transcript);
         // Eagerly warm cached embeddings when a model is loaded; otherwise
         // the key is derived now and materializes at synthesis.
         #[cfg(feature = "pocket-tts")]
         if self.is_resident()
-            && let Err(error) = self.voice_embeddings(reference_pcm, reference_rate, transcript)
+            && self
+                .state
+                .lock()
+                .map(|s| s.loaded_model.as_deref() == Some(model_id))
+                .unwrap_or(false)
+            && let Err(error) =
+                self.voice_embeddings(model_id, reference_pcm, reference_rate, transcript)
         {
             return Err(error);
         }
@@ -2207,7 +2254,7 @@ impl TtsProvider for PocketTtsProvider {
                 POCKET_REFERENCE_RATE,
             );
             let hash = Self::reference_hash(&pcm24, POCKET_REFERENCE_RATE);
-            let key = self.conditioning_key(&hash, None);
+            let key = self.conditioning_key(&request.model, &hash, None);
             let (frames, embeddings) = match self.cached_embeddings(&key) {
                 Some(hit) => hit,
                 None => {
@@ -2314,7 +2361,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_pins_both_validated_bundles() {
+    fn manifest_pins_all_validated_bundles() {
         for model in POCKET_TTS_MODELS {
             let manifest = pocket_manifest(model).unwrap();
             assert_eq!(manifest.len(), 8, "{model}");
@@ -2330,6 +2377,8 @@ mod tests {
         for model in [
             "pocket-tts-fr",
             "pocket-tts-nl",
+            "pocket-tts-zh",
+            "pocket-tts-ja",
             "pocket-tts-german_24l",
             "gpt-sovits",
         ] {
@@ -2339,9 +2388,9 @@ mod tests {
     }
 
     #[test]
-    fn french_german_dutch_are_explicitly_unsupported() {
+    fn unverified_languages_are_explicitly_unsupported() {
         let p = provider();
-        for lang in ["fr", "de", "nl", "zh", "ja"] {
+        for lang in ["nl", "zh", "ja", "por"] {
             let request = ProviderRequest::new(POCKET_TTS_MODELS[0], "profile", "hello", lang);
             let error = p.synthesize(&with_reference(request)).unwrap_err();
             assert_eq!(error.code(), "unsupported_language", "{lang}");
@@ -2458,11 +2507,11 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_advertise_audio_prompt_english_spanish() {
+    fn capabilities_advertise_verified_audio_prompt_languages() {
         let caps = provider().capabilities();
         assert_eq!(caps.provider_id, "pocket-tts");
-        assert_eq!(caps.models, vec!["pocket-tts-en", "pocket-tts-es"]);
-        assert_eq!(caps.languages, vec!["en", "es"]);
+        assert_eq!(caps.models, POCKET_TTS_MODELS);
+        assert_eq!(caps.languages, POCKET_TTS_LANGUAGES);
         assert_eq!(caps.clone_modes, vec!["audio_prompt"]);
         assert!(caps.requires_reference_audio);
         assert!(!caps.requires_reference_transcript);
@@ -2662,6 +2711,124 @@ mod tests {
         let ids = tok.encode("\u{1}");
         assert_eq!(ids, vec![2 + 0xE2, 2 + 0x96, 2 + 0x81, 2 + 0x01], "{ids:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_model_accepts_only_its_own_language() {
+        for model in POCKET_TTS_MODELS {
+            let language = pocket_model_language(model).unwrap();
+            assert!(PocketTtsProvider::check_model_language(model, language).is_ok());
+            for other in POCKET_TTS_LANGUAGES
+                .iter()
+                .filter(|other| **other != language)
+            {
+                let error = PocketTtsProvider::check_model_language(model, other).unwrap_err();
+                assert_eq!(error.code(), "unsupported_language", "{model}: {other}");
+            }
+        }
+    }
+
+    #[test]
+    fn conditioning_cache_is_isolated_by_model() {
+        let p = provider();
+        let keys: std::collections::HashSet<_> = POCKET_TTS_MODELS
+            .iter()
+            .map(|model| p.conditioning_key(model, "same-reference", None))
+            .collect();
+        assert_eq!(keys.len(), POCKET_TTS_MODELS.len());
+    }
+
+    /// Opt-in verification of downloaded language-local tokenizers and five
+    /// native graphs. Uses Python SentencePiece fixtures, not self-derived IDs.
+    #[test]
+    #[ignore]
+    #[cfg(feature = "pocket-tts")]
+    fn real_bundle_new_languages_match_tokenizers_and_synthesize() {
+        let root = std::env::var("POCKET_TTS_BUNDLE_DIR").expect("set POCKET_TTS_BUNDLE_DIR");
+        let reference = std::env::var("POCKET_TTS_REF_WAV").expect("set POCKET_TTS_REF_WAV");
+        let mut reader = hound::WavReader::open(reference).unwrap();
+        let spec = reader.spec();
+        assert_eq!(spec.channels, 1);
+        assert_eq!(spec.bits_per_sample, 16);
+        assert_eq!(spec.sample_format, hound::SampleFormat::Int);
+        let pcm = reader
+            .samples::<i16>()
+            .map(|s| s.unwrap() as f32 / 32768.0)
+            .collect::<Vec<_>>();
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/benchmarks/pocket/fixtures/languages.json"
+        )))
+        .unwrap();
+        for fixture in fixtures.as_array().unwrap() {
+            let model = fixture["model"].as_str().unwrap();
+            let language = fixture["language"].as_str().unwrap();
+            let bundle = Path::new(&root)
+                .join("onnx")
+                .join(fixture["bundle"].as_str().unwrap());
+            let files = pocket_manifest(model).unwrap();
+            super::super::assets::verify_local_files(Path::new(&root), &files).unwrap();
+            let tok = tokenizer::UnigramTokenizer::load(&bundle.join("tokenizer.model")).unwrap();
+            for case in fixture["cases"].as_array().unwrap() {
+                let text = case["text"].as_str().unwrap();
+                let ids = case["ids"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|id| id.as_i64().unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(tok.encode(text), ids, "{model}: {text:?}");
+            }
+            let p = PocketTtsProvider::new(PocketTtsConfig {
+                enabled: true,
+                model_dir: PathBuf::from(&root),
+                model_id: model.to_string(),
+                ..PocketTtsConfig::default()
+            });
+            p.load(model).unwrap();
+            let mut request = ProviderRequest::new(
+                model,
+                "synthetic-language-test",
+                fixture["synthesis_text"].as_str().unwrap(),
+                language,
+            );
+            request.reference_audio = Some(ReferenceAudio {
+                pcm: pcm.clone(),
+                sample_rate: spec.sample_rate,
+            });
+            request.seed = Some(49420);
+            let start = std::time::Instant::now();
+            let audio = p.synthesize(&request).unwrap();
+            let elapsed = start.elapsed().as_secs_f64();
+            assert_eq!(audio.sample_rate, POCKET_TTS_SAMPLE_RATE);
+            assert_eq!(audio.channels, 1);
+            assert!(audio.duration_secs() > 1.0 && audio.is_audible());
+            assert!(audio.samples.iter().all(|v| v.is_finite()));
+            if let Ok(output) = std::env::var("POCKET_TTS_COMPARE_DIR") {
+                std::fs::create_dir_all(&output).unwrap();
+                let mut wav = hound::WavWriter::create(
+                    Path::new(&output).join(format!("{model}.wav")),
+                    hound::WavSpec {
+                        channels: 1,
+                        sample_rate: audio.sample_rate,
+                        bits_per_sample: 32,
+                        sample_format: hound::SampleFormat::Float,
+                    },
+                )
+                .unwrap();
+                for sample in &audio.samples {
+                    wav.write_sample(*sample).unwrap();
+                }
+                wav.finalize().unwrap();
+            }
+            eprintln!(
+                "{}",
+                serde_json::json!({"model":model,"language":language,
+                "seconds":elapsed,"audio_seconds":audio.duration_secs(),"rtf":elapsed/audio.duration_secs(),
+                "sentencepiece_cases":fixture["cases"].as_array().unwrap().len()})
+            );
+            p.unload();
+        }
     }
 
     /// End-to-end synthesis against real bundles. Ignored by default

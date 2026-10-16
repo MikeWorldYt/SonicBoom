@@ -76,11 +76,13 @@ proof. `coreml`/`cuda`/`rocm` stay mutually exclusive.
 - Qwen3-TTS 1.7B Base (GGUF/ONNX): `en`, `de`, `es`, `zh`, `ja`, `fr`,
   `ko`, `ru`, `it`, `pt`. Japanese (`language=ja`) synthesizes through the
   Base model in ICL clone mode.
-- Pocket TTS: `en` (`pocket-tts-en`) and `es` (`pocket-tts-es`) only —
-  each validated independently end to end. Unvalidated bundles
-  (`fr`/`de`/`it`/`pt`, `*_24l` variants, Dutch — which has no ONNX
-  export) return an explicit `unsupported_language` error — never another
-  language's output, never a Supertonic fallback.
+- Pocket TTS: `en` (`pocket-tts-en`), `es` (`pocket-tts-es`),
+  `pt` (`pocket-tts-pt`), `de` (`pocket-tts-de`), `it` (`pocket-tts-it`),
+  and `fr` (`pocket-tts-fr-24l`, larger 24-layer preview). Each has its
+  own pinned bundle and tokenizer. Use `pt` for Portuguese, not `por`.
+  Chinese (`zh`), Japanese (`ja`), Dutch (`nl`), and other unverified bundles
+  return explicit unsupported-language/model errors. No language falls back
+  to English or another provider. Existing Qwen language support is unchanged.
 - GPT-SoVITS is retired: its model IDs return an explicit retired-model
   error and its old voice profiles are unavailable (recreate as Pocket).
 - Supertonic: unchanged (English synthesis; legacy voice aliases).
@@ -150,14 +152,22 @@ Pocket TTS per-language bundles (`KevinAHM/pocket-tts-onnx`
 
 ## Pocket TTS setup (CPU smoke test)
 
-1. Set `[providers.pocket_tts] enabled = true`, `model_id =
-   pocket-tts-en` (or `pocket-tts-es`), hot-reload (or restart): the
-   server downloads the pinned export bundle and verifies every file
-   against `POCKET_TTS_EN_MANIFEST` / `POCKET_TTS_ES_MANIFEST`.
-   Place a complete bundle under `model_dir` (`onnx/english_2026-04`,
-   `onnx/spanish`) and verified local files are reused without
-   re-downloading. Only `pocket-tts-en` and `pocket-tts-es` have verified
-   manifests today; every other bundle fails with explicit guidance.
+1. Set `[providers.pocket_tts] enabled = true` and choose one `model_id`
+   from the table below. Hot-reload (or restart) downloads and verifies that
+   language's eight pinned files. Complete verified local bundles are reused.
+   One bundle is resident at a time; change `model_id` and wait for `ready`
+   before generating with another language. The French preview has 24 layers
+   and costs more RAM/CPU than the six-layer distilled models.
+
+   | Language | model_id | Bundle under `model_dir/onnx` |
+   | --- | --- | --- |
+   | English | `pocket-tts-en` | `english_2026-04` |
+   | Spanish | `pocket-tts-es` | `spanish` |
+   | Portuguese | `pocket-tts-pt` | `portuguese` |
+   | German | `pocket-tts-de` | `german` |
+   | Italian | `pocket-tts-it` | `italian` |
+   | French (preview) | `pocket-tts-fr-24l` | `french_24l` |
+
 2. No special build: the Pocket TTS backend ships in default builds (lean
    builds add `--features pocket-tts`). CPU execution provider
    only; GPU EPs are unsupported for this provider.
@@ -214,7 +224,7 @@ max_tokens = 512         # acoustic frames per synthesis (1-1024)
 [providers.pocket_tts]
 enabled = false
 model_dir = "./models/pocket-tts"
-model_id = "pocket-tts-en"   # pocket-tts-en | pocket-tts-es
+model_id = "pocket-tts-en"   # en/es/pt/de/it models; French: pocket-tts-fr-24l
 revision = "58a6d00cf13d239b6748cb0769f35c580a8f606c"
 device = "auto"          # cpu | auto only
 max_concurrent = 1

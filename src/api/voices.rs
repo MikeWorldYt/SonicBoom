@@ -448,6 +448,13 @@ async fn post_clones_inner(
             capabilities.languages.join(", ")
         )));
     }
+    if provider == "pocket-tts" {
+        sonicboom::tts::providers::pocket_tts::PocketTtsProvider::check_model_language(
+            &query.model,
+            &query.language,
+        )
+        .map_err(provider_error_to_app)?;
+    }
     let preparation_lease = super::jobs::preparation_lease();
     let reference_lease = super::jobs::reference_lease();
     let (pcm, rate) = tokio::task::spawn_blocking(move || {

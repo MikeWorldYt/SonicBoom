@@ -1,6 +1,6 @@
 # Pocket TTS quality investigation
 
-Status: partial investigation, 2026-10-15. Comparative WAVs and timing results are available, but no listening evaluation has
+Status: partial quality investigation, 2026-10-15. Language support was expanded in a follow-up (see below). Comparative WAVs and timing results are available, but no listening evaluation has
 been collected; no quality improvement, preset ranking, quantization loss, or
 numerical parity is established by this change.
 
@@ -51,7 +51,7 @@ substitution cannot establish compatibility. The pinned export tree contains
 April English, French 24l, German, Italian, Portuguese, Spanish and several 24l
 variants; no September English or Dutch bundle is present there. Listing files
 is not validation of tokenizer IDs, graph signatures, sampler or acoustic quality.
-No new language is advertised pending that validation.
+At the initial audit no new language was advertised; the follow-up below records subsequent verification.
 
 April English has sibling FP32 flow-main, flow-head and Mimi decoder graphs at
 the pinned revision. These are candidates for an identical-checkpoint ablation;
@@ -139,3 +139,44 @@ No configuration migration is needed for the isolation fix: IDs, profile files,
 defaults, pinned hashes, and consent/license checks remain unchanged. Requests
 whose model and language disagree now return an explicit error; requesting a
 different resident bundle requires configuring/loading it first.
+
+## Verified language expansion
+
+Portuguese (`pocket-tts-pt`, `pt`), German (`pocket-tts-de`, `de`), Italian
+(`pocket-tts-it`, `it`) and French (`pocket-tts-fr-24l`, `fr`, 24-layer preview)
+now use language-local pinned manifests at the same immutable export revision.
+All eight files per language were downloaded and checked by size and SHA256.
+All four bundles passed native CPU synthesis with the retained synthetic
+reference and exact token-ID comparison against Python SentencePiece 0.2.2:
+nine cases per bundle including accents, combining marks, whitespace, newlines,
+punctuation, emoji and out-of-language byte fallback. See
+[verification and hashes](results/2026-10-15-languages/verification.json) and
+[smoke sample audio](results/2026-10-15-languages/listen.html).
+These checks establish compatibility and finite audible output, not quality.
+French's 24-layer preview is more expensive and is named explicitly.
+Chinese/Japanese/Dutch remain unsupported because the pinned repository has
+no exact bundles for them. No unverified model is routed to another language.
+
+Regenerate independent token fixtures (requires SentencePiece):
+
+```sh
+python benchmarks/pocket/tokenizer_fixtures.py models/pocket-tts > benchmarks/pocket/fixtures/languages.json
+POCKET_TTS_BUNDLE_DIR=./models/pocket-tts POCKET_TTS_REF_WAV=benchmarks/pocket/results/2026-10-15-bc250/reference-espeak.wav POCKET_TTS_COMPARE_DIR=/tmp/pocket-language-audit/audio cargo test --lib --no-default-features --features pocket-tts real_bundle_new_languages_match_tokenizers_and_synthesize -- --ignored --nocapture
+```
+
+The token fixture generator reads local pinned artifacts; it never downloads or
+accepts replacement models. The opt-in test runs the production integrity checks
+before tokenizer and native inference validation. Model weights are not checked
+into the repository. Existing provider/profile IDs remain valid. Conditioning
+cache keys now include model identity so references cannot cross language bundles.
+The clone API rejects model/language mismatches before storing a profile. Pocket
+model and clone language dropdowns expose only the selected model's language;
+other providers retain their existing language behavior.
+
+Server regression note: the lean `server,pocket-tts` binary suite has an existing
+OpenAI test that unconditionally expects Qwen support and fails when Qwen is
+compiled out (190 other tests passed). The Pocket-specific profile rejection
+regression passed in that lean build. The normal server suite passed all 192 tests with
+`server,pocket-tts,qwen-gguf`; no OpenAI/Qwen source changes were made. The lean
+library suite passed 92 tests (4 opt-in tests ignored), and the separate new-language
+native verification test passed all four bundles. Frontend production build passed.

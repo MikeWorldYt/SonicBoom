@@ -1,6 +1,7 @@
 import { computed, inject, onMounted, onUnmounted, ref, shallowRef, watch, type InjectionKey } from 'vue';
 import { createHttpClient, ApiError } from '../services/http';
 import { createApi } from '../services/api';
+import { modelLanguages } from '../services/providerLanguages';
 import type { HomeData } from '../types';
 import type { ServerInfo, ProviderStatus, Capabilities, Voice, BuiltinVoice, ConfigSnapshot, ConfigStatus, Schema, Json, JsonObject, AudioDevice } from '../services/contracts';
 import { errorMessage, type Message } from '../i18n';
@@ -85,7 +86,7 @@ export function createStudio(data: HomeData) {
   }
   const models = computed(() => [
     { id: 'supertonic-3', provider: 'supertonic', cloned: false, languages: [], ready: info.value ? info.value.model.status === 'ready' : data.modelReady },
-    ...capabilities.value.filter(cap => cap.requires_reference_audio).flatMap(cap => cap.models.map(id => ({ id, provider: cap.provider_id, cloned: true, languages: cap.languages, ready: providers.value.some(provider => provider.provider_id === cap.provider_id && provider.state === 'ready') }))),
+    ...capabilities.value.filter(cap => cap.requires_reference_audio).flatMap(cap => cap.models.map(id => ({ id, provider: cap.provider_id, cloned: true, languages: modelLanguages(cap, id), ready: providers.value.some(provider => provider.provider_id === cap.provider_id && provider.state === 'ready' && (cap.provider_id !== 'pocket-tts' || provider.active_model === id)) }))),
   ]);
   const selectedModel = computed(() => models.value.find(item => item.id === model.value) || models.value[0]);
   const availableVoices = computed(() => selectedModel.value.cloned ? voices.value.filter(item => item.model === model.value).map(item => ({ id: item.id, name: item.name, detail: `${item.provider} · ${item.language}`, cloned: true })) : builtinVoices.value.map(item => ({ ...item, detail: 'Built-in voice', cloned: false })));

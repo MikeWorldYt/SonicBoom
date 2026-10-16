@@ -895,6 +895,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pocket_voice_upload_rejects_cross_language_profiles() {
+        let (app, valid, store_dir) = voices_test_app().await;
+        let request = raw_request(
+            "POST",
+            "/api/voices/clones?name=t&provider=pocket-tts&model=pocket-tts-pt&language=ja&mode=audio_prompt&consent_basis=owner",
+            Some(&valid),
+            "audio/wav",
+            b"not-needed-for-language-validation",
+        );
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("language"));
+        let request = raw_request(
+            "POST",
+            "/api/voices/clones?name=t&provider=pocket-tts&model=pocket-tts-pt&language=de&mode=audio_prompt&consent_basis=owner",
+            Some(&valid),
+            "audio/wav",
+            b"not-needed-for-language-validation",
+        );
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let body = String::from_utf8_lossy(&bytes);
+        assert!(body.contains("language") && body.contains("pt"), "{body}");
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    #[tokio::test]
     async fn voice_upload_with_wrong_media_is_415() {
         let (app, valid, store_dir) = voices_test_app().await;
         let request = raw_request(

@@ -422,7 +422,7 @@
   "—": "—",
   "Enable the Pocket TTS voice-cloning provider (default false)": "Activar el proveedor de clonación Pocket TTS; desactivado por defecto.",
   "Directory holding the verified Pocket TTS ONNX bundles": "Carpeta de los paquetes ONNX verificados de Pocket TTS.",
-  "Pocket TTS model identifier (pocket-tts-en, pocket-tts-es)": "Identificador del modelo Pocket TTS (pocket-tts-en, pocket-tts-es).",
+  "Pocket TTS model identifier (pocket-tts-en/es/pt/de/it, pocket-tts-fr-24l)": "Identificador del modelo Pocket TTS (pocket-tts-en/es/pt/de/it, pocket-tts-fr-24l).",
   "Pinned Pocket TTS export revision": "Revisión fijada de la exportación Pocket TTS.",
   "Pocket TTS device: cpu or auto (GPU is unsupported for this provider)": "Dispositivo Pocket TTS: cpu o auto; este proveedor no admite GPU.",
   "Pocket TTS uses one serialized mutable model": "Pocket TTS utiliza un único modelo mutable con acceso secuencial.",
