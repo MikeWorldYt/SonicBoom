@@ -1,0 +1,26 @@
+{
+  "en": {
+    "distinct_grid_targets": 3,
+    "targets_with_byte_fallback": []
+  },
+  "es": {
+    "distinct_grid_targets": 3,
+    "targets_with_byte_fallback": []
+  },
+  "pt": {
+    "distinct_grid_targets": 3,
+    "targets_with_byte_fallback": []
+  },
+  "de": {
+    "distinct_grid_targets": 3,
+    "targets_with_byte_fallback": []
+  },
+  "it": {
+    "distinct_grid_targets": 3,
+    "targets_with_byte_fallback": []
+  },
+  "fr": {
+    "distinct_grid_targets": 3,
+    "targets_with_byte_fallback": []
+  }
+}
