@@ -1,0 +1,29 @@
+{
+  "upstream_revision": "74feb581bc8cefb835fc608107e857036d7580a1",
+  "cases": [
+    {
+      "reference_frames": 1,
+      "combined_ids": [
+        68012,
+        13,
+        1273
+      ],
+      "prompt_rows": 11,
+      "prompt_sha256": "3c44ae89b68f6a48614116637321bb78e8e424a2ea5a77175df42558cbf23e36",
+      "trailing_rows": 2,
+      "trailing_sha256": "01420dffb202cbb2381eeddfef74bb014c07c8e499b8a7dea3294578b5fd78d6"
+    },
+    {
+      "reference_frames": 32,
+      "combined_ids": [
+        68012,
+        13,
+        1273
+      ],
+      "prompt_rows": 42,
+      "prompt_sha256": "676798440dd3b7026d23bef26319d7eb27c284a1aa6b51157d0b8ec96faabec2",
+      "trailing_rows": 0,
+      "trailing_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

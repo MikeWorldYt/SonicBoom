@@ -178,3 +178,60 @@ fn native_worker_reuses_conditioning_and_recovers_after_cancellation() -> anyhow
     drop(worker); // joins owner thread and releases model/session ownership.
     Ok(())
 }
+
+#[cfg(feature = "qwen-gguf")]
+#[test]
+#[ignore = "requires verified pinned embedding tables and tokenizer; no audio inference"]
+fn icl_prompt_exactly_matches_pinned_upstream_fixture() -> anyhow::Result<()> {
+    use sha2::{Digest, Sha256};
+    use sonicboom::tts::providers::qwen_gguf::{
+        conditioning::{self, Reference},
+        models::Embeddings,
+        tokenizer::TextTokenizer,
+    };
+    let dir = model_dir();
+    let tokenizer = TextTokenizer::load(&dir)?;
+    let mut assets = Embeddings::load(&dir)?;
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../benchmarks/tts-quality/fixtures/qwen-prompt.json"
+    ))?;
+    let digest = |values: &[f32]| {
+        let mut hash = Sha256::new();
+        for value in values {
+            hash.update(value.to_le_bytes());
+        }
+        hex::encode(hash.finalize())
+    };
+    for case in fixture["cases"].as_array().unwrap() {
+        let count = case["reference_frames"].as_u64().unwrap() as usize;
+        let reference = Reference {
+            speaker: (0..2048).map(|i| ((i % 17) as f32 - 8.0) / 128.0).collect(),
+            codes: (0..count)
+                .map(|t| std::array::from_fn(|q| ((t * 17 + q * 13) % 2048) as i64))
+                .collect(),
+            transcript: "Hola. ".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(tokenizer.encode("Hola. test")?)?,
+            case["combined_ids"]
+        );
+        let prompt = conditioning::prompt(&tokenizer, &mut assets, &reference, "test", "es")?;
+        assert_eq!(
+            prompt.embeddings.len() / 2048,
+            case["prompt_rows"].as_u64().unwrap() as usize
+        );
+        assert_eq!(
+            digest(&prompt.embeddings),
+            case["prompt_sha256"].as_str().unwrap()
+        );
+        assert_eq!(
+            prompt.trailing.len(),
+            case["trailing_rows"].as_u64().unwrap() as usize
+        );
+        assert_eq!(
+            digest(&prompt.trailing.into_iter().flatten().collect::<Vec<_>>()),
+            case["trailing_sha256"].as_str().unwrap()
+        );
+    }
+    Ok(())
+}
