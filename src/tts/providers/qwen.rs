@@ -43,8 +43,14 @@ use super::types::{
 pub const QWEN_UPSTREAM_REV: &str = "711ceee07cad92673f86de8997bdf54c30caa49f";
 /// Supported models: Base variants (ICL/x-vector cloning). CustomVoice and
 /// VoiceDesign are rejected: they do not support reference cloning.
-/// The 1.7B Base identifier is accepted for routing but load is refused
-/// until a verified manifest exists (weights exceed the verified CPU path).
+/// When the `qwen-gguf` backend is compiled in, the 1.7B Base identifier
+/// is owned by the `qwen3-gguf` provider instead, so the registry never
+/// indexes one model under two providers. Without that backend the 1.7B
+/// identifier is still accepted for routing but load is refused until a
+/// verified manifest exists.
+#[cfg(feature = "qwen-gguf")]
+pub const QWEN_MODELS: &[&str] = &["qwen3-tts-0.6b-base"];
+#[cfg(not(feature = "qwen-gguf"))]
 pub const QWEN_MODELS: &[&str] = &["qwen3-tts-0.6b-base", "qwen3-tts-1.7b-base"];
 /// Languages implemented upstream and supported here (BCP-47 tags).
 /// Every entry parses via the upstream `Language` grammar.

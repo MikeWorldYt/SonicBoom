@@ -39,6 +39,19 @@ pub const SUPPORTED_OPENAI_MODELS: &[&str] = &[
 pub fn is_cloning_model(model: &str) -> bool {
     sonicboom::tts::providers::qwen::QWEN_MODELS.contains(&model)
         || sonicboom::tts::providers::gptsovits::GPTSOVITS_MODELS.contains(&model)
+        || is_gguf_model(model)
+}
+
+/// The 1.7B identifier routes to the GGUF backend only in builds that
+/// compile it in; other builds keep routing it to the Candle provider.
+#[cfg(feature = "qwen-gguf")]
+fn is_gguf_model(model: &str) -> bool {
+    sonicboom::tts::providers::qwen_gguf::provider::QWEN_GGUF_MODELS.contains(&model)
+}
+
+#[cfg(not(feature = "qwen-gguf"))]
+fn is_gguf_model(_model: &str) -> bool {
+    false
 }
 
 /// OpenAI-compatible TTS request body
@@ -343,6 +356,8 @@ pub async fn get_models() -> impl IntoResponse {
             let owned_by = if is_cloning_model(id) {
                 if sonicboom::tts::providers::qwen::QWEN_MODELS.contains(id) {
                     "local:qwen3"
+                } else if is_gguf_model(id) {
+                    "local:qwen3-gguf"
                 } else {
                     "local:gpt-sovits"
                 }

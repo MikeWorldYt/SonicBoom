@@ -10,6 +10,8 @@ pub mod error;
 pub mod gptsovits;
 pub mod pool;
 pub mod qwen;
+#[cfg(feature = "qwen-gguf")]
+pub mod qwen_gguf;
 pub mod registry;
 pub mod supertonic;
 pub mod types;

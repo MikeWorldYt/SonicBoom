@@ -863,6 +863,10 @@ async fn run_server_inner(config_path: std::path::PathBuf, smoke: bool) -> anyho
             map_qwen_config(&current.providers.qwen3),
             map_gpt_config(&current.providers.gpt_sovits),
         );
+        #[cfg(feature = "qwen-gguf")]
+        provider_pool.sync_gguf_config(crate::api::providers::map_qwen_gguf_config(
+            &current.providers.qwen3_gguf,
+        ));
         if !smoke {
             provider_pool.kick_ensure_if_needed(hf_token);
         }

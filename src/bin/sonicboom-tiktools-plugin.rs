@@ -229,7 +229,8 @@ impl SonicBoomPlugin {
         }
         if let Some(model) = optional_string(config, "model")
             && (sonicboom::tts::providers::qwen::QWEN_MODELS.contains(&model.as_str())
-                || sonicboom::tts::providers::gptsovits::GPTSOVITS_MODELS.contains(&model.as_str()))
+                || sonicboom::tts::providers::gptsovits::GPTSOVITS_MODELS.contains(&model.as_str())
+                || is_gguf_model(&model))
         {
             return Err(PluginError::invalid_request(format!(
                 "model '{model}' requires a voice-cloning provider that is not \
@@ -337,6 +338,18 @@ fn optional_string(config: &Map<String, Value>, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// The 1.7B identifier needs a voice-cloning provider only in builds that
+/// compile the GGUF backend; otherwise `QWEN_MODELS` already covers it.
+#[cfg(feature = "qwen-gguf")]
+fn is_gguf_model(model: &str) -> bool {
+    sonicboom::tts::providers::qwen_gguf::provider::QWEN_GGUF_MODELS.contains(&model)
+}
+
+#[cfg(not(feature = "qwen-gguf"))]
+fn is_gguf_model(_model: &str) -> bool {
+    false
 }
 
 fn optional_number(config: &Map<String, Value>, key: &str) -> Option<f32> {

@@ -354,7 +354,43 @@ pub struct GptSovitsConfig {
     pub repetition_penalty: f32,
 }
 
-/// Provider section grouping (`[providers.qwen3]`, `[providers.gpt_sovits]`).
+/// Native Qwen3-TTS 1.7B GGUF/ONNX provider settings
+/// (`[providers.qwen3_gguf]`). Additive: older configuration files without
+/// this section keep working via `#[serde(default)]`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Qwen3GgufConfig {
+    /// Enable the GGUF/ONNX provider (default `false`).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Directory holding the verified GGUF/ONNX bundle (kept separate from
+    /// the Candle bundle so the two backends never share a cache).
+    #[serde(default = "default_qwen_gguf_model_dir")]
+    pub model_dir: PathBuf,
+    /// Requested device: `auto` (CPU unless a GPU backend is compiled in),
+    /// `cpu`, `vulkan` (requires `qwen-gguf-vulkan`), or `cuda`
+    /// (requires `qwen-gguf-cuda`; rejected otherwise).
+    #[serde(default = "default_provider_device")]
+    pub device: String,
+    /// llama.cpp GPU layer offload (`-1` offloads all layers, `0` is CPU).
+    #[serde(default = "default_qwen_gguf_gpu_layers")]
+    pub gpu_layers: i32,
+    /// Worker threads for GGUF inference.
+    #[serde(default = "default_qwen_gguf_threads")]
+    pub threads: usize,
+    /// Maximum concurrent syntheses (serialized per model by default).
+    #[serde(default = "default_provider_concurrency")]
+    pub max_concurrent: usize,
+    /// Voice-conditioning cache entries.
+    #[serde(default = "default_provider_cache")]
+    pub cache_entries: usize,
+    /// Maximum acoustic code frames per synthesis.
+    #[serde(default = "default_qwen_gguf_max_tokens")]
+    pub max_tokens: usize,
+}
+
+/// Provider section grouping (`[providers.qwen3]`, `[providers.gpt_sovits]`,
+/// `[providers.qwen3_gguf]`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProvidersConfig {
@@ -362,6 +398,8 @@ pub struct ProvidersConfig {
     pub qwen3: Qwen3Config,
     #[serde(default)]
     pub gpt_sovits: GptSovitsConfig,
+    #[serde(default)]
+    pub qwen3_gguf: Qwen3GgufConfig,
 }
 
 /// Voice-profile store settings (`[voices]`).
@@ -584,6 +622,33 @@ fn default_provider_cache() -> usize {
 }
 fn default_qwen_max_tokens() -> usize {
     1024
+}
+fn default_qwen_gguf_model_dir() -> PathBuf {
+    PathBuf::from("./models/qwen3-tts-1.7b-gguf")
+}
+fn default_qwen_gguf_gpu_layers() -> i32 {
+    -1
+}
+fn default_qwen_gguf_threads() -> usize {
+    4
+}
+fn default_qwen_gguf_max_tokens() -> usize {
+    512
+}
+
+impl Default for Qwen3GgufConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model_dir: default_qwen_gguf_model_dir(),
+            device: default_provider_device(),
+            gpu_layers: default_qwen_gguf_gpu_layers(),
+            threads: default_qwen_gguf_threads(),
+            max_concurrent: default_provider_concurrency(),
+            cache_entries: default_provider_cache(),
+            max_tokens: default_qwen_gguf_max_tokens(),
+        }
+    }
 }
 fn default_gpt_top_k() -> usize {
     4

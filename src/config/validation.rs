@@ -335,6 +335,30 @@ fn validate_providers(config: &AppConfig) -> Result<(), String> {
     if qwen.model_dir.as_os_str().is_empty() {
         return Err("providers.qwen3.model_dir must not be empty".to_string());
     }
+    let gguf = &config.providers.qwen3_gguf;
+    if !["cpu", "auto", "vulkan", "cuda"].contains(&gguf.device.as_str()) {
+        return Err(
+            "providers.qwen3_gguf.device must be one of: cpu, auto, vulkan, cuda".to_string(),
+        );
+    }
+    if gguf.max_concurrent != 1 {
+        return Err("providers.qwen3_gguf.max_concurrent must be 1: one model-owning worker serializes native inference".to_string());
+    }
+    if !(1..=1024).contains(&gguf.cache_entries) {
+        return Err("providers.qwen3_gguf.cache_entries must be between 1 and 1024".to_string());
+    }
+    if !(1..=1024).contains(&gguf.max_tokens) {
+        return Err("providers.qwen3_gguf.max_tokens must be between 1 and 1024".to_string());
+    }
+    if !(1..=256).contains(&gguf.threads) {
+        return Err("providers.qwen3_gguf.threads must be between 1 and 256".to_string());
+    }
+    if gguf.gpu_layers < -1 {
+        return Err("providers.qwen3_gguf.gpu_layers must be -1 (all) or >= 0".to_string());
+    }
+    if gguf.model_dir.as_os_str().is_empty() {
+        return Err("providers.qwen3_gguf.model_dir must not be empty".to_string());
+    }
     let gpt = &config.providers.gpt_sovits;
     if !["cpu", "auto"].contains(&gpt.device.as_str()) {
         return Err("providers.gpt_sovits.device must be one of: cpu, auto \
@@ -537,6 +561,28 @@ mod tests {
         assert!(!config.providers.qwen3.enabled);
         assert!(!config.providers.gpt_sovits.enabled);
         assert!(validate(&config).is_ok());
+    }
+
+    #[test]
+    fn gguf_section_defaults_to_disabled_and_validates() {
+        let config = valid_config();
+        assert!(!config.providers.qwen3_gguf.enabled);
+        assert!(validate(&config).is_ok());
+        let mut config = valid_config();
+        config.providers.qwen3_gguf.device = "rocm".to_string();
+        assert!(validate(&config).is_err());
+        let mut config = valid_config();
+        config.providers.qwen3_gguf.device = "vulkan".to_string();
+        assert!(validate(&config).is_ok());
+        let mut config = valid_config();
+        config.providers.qwen3_gguf.max_concurrent = 2;
+        assert!(validate(&config).is_err());
+        let mut config = valid_config();
+        config.providers.qwen3_gguf.max_tokens = 0;
+        assert!(validate(&config).is_err());
+        let mut config = valid_config();
+        config.providers.qwen3_gguf.threads = 257;
+        assert!(validate(&config).is_err());
     }
 
     #[test]
