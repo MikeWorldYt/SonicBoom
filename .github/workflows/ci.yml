@@ -185,6 +185,8 @@ jobs:
             args: --no-default-features
           - features: tiktools-plugin
             args: --no-default-features --features tiktools-plugin
+          - features: qwen-gguf
+            args: --no-default-features --features qwen-gguf
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -198,6 +200,40 @@ jobs:
 
       - name: Check ${{ matrix.features }}
         run: cargo check --locked ${{ matrix.args }} --all-targets
+
+  # Native GGUF/ONNX backend (opt-in feature, CPU llama.cpp build).
+  # Real-model and Vulkan hardware tests stay ignored/opt-in: this job
+  # compiles the backend and runs the offline unit tests only.
+  gguf:
+    name: Native GGUF backend (qwen-gguf)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install native build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake g++
+
+      - name: Cache cargo
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-v3-${{ runner.os }}-gguf-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-${{ github.sha }}
+          restore-keys: |
+            cargo-v3-${{ runner.os }}-gguf-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
+
+      - name: Clippy (qwen-gguf)
+        run: cargo clippy --locked --no-default-features --features qwen-gguf --all-targets -- -D warnings
+
+      - name: Unit tests (qwen-gguf, offline)
+        run: cargo test --locked --no-default-features --features qwen-gguf --lib
 
   # The desktop tray on Linux is pure-Rust StatusNotifierItem (ksni): no GTK
   # system libraries are needed. Never reintroduce a GTK build dependency.
