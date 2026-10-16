@@ -82,16 +82,11 @@ pub fn encode_opus(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>> {
     let mut padded = pcm_i16;
     padded.extend(vec![0i16; pad_len]);
 
-    // Encode Opus packets
-    let mut opus_packets: Vec<Vec<u8>> = Vec::new();
-    let mut buf = vec![0u8; 4096];
-    for frame in padded.chunks(FRAME_SIZE_48K) {
-        let len = encoder.encode(frame, &mut buf)?;
-        opus_packets.push(buf[..len].to_vec());
-    }
-
-    // Package in OGG container
-    encode_ogg_opus(&opus_packets, OUTPUT_SAMPLE_RATE)
+    // Encode frames and package them into the Ogg container incrementally:
+    // packets stream straight into the writer instead of accumulating in a
+    // `Vec<Vec<u8>>` that is cloned again on write. Header bytes, pre-skip,
+    // granule positions, and final `EndStream` semantics are unchanged.
+    encode_opus_streaming(&mut encoder, &padded)
 }
 
 /// Linear-interpolation resampling between arbitrary sample rates
@@ -116,58 +111,66 @@ pub fn resample_pcm_linear(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec
     out
 }
 
-/// Bundle Opus packets into OGG stream
-fn encode_ogg_opus(packets: &[Vec<u8>], sample_rate: u32) -> Result<Vec<u8>> {
+/// Encode already-padded 48 kHz mono PCM into an Ogg Opus stream, writing
+/// each packet straight into the container. There is no intermediate packet
+/// store and no second per-packet clone: packet bytes move from the encoder
+/// scratch buffer into the container with a single copy. (A borrow would be
+/// ideal, but the writer's packet lifetime outlives each loop iteration, so
+/// the borrow checker requires ownership here.)
+fn encode_opus_streaming(encoder: &mut Encoder, padded: &[i16]) -> Result<Vec<u8>> {
     use ogg::writing::PacketWriteEndInfo;
     use std::io::Cursor;
 
     let mut out = Cursor::new(Vec::new());
-    let serial = 0x12345678u32;
-    let mut writer = ogg::writing::PacketWriter::new(&mut out);
+    {
+        let mut writer = ogg::writing::PacketWriter::new(&mut out);
+        let serial = 0x12345678u32;
 
-    // ---- OpusHead header packet ----
-    // https://wiki.xiph.org/OggOpus#ID_Header
-    let pre_skip: u16 = 312; // Required by Opus spec (minimum 312 samples)
-    let mut opus_head = Vec::new();
-    opus_head.extend_from_slice(b"OpusHead");
-    opus_head.push(1); // version
-    opus_head.push(1); // channel count (mono)
-    opus_head.extend_from_slice(&pre_skip.to_le_bytes()); // pre-skip (312 samples)
-    opus_head.extend_from_slice(&sample_rate.to_le_bytes()); // input sample rate
-    opus_head.extend_from_slice(&0i16.to_le_bytes()); // output gain
-    opus_head.push(0); // channel mapping family
-    writer.write_packet(opus_head, serial, PacketWriteEndInfo::EndPage, 0)?;
+        // ---- OpusHead header packet ----
+        // https://wiki.xiph.org/OggOpus#ID_Header
+        let pre_skip: u16 = 312; // Required by Opus spec (minimum 312 samples)
+        let mut opus_head = Vec::new();
+        opus_head.extend_from_slice(b"OpusHead");
+        opus_head.push(1); // version
+        opus_head.push(1); // channel count (mono)
+        opus_head.extend_from_slice(&pre_skip.to_le_bytes()); // pre-skip (312 samples)
+        opus_head.extend_from_slice(&OUTPUT_SAMPLE_RATE.to_le_bytes()); // input sample rate
+        opus_head.extend_from_slice(&0i16.to_le_bytes()); // output gain
+        opus_head.push(0); // channel mapping family
+        writer.write_packet(opus_head, serial, PacketWriteEndInfo::EndPage, 0)?;
 
-    // ---- OpusTags header packet ----
-    let mut opus_tags = Vec::new();
-    opus_tags.extend_from_slice(b"OpusTags");
-    let vendor = b"SonicBoom";
-    opus_tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
-    opus_tags.extend_from_slice(vendor);
-    opus_tags.extend_from_slice(&0u32.to_le_bytes()); // comment list length = 0
-    writer.write_packet(opus_tags, serial, PacketWriteEndInfo::EndPage, 0)?;
+        // ---- OpusTags header packet ----
+        let mut opus_tags = Vec::new();
+        opus_tags.extend_from_slice(b"OpusTags");
+        let vendor = b"SonicBoom";
+        opus_tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+        opus_tags.extend_from_slice(vendor);
+        opus_tags.extend_from_slice(&0u32.to_le_bytes()); // comment list length = 0
+        writer.write_packet(opus_tags, serial, PacketWriteEndInfo::EndPage, 0)?;
 
-    // ---- Audio data packets ----
-    // For OggOpus, granule position represents the presentation time of the
-    // last sample in the page. The first 312 samples (pre-skip) should be
-    // discarded by the decoder, so the first valid sample appears at
-    // granule position 312.
-    let frame_samples = FRAME_SIZE_48K as u64;
+        // ---- Audio data packets ----
+        // For OggOpus, granule position represents the presentation time of the
+        // last sample in the page. The first 312 samples (pre-skip) should be
+        // discarded by the decoder, so the first valid sample appears at
+        // granule position 312.
+        let frame_samples = FRAME_SIZE_48K as u64;
+        let frame_count = padded.len() / FRAME_SIZE_48K;
+        let mut buf = vec![0u8; 4096];
 
-    for (i, packet) in packets.iter().enumerate() {
-        // Granule position = pre_skip + (packet_index + 1) * frame_samples
-        let granule = pre_skip as u64 + frame_samples * (i as u64 + 1);
+        for (i, frame) in padded.chunks(FRAME_SIZE_48K).enumerate() {
+            let len = encoder.encode(frame, &mut buf)?;
+            // Granule position = pre_skip + (packet_index + 1) * frame_samples
+            let granule = pre_skip as u64 + frame_samples * (i as u64 + 1);
 
-        let end_info = if i + 1 == packets.len() {
-            PacketWriteEndInfo::EndStream
-        } else {
-            PacketWriteEndInfo::NormalPacket
-        };
+            let end_info = if i + 1 == frame_count {
+                PacketWriteEndInfo::EndStream
+            } else {
+                PacketWriteEndInfo::NormalPacket
+            };
 
-        writer.write_packet(packet.clone(), serial, end_info, granule)?;
+            writer.write_packet(buf[..len].to_vec(), serial, end_info, granule)?;
+        }
     }
-
-    drop(writer);
     Ok(out.into_inner())
 }
 
@@ -324,6 +327,150 @@ mod tests {
             bytes.windows(8).any(|w| w == b"OpusHead"),
             "missing OpusHead header"
         );
+    }
+
+    /// Exact copy of the pre-streaming encoder: collect every packet, then
+    /// clone each one into the container. Used only to prove the streaming
+    /// encoder emits byte-identical output.
+    fn reference_two_phase_encode(samples: &[f32], sample_rate: u32) -> Vec<u8> {
+        use ogg::writing::PacketWriteEndInfo;
+        use std::io::Cursor;
+
+        let resampled = resample_pcm_linear(samples, sample_rate, OUTPUT_SAMPLE_RATE);
+        let mut encoder =
+            Encoder::new(OUTPUT_SAMPLE_RATE, Channels::Mono, Application::Audio).unwrap();
+        encoder.set_bitrate(opus::Bitrate::Bits(128000)).unwrap();
+        let pcm_i16: Vec<i16> = resampled
+            .iter()
+            .map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+            .collect();
+        let pad_len = (FRAME_SIZE_48K - pcm_i16.len() % FRAME_SIZE_48K) % FRAME_SIZE_48K;
+        let mut padded = pcm_i16;
+        padded.extend(vec![0i16; pad_len]);
+
+        let mut opus_packets: Vec<Vec<u8>> = Vec::new();
+        let mut buf = vec![0u8; 4096];
+        for frame in padded.chunks(FRAME_SIZE_48K) {
+            let len = encoder.encode(frame, &mut buf).unwrap();
+            opus_packets.push(buf[..len].to_vec());
+        }
+
+        let mut out = Cursor::new(Vec::new());
+        let serial = 0x12345678u32;
+        let mut writer = ogg::writing::PacketWriter::new(&mut out);
+        let pre_skip: u16 = 312;
+        let mut opus_head = Vec::new();
+        opus_head.extend_from_slice(b"OpusHead");
+        opus_head.push(1);
+        opus_head.push(1);
+        opus_head.extend_from_slice(&pre_skip.to_le_bytes());
+        opus_head.extend_from_slice(&OUTPUT_SAMPLE_RATE.to_le_bytes());
+        opus_head.extend_from_slice(&0i16.to_le_bytes());
+        opus_head.push(0);
+        writer
+            .write_packet(opus_head, serial, PacketWriteEndInfo::EndPage, 0)
+            .unwrap();
+        let mut opus_tags = Vec::new();
+        opus_tags.extend_from_slice(b"OpusTags");
+        let vendor = b"SonicBoom";
+        opus_tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+        opus_tags.extend_from_slice(vendor);
+        opus_tags.extend_from_slice(&0u32.to_le_bytes());
+        writer
+            .write_packet(opus_tags, serial, PacketWriteEndInfo::EndPage, 0)
+            .unwrap();
+        let frame_samples = FRAME_SIZE_48K as u64;
+        for (i, packet) in opus_packets.iter().enumerate() {
+            let granule = pre_skip as u64 + frame_samples * (i as u64 + 1);
+            let end_info = if i + 1 == opus_packets.len() {
+                PacketWriteEndInfo::EndStream
+            } else {
+                PacketWriteEndInfo::NormalPacket
+            };
+            writer
+                .write_packet(packet.clone(), serial, end_info, granule)
+                .unwrap();
+        }
+        drop(writer);
+        out.into_inner()
+    }
+
+    #[test]
+    fn opus_streaming_matches_two_phase_reference_byte_for_byte() {
+        // Empty, tiny (<20 ms), exact-boundary, and long inputs at several
+        // source rates, with silence and with signal (signal exercises
+        // nonzero packet payloads through the granule/EndStream logic).
+        let mut cases: Vec<(Vec<f32>, u32)> = Vec::new();
+        for rate in [8000u32, 16_000, 24_000, 44_100, 48_000] {
+            for len in [0, 1, 100, 479, 480, 959, 960, 961, 1920, 24_000, 96_000] {
+                cases.push((vec![0.0; len], rate));
+                cases.push((
+                    (0..len).map(|i| ((i as f32) * 0.01).sin() * 0.5).collect(),
+                    rate,
+                ));
+            }
+        }
+        for (samples, rate) in &cases {
+            assert_eq!(
+                encode_opus(samples, *rate).unwrap(),
+                reference_two_phase_encode(samples, *rate),
+                "streaming drift for len={} rate={rate}",
+                samples.len(),
+            );
+        }
+    }
+
+    /// Walk Ogg pages, returning `(granule_position, header_flags)` per page
+    /// and asserting the walk consumes the stream exactly.
+    fn ogg_page_granules(bytes: &[u8]) -> Vec<(u64, u8)> {
+        let mut pages = Vec::new();
+        let mut pos = 0;
+        while pos < bytes.len() {
+            assert!(
+                pos + 27 <= bytes.len() && &bytes[pos..pos + 4] == b"OggS",
+                "broken Ogg page at offset {pos}"
+            );
+            let flags = bytes[pos + 5];
+            let granule = u64::from_le_bytes(bytes[pos + 6..pos + 14].try_into().unwrap());
+            let segments = bytes[pos + 26] as usize;
+            assert!(pos + 27 + segments <= bytes.len());
+            let body: usize = bytes[pos + 27..pos + 27 + segments]
+                .iter()
+                .map(|&s| s as usize)
+                .sum();
+            pages.push((granule, flags));
+            pos += 27 + segments + body;
+        }
+        assert_eq!(pos, bytes.len());
+        pages
+    }
+
+    #[test]
+    fn opus_container_granules_track_audio_duration() {
+        // 1 s at 24 kHz → 48000 samples → 50 frames → last granule
+        // 312 + 50 × 960, carried on the EndStream page.
+        let bytes = encode_opus(&vec![0.0f32; 24_000], 24_000).unwrap();
+        let pages = ogg_page_granules(&bytes);
+        assert!(pages.len() >= 3);
+        assert_eq!(pages[0].0, 0, "header granule must be zero");
+        assert_eq!(pages[0].1 & 0x02, 0x02, "first page must open the stream");
+        assert_eq!(pages[1].0, 0, "tags granule must be zero");
+        let (last_granule, last_flags) = *pages.last().unwrap();
+        assert_eq!(last_flags & 0x04, 0x04, "final page must end the stream");
+        assert_eq!(last_granule, 312 + 50 * 960);
+
+        // Tiny input still yields one EndStream packet with one frame of
+        // granule, and empty input yields headers only (matching the
+        // historical container, which likewise wrote no EndStream).
+        let bytes = encode_opus(&vec![0.25f32; 100], 24_000).unwrap();
+        let pages = ogg_page_granules(&bytes);
+        let (last_granule, last_flags) = *pages.last().unwrap();
+        assert_eq!(last_flags & 0x04, 0x04);
+        assert_eq!(last_granule, 312 + 960);
+
+        let bytes = encode_opus(&[], 24_000).unwrap();
+        let pages = ogg_page_granules(&bytes);
+        assert_eq!(pages.len(), 2);
     }
 
     #[test]
