@@ -151,10 +151,11 @@ The server will:
 | `DELETE` | `/api/voices/{id}`            | Delete a profile and its reference audio |
 | `POST`   | `/api/voices/{id}/preview`    | Synthesize text with a profile           |
 
-See [docs/providers.md](docs/providers.md) for Qwen3-TTS and GPT-SoVITS
-setup (disabled by default; CPU works without GPU). An opt-in
-`--features qwen-gguf` build adds the native 1.7B GGUF/ONNX backend
-(`qwen3-gguf`, ICL cloning only, CPU-validated).
+See [docs/providers.md](docs/providers.md) for GPT-SoVITS and Qwen3-TTS
+setup (disabled by default; CPU works without GPU). Qwen means the native
+1.7B GGUF/ONNX backend (`qwen3-gguf`, opt-in `--features qwen-gguf`
+build, ICL cloning only, CPU-validated); the old Candle backend was
+removed.
 
 ### Admin Panel
 

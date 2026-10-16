@@ -17,7 +17,7 @@ path = "src/lib.rs"
 # Native voice-cloning backends ship in default builds so every engine works
 # without a rebuild; providers stay disabled by default, so only the
 # Supertonic weights download until an engine is enabled.
-default = ["server", "playback", "qwen", "gpt-sovits"]
+default = ["server", "playback", "gpt-sovits", "qwen-gguf"]
 server = [
     "dep:axum",
     "dep:tower",
@@ -48,17 +48,13 @@ cuda = ["ort/cuda"]
 rocm = ["ort/rocm"]
 # NOTE: `coreml`, `cuda`, and `rocm` are mutually exclusive per platform.
 # Enable at most one of them when building, e.g. `cargo build --release --features cuda`.
-# Optional native voice-cloning providers (compiled into default builds but
-# disabled by default; Supertonic 3 stays the default provider). Both run
-# in-process with no Python/PyTorch.
-# `qwen` enables the Qwen3-TTS (Candle) provider on CPU; `qwen-cuda` additionally
-# enables NVIDIA CUDA for Qwen (implies `qwen`; never implies `ort/cuda`).
+# Optional native voice-cloning providers. GPT-SoVITS compiles into default
+# builds but stays disabled by default; Supertonic 3 is the default provider.
+# Both run in-process with no Python/PyTorch.
 # `gpt-sovits` enables the GPT-SoVITS ONNX provider (CPU execution provider
 # only; the `rocm`/`cuda` ORT flags do not accelerate it).
-qwen = ["dep:qwen3-tts"]
 gpt-sovits = ["dep:gpt-sovits-onnx-rs"]
-qwen-cuda = ["qwen", "qwen3-tts/cuda"]
-# Experimental native GGUF/ONNX backend; independent of Candle.
+# Native Qwen3-TTS 1.7B GGUF/ONNX backend (opt-in; ICL cloning only).
 qwen-gguf = ["dep:tokenizers", "dep:rustfft", "dep:half", "dep:sonicboom-qwen-llama"]
 qwen-gguf-vulkan = ["qwen-gguf", "sonicboom-qwen-llama/vulkan"]
 qwen-gguf-cuda = ["qwen-gguf", "sonicboom-qwen-llama/cuda"]
@@ -168,19 +164,6 @@ tao = { version = "0.30", optional = true }
 
 # Native voice-cloning providers (optional; disabled by default).
 #
-# Qwen3-TTS (Candle, in-process, no Python): reviewed 2026-10-13 at
-# https://github.com/TrevorS/qwen3-tts-rs rev
-# 711ceee07cad92673f86de8997bdf54c30caa49f (upstream HEAD). Default
-# features are `cpu`-only; `qwen-cuda` enables the upstream `cuda` feature
-# (NVIDIA build machines only — never enabled implicitly, never on AMD).
-# The `hub`/`cli` features stay off: SonicBoom downloads pinned model
-# files through its own verified downloader, never the upstream CLI.
-[dependencies.qwen3-tts]
-path = "vendor/qwen3-tts"
-optional = true
-default-features = false
-features = ["cpu"]
-
 # GPT-SoVITS ONNX (native Rust, in-process, no Python): reviewed 2026-10-13
 # at https://github.com/bailu-obj/gpt-sovits-onnx-rs rev
 # 204ae4abcd218113aad86f6f9a66bdba92adcfd7 (upstream HEAD). Pins
@@ -224,4 +207,8 @@ esaxx-rs = { path = "vendor/esaxx-rs" }
 
 [[example]]
 name = "qwen_gguf_smoke"
+required-features = ["qwen-gguf"]
+
+[[example]]
+name = "cache_benchmark"
 required-features = ["qwen-gguf"]

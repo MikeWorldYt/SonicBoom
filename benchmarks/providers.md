@@ -61,7 +61,7 @@ nonzero, quarter-second RMS trace
 | Supertonic boot | ~20 s (10 voice styles, unchanged behavior) |
 | Qwen background prepare | hash-verify 2.5 GB + load ≈ 2 min, `loading (0%→73%→100%)` → `ready` |
 | Legacy `POST /v1/audio/speech` (`tts-1`/`alloy`) | 200, valid Opus — no regression |
-| Invalid `PATCH` (`providers.qwen3.device=rocm`) | 400, provider stays `ready` — last healthy retained |
+| Invalid `PATCH` (`providers.qwen3_gguf.device=rocm`) | 400, provider stays `ready` — last healthy retained |
 | Valid disable/enable cycle | `disabled` → `loading` → `ready` (~2 min, Supertonic unaffected) |
 | Voice CRUD | create → get → list → delete → 404 on re-get/re-delete |
 

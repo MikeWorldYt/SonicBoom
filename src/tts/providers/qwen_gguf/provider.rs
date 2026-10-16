@@ -34,6 +34,9 @@ pub const QWEN_GGUF_LANGUAGES: &[&str] =
     &["en", "de", "es", "zh", "ja", "fr", "ko", "ru", "it", "pt"];
 /// Output sample rate of the GGUF/ONNX codec path.
 pub const QWEN_GGUF_SAMPLE_RATE: u32 = 24_000;
+/// Minimum/maximum reference duration (seconds, matches worker bounds).
+pub const QWEN_GGUF_REF_MIN_SECS: f64 = 1.0;
+pub const QWEN_GGUF_REF_MAX_SECS: f64 = 30.0;
 
 pub fn is_gguf_model(model: &str) -> bool {
     QWEN_GGUF_MODELS.contains(&model)
@@ -177,6 +180,41 @@ impl QwenGgufProvider {
                 QWEN_GGUF_LANGUAGES,
             ))
         }
+    }
+
+    /// Validate a decoded reference buffer (duration, sample count).
+    /// Same bounds the worker enforces at synthesis, so uploads fail fast
+    /// instead of at inference time.
+    pub fn validate_reference(pcm: &[f32], sample_rate: u32) -> Result<(), ProviderError> {
+        if pcm.iter().any(|s| !s.is_finite()) {
+            return Err(ProviderError::invalid_voice(
+                "reference audio must contain finite samples",
+            ));
+        }
+        if pcm.is_empty() {
+            return Err(ProviderError::invalid_voice(
+                "reference audio is empty; provide a 1-30 s authorized recording",
+            ));
+        }
+        if !(8000..=192000).contains(&sample_rate) {
+            return Err(ProviderError::invalid_voice(
+                "reference sample rate must be 8000..=192000 Hz",
+            ));
+        }
+        let secs = pcm.len() as f64 / f64::from(sample_rate);
+        if secs < QWEN_GGUF_REF_MIN_SECS {
+            return Err(ProviderError::invalid_voice(format!(
+                "reference audio is too short ({secs:.1}s); provide at least {:.0}s",
+                QWEN_GGUF_REF_MIN_SECS
+            )));
+        }
+        if secs > QWEN_GGUF_REF_MAX_SECS {
+            return Err(ProviderError::invalid_voice(format!(
+                "reference audio is too long ({secs:.1}s); keep it under {:.0}s",
+                QWEN_GGUF_REF_MAX_SECS
+            )));
+        }
+        Ok(())
     }
 
     /// Fast existence probe for status reporting (no hashing; `load`
@@ -656,7 +694,6 @@ mod tests {
     use super::super::super::TtsProvider;
     use super::super::super::registry::TtsProviderRegistry;
     use super::*;
-    use crate::tts::providers::qwen::{QWEN_MODELS, QwenConfig, QwenProvider};
     use crate::tts::providers::types::ReferenceAudio;
 
     fn enabled_missing_dir() -> Arc<QwenGgufProvider> {
@@ -824,25 +861,21 @@ mod tests {
     }
 
     #[test]
-    fn registry_routes_each_qwen_model_to_exactly_one_provider() {
-        // The 1.7B identifier must resolve to the GGUF backend, never to
-        // Candle, and the 0.6B identifier must keep resolving to Candle.
-        assert!(!QWEN_MODELS.contains(&QWEN_GGUF_MODELS[0]));
+    fn registry_routes_qwen_models_without_candle() {
+        // The Candle provider is gone: 1.7B resolves to the GGUF backend
+        // and the retired 0.6B identifier is explicitly unknown (never a
+        // silent fallback to another engine).
         let registry = TtsProviderRegistry::new();
-        registry.register(Arc::clone(&QwenProvider::new(QwenConfig::default()))
-            as Arc<dyn TtsProvider>);
         registry.register(enabled_missing_dir() as Arc<dyn TtsProvider>);
         assert_eq!(
             registry.resolve_model("qwen3-tts-1.7b-base").unwrap().id(),
             "qwen3-gguf"
         );
-        assert_eq!(
-            registry.resolve_model("qwen3-tts-0.6b-base").unwrap().id(),
-            "qwen3"
-        );
-        assert_eq!(
-            registry.provider_ids(),
-            vec!["qwen3".to_string(), "qwen3-gguf".to_string()]
-        );
+        let error = match registry.resolve_model("qwen3-tts-0.6b-base") {
+            Ok(_) => panic!("retired Candle model must not resolve"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), "unsupported_model");
+        assert_eq!(registry.provider_ids(), vec!["qwen3-gguf".to_string()]);
     }
 }

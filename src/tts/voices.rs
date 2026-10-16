@@ -297,8 +297,8 @@ mod tests {
     fn input() -> NewVoiceProfile {
         NewVoiceProfile {
             name: "mine".to_string(),
-            provider: "qwen3".to_string(),
-            model: "qwen3-tts-0.6b-base".to_string(),
+            provider: "qwen3-gguf".to_string(),
+            model: "qwen3-tts-1.7b-base".to_string(),
             model_revision: "rev".to_string(),
             language: "ja".to_string(),
             clone_mode: "icl".to_string(),

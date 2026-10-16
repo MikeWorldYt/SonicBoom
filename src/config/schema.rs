@@ -571,42 +571,19 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
         allowed_values_source: None,
     });
 
+    add(SettingSchema {
+        path: "providers.gpt_sovits.enabled".to_string(),
+        description: "Enable the GPT-SoVITS voice-cloning provider (default false)".to_string(),
+        type_name: "boolean",
+        apply: ApplyStrategy::Hot,
+        min: None,
+        max: None,
+        allowed_values: None,
+        nullable: false,
+        secret: false,
+        allowed_values_source: None,
+    });
     for (path, desc) in [
-        (
-            "providers.qwen3.enabled",
-            "Enable the Qwen3-TTS voice-cloning provider (default false)",
-        ),
-        (
-            "providers.gpt_sovits.enabled",
-            "Enable the GPT-SoVITS voice-cloning provider (default false)",
-        ),
-    ] {
-        add(SettingSchema {
-            path: path.to_string(),
-            description: desc.to_string(),
-            type_name: "boolean",
-            apply: ApplyStrategy::Hot,
-            min: None,
-            max: None,
-            allowed_values: None,
-            nullable: false,
-            secret: false,
-            allowed_values_source: None,
-        });
-    }
-    for (path, desc) in [
-        (
-            "providers.qwen3.model_dir",
-            "Directory holding the verified Qwen3-TTS model bundle",
-        ),
-        (
-            "providers.qwen3.model_id",
-            "Qwen3-TTS model identifier (Base variants support cloning)",
-        ),
-        (
-            "providers.qwen3.revision",
-            "Pinned Qwen3-TTS model revision",
-        ),
         (
             "providers.qwen3_gguf.model_dir",
             "Directory holding the verified Qwen3-TTS 1.7B GGUF/ONNX bundle",
@@ -642,24 +619,6 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
         });
     }
     add(SettingSchema {
-        path: "providers.qwen3.device".to_string(),
-        description:
-            "Qwen3-TTS device: cpu, auto, or cuda (cuda requires the qwen-cuda build feature)"
-                .to_string(),
-        type_name: "string",
-        apply: ApplyStrategy::Hot,
-        min: None,
-        max: None,
-        allowed_values: Some(vec![
-            "cpu".to_string(),
-            "auto".to_string(),
-            "cuda".to_string(),
-        ]),
-        nullable: false,
-        secret: false,
-        allowed_values_source: None,
-    });
-    add(SettingSchema {
         path: "providers.qwen3_gguf.device".to_string(),
         description:
             "Qwen3-TTS GGUF/ONNX device: cpu, auto, vulkan (qwen-gguf-vulkan build), or cuda (qwen-gguf-cuda build)"
@@ -693,28 +652,10 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
     });
     for (path, desc, min, max) in [
         (
-            "providers.qwen3.max_concurrent",
-            "Qwen3-TTS uses one serialized model-owning worker",
-            1.0,
-            1.0,
-        ),
-        (
-            "providers.qwen3.cache_entries",
-            "Qwen3-TTS voice-conditioning cache entries",
-            1.0,
-            1024.0,
-        ),
-        (
             "providers.gpt_sovits.max_concurrent",
             "GPT-SoVITS uses one serialized mutable model",
             1.0,
             1.0,
-        ),
-        (
-            "providers.qwen3.max_tokens",
-            "Maximum Qwen3-TTS codec frames per synthesis",
-            128.0,
-            4096.0,
         ),
         (
             "providers.qwen3_gguf.max_concurrent",

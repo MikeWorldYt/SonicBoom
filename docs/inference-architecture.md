@@ -1,10 +1,11 @@
 # Native inference ownership and cache policy
 
-SonicBoom remains Rust-native: Qwen uses Candle, GPT-SoVITS and Supertonic use
-ONNX Runtime. No Python/PyTorch runtime or model subprocess is introduced.
-Qwen's dependency is vendored from reviewed revision
-`711ceee07cad92673f86de8997bdf54c30caa49f`, with provenance and the maintenance
-patch documented in `vendor/qwen3-tts/README.sonicboom.md`.
+SonicBoom remains Rust-native: Qwen 1.7B uses GGUF (llama.cpp) plus ONNX
+Runtime, GPT-SoVITS and Supertonic use ONNX Runtime. No Python/PyTorch
+runtime or model subprocess is introduced. The llama.cpp dependency is a
+pinned submodule; the GGUF/ONNX bundle revision is recorded in
+`src/tts/providers/qwen_gguf/models.rs`. (The former Candle Qwen backend
+and its vendored dependency were removed.)
 
 ## Ownership and lock ordering
 
@@ -81,8 +82,8 @@ reference hash, transcript and cloning mode, and is cleared at safe
 boundaries on voice invalidation. GPU initialization failures fall back to
 CPU before any synthesis, and the fallback reason travels in provider status.
 
-Qwen's worker promotes conditioning on preparation/synthesis access and evicts
-least recently used entries. Entries are bounded by configured count (1..=1024)
+Each native worker promotes conditioning on preparation/synthesis access and
+evicts least recently used entries. Entries are bounded by configured count (1..=1024)
 and 64 MiB. Identity includes provider, reviewed implementation/model revision,
 model ID, decoded reference hash, sample-rate handling, transcript and cloning
 mode. Profile-scoped keys isolate voices; ownership is checked before cache

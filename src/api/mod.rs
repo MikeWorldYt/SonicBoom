@@ -778,14 +778,14 @@ mod tests {
                     store
                         .create(sonicboom::tts::voices::NewVoiceProfile {
                             name: format!("test-{i}"),
-                            provider: "qwen3".into(),
-                            model: "qwen3-tts-0.6b-base".into(),
+                            provider: "qwen3-gguf".into(),
+                            model: "qwen3-tts-1.7b-base".into(),
                             model_revision: "test".into(),
                             language: "en".into(),
-                            clone_mode: "x_vector".into(),
+                            clone_mode: "icl".into(),
                             reference_pcm: vec![0.1; 24000],
                             reference_sample_rate: 24000,
-                            transcript: None,
+                            transcript: Some("hello".to_string()),
                             owner_token_hash: Some("owner".into()),
                             consent_basis: "owner".into(),
                             consent_note: String::new(),
@@ -809,11 +809,16 @@ mod tests {
         let (app, _, _) = voices_test_app().await;
         for (method, uri, content_type, body) in [
             ("GET", "/api/providers", "application/json", ""),
-            ("GET", "/api/providers/qwen3/status", "application/json", ""),
+            (
+                "GET",
+                "/api/providers/gpt-sovits/status",
+                "application/json",
+                "",
+            ),
             ("GET", "/api/voices", "application/json", ""),
             (
                 "POST",
-                "/api/voices/clones?name=t&provider=qwen3&model=qwen3-tts-0.6b-base&language=ja&mode=x_vector&consent_basis=owner",
+                "/api/voices/clones?name=t&provider=gpt-sovits&model=gpt-sovits-v2pro-onnx&language=en&mode=icl&consent_basis=owner",
                 "audio/wav",
                 "",
             ),
@@ -846,7 +851,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn providers_list_reports_all_three_providers() {
+    async fn providers_list_reports_providers_without_candle() {
         let (app, valid, store_dir) = voices_test_app().await;
         let request = raw_request(
             "GET",
@@ -867,7 +872,9 @@ mod tests {
             .iter()
             .map(|p| p["provider_id"].as_str().unwrap().to_string())
             .collect();
-        assert_eq!(ids, vec!["gpt-sovits", "qwen3", "supertonic"]);
+        assert!(!ids.contains(&"qwen3".to_string()));
+        assert!(ids.contains(&"gpt-sovits".to_string()));
+        assert!(ids.contains(&"supertonic".to_string()));
         let _ = std::fs::remove_dir_all(&store_dir);
     }
 
@@ -891,7 +898,7 @@ mod tests {
         let (app, valid, store_dir) = voices_test_app().await;
         let request = raw_request(
             "POST",
-            "/api/voices/clones?name=t&provider=qwen3&model=qwen3-tts-0.6b-base&language=ja&mode=x_vector&consent_basis=owner",
+            "/api/voices/clones?name=t&provider=gpt-sovits&model=gpt-sovits-v2pro-onnx&language=en&mode=icl&consent_basis=owner",
             Some(&valid),
             "application/json",
             b"{}",
@@ -906,7 +913,7 @@ mod tests {
         let (app, valid, store_dir) = voices_test_app().await;
         let request = raw_request(
             "POST",
-            "/api/voices/clones?name=t&provider=qwen3&model=qwen3-tts-0.6b-base&language=ja&mode=x_vector&consent_basis=owner",
+            "/api/voices/clones?name=t&provider=gpt-sovits&model=gpt-sovits-v2pro-onnx&language=en&mode=icl&consent_basis=owner",
             Some(&valid),
             "audio/wav",
             b"not-a-wav-file",
@@ -955,7 +962,7 @@ mod tests {
             "tts-1",
             "tts-1-hd",
             "supertonic-3",
-            "qwen3-tts-0.6b-base",
+            "qwen3-tts-1.7b-base",
             "gpt-sovits-v2pro-onnx",
         ] {
             assert!(
@@ -963,6 +970,10 @@ mod tests {
                 "models list missing {expected}"
             );
         }
+        assert!(
+            !ids.contains(&"qwen3-tts-0.6b-base".to_string()),
+            "retired Candle model must not be listed"
+        );
         let _ = std::fs::remove_dir_all(&store_dir);
     }
 

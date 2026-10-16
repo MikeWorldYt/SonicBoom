@@ -119,12 +119,12 @@ proposed Base-cloning backend scope.
 Reviewed `qwen.rs`, `registry.rs`, `pool.rs`, `worker.rs`, `assets.rs`, `types.rs`
 and `Cargo.toml` on main:
 
-- Keep Candle under `qwen`, including its existing saved-voice behavior. With
-  `qwen-gguf` compiled in, Candle advertises only 0.6B and `qwen3-gguf` owns
-  the 1.7B model ID; without it, Candle still accepts 1.7B for routing but
-  rejects its absent manifest.
-- Registry model IDs overwrite earlier ownership on registration, so the
-  split above is compile-time deliberate, never registration order.
+- The Candle backend was removed: `qwen3-gguf` is the only Qwen provider
+  and owns the 1.7B model ID outright. Saved 0.6B voice profiles no longer
+  resolve (explicit `unsupported_model`, never silent fallback); a leftover
+  `[providers.qwen3]` config section is rejected as unknown.
+- Registry model IDs overwrite earlier ownership on registration; with a
+  single Qwen provider there is no collision to resolve.
 - Reuse the pool's resident model lifecycle and serialized model-load guard,
   bounded worker pattern, request-carried reference PCM, inference controls,
   conditioning identity and verified atomic downloader.

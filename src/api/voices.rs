@@ -379,11 +379,21 @@ async fn post_clones_inner(
         ));
     }
     let provider = query.provider.trim().to_ascii_lowercase();
-    if provider != "qwen3" && provider != "gpt-sovits" {
+    // The Candle provider is gone: Qwen cloning means the GGUF/ONNX backend.
+    #[cfg(feature = "qwen-gguf")]
+    let cloning = provider == "qwen3-gguf" || provider == "gpt-sovits";
+    #[cfg(not(feature = "qwen-gguf"))]
+    let cloning = provider == "gpt-sovits";
+    if !cloning {
         return Err(AppError::BadRequest(format!(
             "unsupported provider '{}' for voice cloning \
-             (expected one of: qwen3, gpt-sovits; supertonic uses built-in style voices)",
-            query.provider
+             (expected one of: {}; supertonic uses built-in style voices)",
+            query.provider,
+            if cfg!(feature = "qwen-gguf") {
+                "qwen3-gguf, gpt-sovits"
+            } else {
+                "gpt-sovits"
+            }
         )));
     }
     let mode = parse_clone_mode(&query.mode)?;
@@ -446,8 +456,13 @@ async fn post_clones_inner(
     .await
     .map_err(|e| AppError::internal(e.to_string()))??;
     match provider.as_str() {
-        "qwen3" => sonicboom::tts::providers::qwen::QwenProvider::validate_reference(&pcm, rate)
-            .map_err(provider_error_to_app)?,
+        #[cfg(feature = "qwen-gguf")]
+        "qwen3-gguf" => {
+            sonicboom::tts::providers::qwen_gguf::provider::QwenGgufProvider::validate_reference(
+                &pcm, rate,
+            )
+            .map_err(provider_error_to_app)?
+        }
         "gpt-sovits" => {
             sonicboom::tts::providers::gptsovits::GptSovitsProvider::validate_reference(&pcm, rate)
                 .map_err(provider_error_to_app)?
@@ -491,7 +506,8 @@ pub(crate) fn config_revision_for(
     provider: &str,
 ) -> String {
     match provider {
-        "qwen3" => config.providers.qwen3.revision.clone(),
+        #[cfg(feature = "qwen-gguf")]
+        "qwen3-gguf" => sonicboom::tts::providers::qwen_gguf::models::REVISION.to_string(),
         _ => config.providers.gpt_sovits.revision.clone(),
     }
 }
@@ -576,8 +592,9 @@ pub async fn delete_voice(
     })
     .await?;
     match provider.as_str() {
-        "qwen3" => sonicboom::tts::providers::TtsProvider::invalidate_voice(
-            state.providers.qwen.as_ref(),
+        #[cfg(feature = "qwen-gguf")]
+        "qwen3-gguf" => sonicboom::tts::providers::TtsProvider::invalidate_voice(
+            state.providers.qwen_gguf.as_ref(),
             id.trim(),
         ),
         "gpt-sovits" => sonicboom::tts::providers::TtsProvider::invalidate_voice(

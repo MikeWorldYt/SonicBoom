@@ -170,19 +170,4 @@ mod tests {
         });
         assert!(current().is_none());
     }
-    #[cfg(feature = "qwen")]
-    #[test]
-    fn upstream_native_checkpoint_uses_scoped_cancellation() {
-        let control = InferenceControl::new(Duration::from_secs(1));
-        let hook_control = control.clone();
-        qwen3_tts::control::scope(
-            Arc::new(move |stage, frames| hook_control.update(stage, frames)),
-            || {
-                assert!(qwen3_tts::control::checkpoint("generating", 1).is_ok());
-                control.cancel();
-                assert!(qwen3_tts::control::checkpoint("acoustic", 0).is_err());
-            },
-        );
-        assert!(qwen3_tts::control::checkpoint("generating", 0).is_ok());
-    }
 }

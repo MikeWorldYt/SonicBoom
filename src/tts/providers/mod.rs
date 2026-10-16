@@ -1,7 +1,7 @@
 //! Native TTS provider framework.
 //!
-//! Object-safe provider contract shared by Supertonic 3 (default), Qwen3-TTS
-//! (Candle) and GPT-SoVITS (ONNX). All inference runs in the SonicBoom
+//! Object-safe provider contract shared by Supertonic 3 (default),
+//! Qwen3-TTS 1.7B GGUF/ONNX (opt-in) and GPT-SoVITS (ONNX). All inference runs in the SonicBoom
 //! process: non-`Send` model internals are encapsulated in dedicated
 //! in-process worker threads with bounded channels, never subprocesses.
 
@@ -9,7 +9,6 @@ pub mod assets;
 pub mod error;
 pub mod gptsovits;
 pub mod pool;
-pub mod qwen;
 #[cfg(feature = "qwen-gguf")]
 pub mod qwen_gguf;
 pub mod registry;

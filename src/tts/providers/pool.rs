@@ -1,8 +1,8 @@
 //! Persistent optional-provider singletons.
 //!
-//! The Qwen, GPT-SoVITS and GGUF/ONNX models are large (gigabytes of
-//! weights); they must load once and stay resident between requests —
-//! never reload per request. This pool owns the singletons and syncs their
+//! The GPT-SoVITS and GGUF/ONNX models are large (gigabytes of weights);
+//! they must load once and stay resident between requests — never reload
+//! per request. This pool owns the singletons and syncs their
 //! configuration from the live `AppConfig` on every registry build, so
 //! hot-reload applies without restarts and a failed reload keeps the last
 //! healthy state.
@@ -11,19 +11,16 @@ use std::sync::Arc;
 
 use super::TtsProviderRegistry;
 use super::gptsovits::{GptSovitsConfig, GptSovitsProvider};
-use super::qwen::{QwenConfig, QwenProvider};
 #[cfg(feature = "qwen-gguf")]
 use super::qwen_gguf::provider::{QwenGgufConfig, QwenGgufProvider};
 use super::supertonic::SupertonicProvider;
 
-type DesiredProviders = Option<(u64, QwenConfig, GptSovitsConfig)>;
+type DesiredProviders = Option<(u64, GptSovitsConfig)>;
 
 /// Resident optional providers shared by all requests.
 pub struct ProviderPool {
     desired: Arc<std::sync::Mutex<DesiredProviders>>,
     retrying: Arc<std::sync::atomic::AtomicBool>,
-    /// Qwen3-TTS singleton (model loads once, prompts cached per profile).
-    pub qwen: Arc<QwenProvider>,
     /// GPT-SoVITS singleton (model + reference state behind one lock).
     pub gpt: Arc<GptSovitsProvider>,
     /// Qwen3-TTS 1.7B GGUF/ONNX singleton (native worker, cached
@@ -37,7 +34,6 @@ impl Default for ProviderPool {
         Self {
             desired: Arc::new(std::sync::Mutex::new(None)),
             retrying: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            qwen: QwenProvider::new(QwenConfig::default()),
             gpt: GptSovitsProvider::new(GptSovitsConfig::default()),
             #[cfg(feature = "qwen-gguf")]
             qwen_gguf: QwenGgufProvider::new(QwenGgufConfig::default()),
@@ -53,8 +49,7 @@ impl ProviderPool {
     /// Sync singleton configuration from freshly mapped provider configs.
     /// Only genuinely changed providers are reconfigured (which drops
     /// their loaded model); unchanged providers keep serving.
-    pub fn sync_from(&self, qwen: QwenConfig, gpt: GptSovitsConfig) {
-        self.qwen.sync_config(qwen);
+    pub fn sync_from(&self, gpt: GptSovitsConfig) {
         self.gpt.sync_config(gpt);
     }
 
@@ -70,22 +65,22 @@ impl ProviderPool {
 
     /// Reject request-scoped snapshots older than the most recently adopted
     /// server configuration. Equal versions retry deferred busy-model changes.
-    pub fn sync_versioned(&self, generation: u64, qwen: QwenConfig, gpt: GptSovitsConfig) {
+    pub fn sync_versioned(&self, generation: u64, gpt: GptSovitsConfig) {
         let mut current = self.desired.lock().unwrap_or_else(|e| e.into_inner());
         if current
             .as_ref()
-            .is_some_and(|(current, _, _)| generation < *current)
+            .is_some_and(|(current, _)| generation < *current)
         {
             return;
         }
-        *current = Some((generation, qwen.clone(), gpt.clone()));
-        self.sync_from(qwen, gpt);
+        *current = Some((generation, gpt.clone()));
+        self.sync_from(gpt);
         drop(current);
         self.retry_deferred();
     }
     fn retry_deferred(&self) {
         use std::sync::atomic::Ordering;
-        if !self.qwen.reload_pending() && !self.gpt.reload_pending() {
+        if !self.gpt.reload_pending() {
             return;
         }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
@@ -96,7 +91,6 @@ impl ProviderPool {
         }
         let desired = self.desired.clone();
         let retrying = self.retrying.clone();
-        let qwen = self.qwen.clone();
         let gpt = self.gpt.clone();
         runtime.spawn(async move {
             struct Reset(Arc<std::sync::atomic::AtomicBool>, bool);
@@ -111,13 +105,11 @@ impl ProviderPool {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 let current = desired.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some((_, q, g)) = current.as_ref() {
-                    qwen.sync_config(q.clone());
+                if let Some((_, g)) = current.as_ref() {
                     gpt.sync_config(g.clone());
                 }
-                qwen.kick_ensure_if_needed(None);
                 gpt.kick_ensure_if_needed(None);
-                if !qwen.reload_pending() && !gpt.reload_pending() {
+                if !gpt.reload_pending() {
                     // Publish idle while holding the same lock used by new
                     // versions; a concurrent update cannot lose its retry.
                     reset.0.store(false, Ordering::Release);
@@ -133,7 +125,6 @@ impl ProviderPool {
     /// Never blocks. `hf_token` covers gated repositories; the pinned
     /// public bundles need none.
     pub fn kick_ensure_if_needed(&self, hf_token: Option<String>) {
-        self.qwen.kick_ensure_if_needed(hf_token.clone());
         self.gpt.kick_ensure_if_needed(hf_token.clone());
         #[cfg(feature = "qwen-gguf")]
         self.qwen_gguf.kick_ensure_if_needed(hf_token);
@@ -144,7 +135,6 @@ impl ProviderPool {
     pub fn registry(&self, supertonic: Arc<SupertonicProvider>) -> TtsProviderRegistry {
         let registry = TtsProviderRegistry::new();
         registry.register(supertonic);
-        registry.register(Arc::clone(&self.qwen) as Arc<dyn super::TtsProvider>);
         registry.register(Arc::clone(&self.gpt) as Arc<dyn super::TtsProvider>);
         #[cfg(feature = "qwen-gguf")]
         registry.register(Arc::clone(&self.qwen_gguf) as Arc<dyn super::TtsProvider>);
@@ -160,41 +150,39 @@ mod tests {
     #[test]
     fn older_configuration_cannot_restore_a_retired_provider() {
         let pool = ProviderPool::new();
-        let enabled = QwenConfig {
+        let enabled = GptSovitsConfig {
             enabled: true,
             ..Default::default()
         };
-        pool.sync_versioned(10, enabled.clone(), GptSovitsConfig::default());
-        pool.sync_versioned(11, QwenConfig::default(), GptSovitsConfig::default());
-        pool.sync_versioned(10, enabled, GptSovitsConfig::default());
-        assert!(!pool.qwen.status().enabled);
+        pool.sync_versioned(10, enabled.clone());
+        pool.sync_versioned(11, GptSovitsConfig::default());
+        pool.sync_versioned(10, enabled);
+        assert!(!pool.gpt.status().enabled);
     }
     #[test]
-    fn pool_registers_all_three_providers() {
+    fn pool_registers_all_providers() {
         let pool = ProviderPool::new();
         let supertonic = Arc::new(SupertonicProvider::new(std::path::PathBuf::from(
             "./models",
         )));
         let registry = pool.registry(supertonic);
+        // No Candle provider remains: Qwen means the GGUF/ONNX backend.
+        assert!(!registry.provider_ids().contains(&"qwen3".to_string()));
         #[cfg(feature = "qwen-gguf")]
         assert_eq!(
             registry.provider_ids(),
-            vec!["gpt-sovits", "qwen3", "qwen3-gguf", "supertonic"]
+            vec!["gpt-sovits", "qwen3-gguf", "supertonic"]
         );
         #[cfg(not(feature = "qwen-gguf"))]
-        assert_eq!(
-            registry.provider_ids(),
-            vec!["gpt-sovits", "qwen3", "supertonic"]
-        );
+        assert_eq!(registry.provider_ids(), vec!["gpt-sovits", "supertonic"]);
     }
 
     #[test]
     fn sync_keeps_healthy_singletons_when_config_is_unchanged() {
         let pool = ProviderPool::new();
-        pool.sync_from(QwenConfig::default(), GptSovitsConfig::default());
+        pool.sync_from(GptSovitsConfig::default());
         // No loaded model, no error, disabled by default: sync is a no-op
         // that must not record failures.
-        assert!(!pool.qwen.status().enabled);
         assert!(!pool.gpt.status().enabled);
     }
 }

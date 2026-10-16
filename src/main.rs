@@ -858,11 +858,8 @@ async fn run_server_inner(config_path: std::path::PathBuf, smoke: bool) -> anyho
     // when enabled (deduplicated background tasks; progress via
     // `/api/providers/{id}/status`). Supertonic is unaffected.
     {
-        use crate::api::providers::{map_gpt_config, map_qwen_config};
-        provider_pool.sync_from(
-            map_qwen_config(&current.providers.qwen3),
-            map_gpt_config(&current.providers.gpt_sovits),
-        );
+        use crate::api::providers::map_gpt_config;
+        provider_pool.sync_from(map_gpt_config(&current.providers.gpt_sovits));
         #[cfg(feature = "qwen-gguf")]
         provider_pool.sync_gguf_config(crate::api::providers::map_qwen_gguf_config(
             &current.providers.qwen3_gguf,

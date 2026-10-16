@@ -224,12 +224,11 @@ impl SonicBoomPlugin {
             return Err(PluginError::invalid_request(format!(
                 "unsupported provider '{provider}' in this plugin build \
                  (only 'supertonic' is embedded; configure the SonicBoom server \
-                 with [providers.qwen3]/[providers.gpt_sovits] for voice cloning)"
+                 with [providers.qwen3_gguf]/[providers.gpt_sovits] for voice cloning)"
             )));
         }
         if let Some(model) = optional_string(config, "model")
-            && (sonicboom::tts::providers::qwen::QWEN_MODELS.contains(&model.as_str())
-                || sonicboom::tts::providers::gptsovits::GPTSOVITS_MODELS.contains(&model.as_str())
+            && (sonicboom::tts::providers::gptsovits::GPTSOVITS_MODELS.contains(&model.as_str())
                 || is_gguf_model(&model))
         {
             return Err(PluginError::invalid_request(format!(
@@ -341,7 +340,7 @@ fn optional_string(config: &Map<String, Value>, key: &str) -> Option<String> {
 }
 
 /// The 1.7B identifier needs a voice-cloning provider only in builds that
-/// compile the GGUF backend; otherwise `QWEN_MODELS` already covers it.
+/// compile the GGUF backend; other builds cannot synthesize it.
 #[cfg(feature = "qwen-gguf")]
 fn is_gguf_model(model: &str) -> bool {
     sonicboom::tts::providers::qwen_gguf::provider::QWEN_GGUF_MODELS.contains(&model)

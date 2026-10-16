@@ -139,10 +139,9 @@ and empty assignments are rejected.
 ### Voice-Cloning Providers (TOML only, no environment secrets)
 
 ```toml
-[providers.qwen3]
-enabled = false            # Qwen3-TTS (Candle), CPU via device cpu|auto
-model_id = "qwen3-tts-0.6b-base"
-device = "auto"            # cpu | auto | cuda (cuda needs qwen-cuda)
+[providers.qwen3_gguf]
+enabled = false            # Qwen3-TTS 1.7B GGUF/ONNX, needs --features qwen-gguf
+device = "auto"            # cpu | auto | vulkan (needs qwen-gguf-vulkan) | cuda (needs qwen-gguf-cuda)
 
 [providers.gpt_sovits]
 enabled = false            # GPT-SoVITS ONNX, CPU only (cpu|auto)

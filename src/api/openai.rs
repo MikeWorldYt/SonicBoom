@@ -27,7 +27,6 @@ pub const SUPPORTED_OPENAI_MODELS: &[&str] = &[
     "tts-1",
     "tts-1-hd",
     "supertonic-3",
-    "qwen3-tts-0.6b-base",
     "qwen3-tts-1.7b-base",
     "gpt-sovits-v2-onnx",
     "gpt-sovits-v2pro-onnx",
@@ -36,14 +35,13 @@ pub const SUPPORTED_OPENAI_MODELS: &[&str] = &[
 
 /// Whether `model` selects a voice-cloning provider (voice must be an
 /// authorized profile ID) rather than Supertonic built-in voices.
+/// The removed 0.6B Candle model is no longer a cloning model.
 pub fn is_cloning_model(model: &str) -> bool {
-    sonicboom::tts::providers::qwen::QWEN_MODELS.contains(&model)
-        || sonicboom::tts::providers::gptsovits::GPTSOVITS_MODELS.contains(&model)
-        || is_gguf_model(model)
+    sonicboom::tts::providers::gptsovits::GPTSOVITS_MODELS.contains(&model) || is_gguf_model(model)
 }
 
 /// The 1.7B identifier routes to the GGUF backend only in builds that
-/// compile it in; other builds keep routing it to the Candle provider.
+/// compile it in; other builds list it but cannot synthesize it.
 #[cfg(feature = "qwen-gguf")]
 fn is_gguf_model(model: &str) -> bool {
     sonicboom::tts::providers::qwen_gguf::provider::QWEN_GGUF_MODELS.contains(&model)
@@ -354,9 +352,7 @@ pub async fn get_models() -> impl IntoResponse {
         .iter()
         .map(|id| {
             let owned_by = if is_cloning_model(id) {
-                if sonicboom::tts::providers::qwen::QWEN_MODELS.contains(id) {
-                    "local:qwen3"
-                } else if is_gguf_model(id) {
+                if is_gguf_model(id) {
                     "local:qwen3-gguf"
                 } else {
                     "local:gpt-sovits"
@@ -431,7 +427,6 @@ mod tests {
             assert!(!is_cloning_model(model), "{model} must stay supertonic");
         }
         for model in [
-            "qwen3-tts-0.6b-base",
             "qwen3-tts-1.7b-base",
             "gpt-sovits-v2-onnx",
             "gpt-sovits-v2pro-onnx",
@@ -442,6 +437,9 @@ mod tests {
                 "{model} must route to a cloning provider"
             );
         }
+        // The removed 0.6B Candle model is neither listed nor cloning.
+        assert!(validate_model("qwen3-tts-0.6b-base").is_err());
+        assert!(!is_cloning_model("qwen3-tts-0.6b-base"));
     }
 
     #[test]

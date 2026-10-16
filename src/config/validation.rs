@@ -313,28 +313,6 @@ fn validate_providers(config: &AppConfig) -> Result<(), String> {
     if !(1..=4096).contains(&config.voices.max_profiles) {
         return Err("voices.max_profiles must be 1..=4096".into());
     }
-    let qwen = &config.providers.qwen3;
-    if !["cpu", "auto", "cuda"].contains(&qwen.device.as_str()) {
-        return Err("providers.qwen3.device must be one of: cpu, auto, cuda".to_string());
-    }
-    if qwen.model_id.trim().is_empty() || qwen.model_id.len() > 64 {
-        return Err("providers.qwen3.model_id must be 1-64 characters".to_string());
-    }
-    if qwen.revision.trim().is_empty() || qwen.revision.len() > 128 {
-        return Err("providers.qwen3.revision must be 1-128 characters".to_string());
-    }
-    if qwen.max_concurrent != 1 {
-        return Err("providers.qwen3.max_concurrent must be 1: one model-owning worker serializes native inference".to_string());
-    }
-    if !(1..=1024).contains(&qwen.cache_entries) {
-        return Err("providers.qwen3.cache_entries must be between 1 and 1024".to_string());
-    }
-    if !(128..=4096).contains(&qwen.max_tokens) {
-        return Err("providers.qwen3.max_tokens must be between 128 and 4096".to_string());
-    }
-    if qwen.model_dir.as_os_str().is_empty() {
-        return Err("providers.qwen3.model_dir must not be empty".to_string());
-    }
     let gguf = &config.providers.qwen3_gguf;
     if !["cpu", "auto", "vulkan", "cuda"].contains(&gguf.device.as_str()) {
         return Err(
@@ -558,7 +536,7 @@ mod tests {
     #[test]
     fn optional_providers_default_to_disabled() {
         let config = valid_config();
-        assert!(!config.providers.qwen3.enabled);
+        assert!(!config.providers.qwen3_gguf.enabled);
         assert!(!config.providers.gpt_sovits.enabled);
         assert!(validate(&config).is_ok());
     }
@@ -587,12 +565,6 @@ mod tests {
 
     #[test]
     fn provider_devices_are_constrained() {
-        let mut config = valid_config();
-        config.providers.qwen3.device = "rocm".to_string();
-        assert!(validate(&config).is_err());
-        let mut config = valid_config();
-        config.providers.qwen3.device = "cuda".to_string();
-        assert!(validate(&config).is_ok());
         // GPT-SoVITS is CPU-only: GPU values are rejected, not reinterpreted.
         let mut config = valid_config();
         config.providers.gpt_sovits.device = "cuda".to_string();
