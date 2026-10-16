@@ -5,6 +5,7 @@ pub mod gate;
 pub mod info;
 pub mod jobs;
 pub mod openai;
+mod plugin_catalog;
 pub mod providers;
 #[cfg(feature = "playback")]
 pub mod queue;
@@ -47,6 +48,8 @@ pub async fn router(state: AppState) -> Router {
             "/api/config/validate",
             post(config_api::validate_config_file),
         )
+        .route("/api/tts/plugin/providers", get(plugin_catalog::providers))
+        .route("/api/tts/plugin/voices", get(plugin_catalog::voices))
         // Original TTS API
         .route(
             "/api/tts",
@@ -1059,5 +1062,154 @@ mod tests {
                 "{method} {uri} without a manager must be 503"
             );
         }
+    }
+    #[tokio::test]
+    async fn plugin_catalog_requires_auth_and_reports_enabled_unavailable_provider() {
+        let (app, raw) = test_app().await;
+        for path in ["/api/tts/plugin/providers", "/api/tts/plugin/voices"] {
+            let request = Request::get(path).body(Body::empty()).unwrap();
+            assert_eq!(
+                app.clone().oneshot(request).await.unwrap().status(),
+                StatusCode::UNAUTHORIZED
+            );
+            let request = Request::get(path)
+                .header("authorization", format!("Bearer {raw}"))
+                .body(Body::empty())
+                .unwrap();
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()["cache-control"], "private, no-store");
+            let body = body_json(response).await;
+            let items = body.as_array().unwrap();
+            if path.ends_with("providers") {
+                assert_eq!(items.len(), 1); // Optional providers disabled, Supertonic enabled but not loaded.
+                assert_eq!(items[0]["id"], "supertonic");
+                assert_eq!(items[0]["disabled"], true);
+            } else {
+                assert!(items.is_empty());
+            }
+        }
+    }
+
+    #[cfg(feature = "playback")]
+    #[tokio::test]
+    async fn plugin_play_rejects_invalid_identity_and_foreign_profiles_without_fallback() {
+        let (app, raw) = test_app().await;
+        for (query, status) in [
+            ("provider=unknown&voice=M1", StatusCode::BAD_REQUEST),
+            (
+                "provider=pocket-tts&voice=qwen3-gguf:any",
+                StatusCode::BAD_REQUEST,
+            ),
+            ("provider=pocket-tts&voice=", StatusCode::BAD_REQUEST),
+            (
+                "provider=pocket-tts&voice=123e4567-e89b-12d3-a456-426614174000",
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                "provider=supertonic&voice=M1",
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            ("voice=M1", StatusCode::SERVICE_UNAVAILABLE),
+            ("provider=&voice=M1", StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            assert_eq!(
+                post_status(
+                    app.clone(),
+                    &format!("/api/tts/play?{query}"),
+                    Some(&raw),
+                    "hello"
+                )
+                .await,
+                status,
+                "{query}"
+            );
+        }
+        assert_eq!(
+            post_status(app, "/api/tts/play?provider=pocket-tts", Some(&raw), "").await,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    #[cfg(feature = "playback")]
+    #[tokio::test]
+    async fn plugin_play_profile_ownership_revision_and_disabled_provider() {
+        use sonicboom::tts::voices::{NewVoiceProfile, VoiceProfileStore};
+        let dir = std::env::temp_dir().join(format!("plugin-play-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tokens = TokenStore::load(dir.join("tokens.json").to_str().unwrap())
+            .await
+            .unwrap();
+        let (token, raw) = tokens.create(None).await.unwrap();
+        let mut config = test_config();
+        config.voices.store_dir = dir.join("voices").to_string_lossy().into_owned();
+        let revision = voices::config_revision_for(&config, "pocket-tts");
+        let mut store = VoiceProfileStore::open(config.voices.store_dir.clone().into()).unwrap();
+        let mut create = |owner: &str, revision: &str| {
+            store
+                .create(NewVoiceProfile {
+                    name: "Synthetic test reference".into(),
+                    provider: "pocket-tts".into(),
+                    model: "pocket-tts-en".into(),
+                    model_revision: revision.into(),
+                    language: "en".into(),
+                    clone_mode: "audio_prompt".into(),
+                    reference_pcm: vec![0.1; 72_000],
+                    reference_sample_rate: 24_000,
+                    transcript: None,
+                    owner_token_hash: Some(owner.into()),
+                    consent_basis: "owner".into(),
+                    consent_note: String::new(),
+                })
+                .unwrap()
+        };
+        let owned = create(&token.token_hash, &revision);
+        let stale = create(&token.token_hash, "incompatible-test-revision");
+        let foreign = create("different-token-hash", &revision);
+        let app = router(test_state(config, Arc::new(tokens), Arc::new(None))).await;
+        for (provider, id, status) in [
+            (
+                "pocket-tts",
+                owned.id.as_str(),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            ("pocket-tts", stale.id.as_str(), StatusCode::BAD_REQUEST),
+            ("pocket-tts", foreign.id.as_str(), StatusCode::NOT_FOUND),
+            #[cfg(feature = "qwen-gguf")]
+            ("qwen3-gguf", owned.id.as_str(), StatusCode::BAD_REQUEST),
+        ] {
+            assert_eq!(
+                post_status(
+                    app.clone(),
+                    &format!("/api/tts/play?provider={provider}&voice={id}&lang=en"),
+                    Some(&raw),
+                    "hello"
+                )
+                .await,
+                status
+            );
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/api/tts/plugin/voices")
+                    .header("authorization", format!("Bearer {raw}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(body_json(response).await, serde_json::json!([])); // Disabled provider exposes no usable profiles.
+        store.delete(&owned.id).unwrap();
+        assert_eq!(
+            post_status(
+                app,
+                &format!("/api/tts/play?provider=pocket-tts&voice={}", owned.id),
+                Some(&raw),
+                "hello"
+            )
+            .await,
+            StatusCode::NOT_FOUND
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

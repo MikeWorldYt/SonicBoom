@@ -71,6 +71,8 @@ pub(super) async fn synthesize_bounded(
 
 #[derive(Deserialize)]
 pub struct TtsQuery {
+    #[cfg(feature = "playback")]
+    pub provider: Option<String>,
     pub voice: Option<String>,
     pub lang: Option<String>,
     /// Output format: "opus", "wav", "mp3", or "flac"
@@ -299,56 +301,78 @@ async fn post_tts_and_play_inner(
     body: String,
 ) -> Result<Response, AppError> {
     check_rate_limit(&state, &token)?;
-    let lang = query.lang.clone().unwrap_or_else(|| "en".to_string());
-    let voice = query.voice.clone().unwrap_or_else(|| "M1".to_string());
+    let (provider_id, voice) = plugin_identity(query.provider.as_deref(), query.voice.as_deref())?;
     let config = state.config.get().await;
+    let lang = query.lang.clone().unwrap_or_else(|| "en".into());
     sonicboom::engine::validate_tts_input(
         &body,
         &lang,
-        &voice,
+        if provider_id == "supertonic" {
+            voice
+        } else {
+            "M1"
+        },
         config.model.inference_steps,
         config.tts.max_text_length,
     )
     .map_err(|e| AppError::BadRequest(e.to_string()))?;
-
-    let model_handle = {
-        let status = state.model_status.read().await;
-        match &*status {
-            ModelStatus::Ready(handle) => Arc::clone(handle),
-            _ => {
-                return Err(AppError::ServiceUnavailable(
-                    "Model is not ready for synthesis.".to_string(),
-                ));
-            }
-        }
-    };
-
-    let audio_manager = match &*state.audio_manager {
-        Some(manager) => manager,
-        None => {
-            return Err(AppError::ServiceUnavailable(
-                "Audio playback system not initialized.".to_string(),
-            ));
-        }
-    };
-
-    let text = body.trim().to_string();
-    let voice_name = match query.voice {
-        Some(ref v) if model_handle.voice_styles.contains_key(v.as_str()) => v.clone(),
-        _ => model_handle
-            .default_voice()
-            .ok_or_else(|| AppError::internal("no voice styles available"))?
-            .to_string(),
-    };
-
-    let sample_rate = model_handle.sample_rate();
     let play_now = query.play_now.unwrap_or(false);
+    let (samples, sample_rate) = if provider_id == "supertonic" {
+        let model_handle = super::providers::supertonic_handle(&state)
+            .await
+            .ok_or_else(|| {
+                AppError::ServiceUnavailable("Model is not ready for synthesis.".into())
+            })?;
+        let voice_name = if model_handle.voice_styles.contains_key(voice) {
+            voice.to_string()
+        } else if query
+            .provider
+            .as_deref()
+            .is_none_or(|p| p.trim().is_empty())
+        {
+            model_handle
+                .default_voice()
+                .ok_or_else(|| AppError::internal("no voice styles available"))?
+                .to_string()
+        } else {
+            return Err(AppError::BadRequest("unknown Supertonic voice".into()));
+        };
+        playback_manager(&state)?;
+        let rate = model_handle.sample_rate();
+        (
+            synthesize_bounded(&state, model_handle, body.trim().into(), lang, voice_name).await?,
+            rate,
+        )
+    } else {
+        let (provider, request) = prepare_plugin_clone(
+            &state,
+            &token,
+            provider_id,
+            voice,
+            body.trim(),
+            query.lang.clone(),
+        )
+        .await?;
+        playback_manager(&state)?;
+        let audio = synthesize_provider_bounded(&state, provider, request)
+            .await
+            .map_err(super::providers::provider_error_to_app)?;
+        (audio.samples, audio.sample_rate)
+    };
 
-    // Synthesis to WAV for local playback (Rodio likes WAV/Decoder compatibility)
-    let samples = synthesize_bounded(&state, model_handle, text, lang, voice_name).await?;
-
-    // We use WAV for internal queue to ensure maximum compatibility with rodio
     let audio_bytes = encode_output(samples, sample_rate, audio::AudioFormat::Wav).await?;
+    enqueue_generated_wav(&state, audio_bytes, play_now).await
+}
+
+#[cfg(feature = "playback")]
+async fn enqueue_generated_wav(
+    state: &crate::AppState,
+    audio_bytes: Vec<u8>,
+    play_now: bool,
+) -> Result<Response, AppError> {
+    let config = state.config.get().await;
+    let audio_manager = playback_manager(state)?;
+    // WAV is shared by every provider for rodio compatibility.
 
     // Ensure the temp directory exists with restrictive permissions.
     let temp_dir =
@@ -372,6 +396,12 @@ async fn post_tts_and_play_inner(
     // orphan it and no separate `RegisterTemp` round-trip is needed. Every
     // failure path below deletes the newly generated file, since a rejected
     // or failed admission is never registered by the audio thread.
+    if super::jobs::active_control().is_some_and(|c| c.stopped()) {
+        let _ = tokio::fs::remove_file(&path).await;
+        return Err(AppError::ServiceUnavailable(
+            "Inference cancelled or deadline exceeded".into(),
+        ));
+    }
     use crate::tts::queue::AudioManagerError;
     let queued = if play_now {
         // Acknowledged start: `Ok` means playback is audible, anything else
@@ -463,4 +493,399 @@ pub(crate) async fn encode_output(
         ));
     }
     Ok(bytes)
+}
+
+/// Qualified option values are accepted only when their provider agrees with the route.
+#[cfg(any(feature = "playback", test))]
+fn plugin_identity<'a>(
+    provider: Option<&'a str>,
+    voice: Option<&'a str>,
+) -> Result<(&'a str, &'a str), AppError> {
+    let provider = provider
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .unwrap_or("supertonic");
+    if !matches!(provider, "supertonic" | "pocket-tts" | "qwen3-gguf") {
+        return Err(AppError::BadRequest("unknown provider".into()));
+    }
+    let voice = voice
+        .map(str::trim)
+        .unwrap_or(if provider == "supertonic" { "M1" } else { "" });
+    if let Some((namespace, raw)) = voice.split_once(':') {
+        if namespace != provider || raw.is_empty() || raw.contains(':') {
+            return Err(AppError::BadRequest("provider/voice mismatch".into()));
+        }
+        return Ok((provider, raw));
+    }
+    Ok((provider, voice))
+}
+
+#[cfg(test)]
+mod plugin_identity_tests {
+    use super::*;
+    #[test]
+    fn legacy_and_qualified_identity() {
+        assert_eq!(plugin_identity(None, None).unwrap(), ("supertonic", "M1"));
+        assert_eq!(
+            plugin_identity(Some(""), Some("F1")).unwrap(),
+            ("supertonic", "F1")
+        );
+        assert_eq!(
+            plugin_identity(Some("pocket-tts"), Some("pocket-tts:id")).unwrap(),
+            ("pocket-tts", "id")
+        );
+        assert!(plugin_identity(Some("pocket-tts"), Some("qwen3-gguf:id")).is_err());
+        assert!(plugin_identity(Some("unknown"), None).is_err());
+    }
+}
+
+#[cfg(feature = "playback")]
+async fn prepare_plugin_clone(
+    state: &crate::AppState,
+    token: &AuthenticatedToken,
+    provider_id: &str,
+    voice: &str,
+    text: &str,
+    language: Option<String>,
+) -> Result<
+    (
+        Arc<dyn sonicboom::tts::providers::TtsProvider>,
+        sonicboom::tts::providers::ProviderRequest,
+    ),
+    AppError,
+> {
+    let config = state.config.get().await;
+    let registry = super::providers::build_registry_for_state(state).await;
+    let provider = registry.get(provider_id).ok_or_else(|| {
+        AppError::ServiceUnavailable("selected provider is not installed in this build".into())
+    })?;
+    sonicboom::tts::voices::validate_profile_id(voice)
+        .map_err(|_| AppError::BadRequest("an authorized voice profile is required".into()))?;
+    let (profile, reference) =
+        super::voices::owned_reference(state, voice.into(), token.rate_limit_key()).await?;
+    let request = plugin_clone_request(
+        &config,
+        provider.as_ref(),
+        provider_id,
+        profile,
+        reference,
+        text,
+        language,
+    )?;
+    Ok((provider, request))
+}
+
+#[cfg(feature = "playback")]
+fn playback_manager(state: &crate::AppState) -> Result<&crate::tts::queue::AudioManager, AppError> {
+    state.audio_manager.as_ref().as_ref().ok_or_else(|| {
+        AppError::ServiceUnavailable("Audio playback system not initialized.".into())
+    })
+}
+
+#[cfg(feature = "playback")]
+fn plugin_clone_request(
+    config: &crate::config::AppConfig,
+    provider: &dyn sonicboom::tts::providers::TtsProvider,
+    provider_id: &str,
+    profile: sonicboom::tts::voices::VoiceProfile,
+    reference: sonicboom::tts::providers::types::ReferenceAudio,
+    text: &str,
+    language: Option<String>,
+) -> Result<sonicboom::tts::providers::ProviderRequest, AppError> {
+    if profile.provider != provider_id
+        || profile.model_revision != super::voices::config_revision_for(config, provider_id)
+    {
+        return Err(AppError::BadRequest(
+            "voice provider or model revision mismatch".into(),
+        ));
+    }
+    if !provider.status().enabled
+        || provider.status().state != sonicboom::tts::providers::ProviderStatusState::Ready
+    {
+        return Err(AppError::ServiceUnavailable(
+            "selected provider is unavailable".into(),
+        ));
+    }
+    if provider.status().active_model.as_deref() != Some(profile.model.as_str()) {
+        return Err(AppError::ServiceUnavailable(
+            "the voice profile model is not resident; select its model in server configuration"
+                .into(),
+        ));
+    }
+    let language = language.unwrap_or(profile.language.clone());
+    if provider_id == "pocket-tts" && language != profile.language {
+        return Err(AppError::BadRequest(
+            "language must match the voice profile".into(),
+        ));
+    }
+    let capabilities = provider.capabilities();
+    if !capabilities.models.contains(&profile.model)
+        || !capabilities.languages.contains(&language)
+        || !capabilities.clone_modes.contains(&profile.clone_mode)
+    {
+        return Err(AppError::BadRequest(
+            "unsupported voice model, language or clone mode".into(),
+        ));
+    }
+    let mut request = sonicboom::tts::providers::ProviderRequest::new(
+        &profile.model,
+        &profile.id,
+        text,
+        language,
+    );
+    request.clone_mode = Some(super::voices::parse_clone_mode_public(&profile.clone_mode)?);
+    request.reference_transcript = profile.transcript;
+    request.reference_audio = Some(reference);
+    Ok(request)
+}
+
+#[cfg(all(test, feature = "playback"))]
+mod plugin_play_tests {
+    use super::*;
+    use sonicboom::tts::providers::{
+        PcmAudio, ProviderCapabilities, ProviderError, ProviderRequest, ProviderStatus,
+        ProviderStatusState, TtsProvider,
+    };
+    struct Stub(&'static str, ProviderStatusState);
+    impl TtsProvider for Stub {
+        fn id(&self) -> &'static str {
+            self.0
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                provider_id: self.0.into(),
+                models: vec![
+                    if self.0 == "pocket-tts" {
+                        "pocket-tts-en"
+                    } else {
+                        "qwen3-tts-1.7b-base"
+                    }
+                    .into(),
+                ],
+                languages: vec!["en".into(), "es".into()],
+                clone_modes: vec![
+                    if self.0 == "pocket-tts" {
+                        "audio_prompt"
+                    } else {
+                        "icl"
+                    }
+                    .into(),
+                ],
+                devices: vec!["cpu".into()],
+                requires_reference_audio: true,
+                requires_reference_transcript: self.0 == "qwen3-gguf",
+                sample_rate: Some(24_000),
+            }
+        }
+        fn status(&self) -> ProviderStatus {
+            ProviderStatus {
+                provider_id: self.0.into(),
+                enabled: self.1 != ProviderStatusState::Disabled,
+                state: self.1,
+                active_model: self.capabilities().models.first().cloned(),
+                effective_device: Some("cpu".into()),
+                model_revision: None,
+                detail: None,
+            }
+        }
+        fn load(&self, _: &str) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        fn unload(&self) {}
+        fn synthesize(&self, request: &ProviderRequest) -> Result<PcmAudio, ProviderError> {
+            assert_eq!(request.text, "test");
+            assert_eq!(
+                request.reference_audio.as_ref().unwrap().sample_rate,
+                24_000
+            );
+            assert_eq!(
+                request.reference_audio.as_ref().unwrap().pcm,
+                vec![0.25; 72_000]
+            );
+            Ok(PcmAudio::mono(vec![0.125; 2400], 24_000))
+        }
+    }
+    fn profile(
+        config: &crate::config::AppConfig,
+        provider: &Stub,
+    ) -> sonicboom::tts::voices::VoiceProfile {
+        let now = chrono::Utc::now();
+        sonicboom::tts::voices::VoiceProfile {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Synthetic authorized fixture".into(),
+            provider: provider.id().into(),
+            model: provider.capabilities().models[0].clone(),
+            model_revision: super::super::voices::config_revision_for(config, provider.id()),
+            language: "en".into(),
+            clone_mode: provider.capabilities().clone_modes[0].clone(),
+            reference_hash: "synthetic-fixture".into(),
+            reference_sample_rate: 24_000,
+            reference_duration_secs: 3.0,
+            transcript: (provider.id() == "qwen3-gguf").then(|| "different reference words".into()),
+            owner_token_hash: Some("test-owner".into()),
+            consent: sonicboom::tts::voices::VoiceConsent {
+                basis: "owner".into(),
+                note: String::new(),
+                created_at: now,
+            },
+            created_at: now,
+            updated_at: now,
+        }
+    }
+    fn reference() -> sonicboom::tts::providers::types::ReferenceAudio {
+        sonicboom::tts::providers::types::ReferenceAudio {
+            pcm: vec![0.25; 72_000],
+            sample_rate: 24_000,
+        }
+    }
+
+    #[tokio::test]
+    async fn clone_requests_keep_model_reference_mode_and_generated_wav_queue_ownership() {
+        use crate::api::tests::{test_config, test_state};
+        use crate::tts::queue::{AudioCommand, AudioManager, AudioManagerError};
+        let dir = std::env::temp_dir().join(format!("plugin-queue-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tokens =
+            crate::auth::store::TokenStore::load(dir.join("tokens.json").to_str().unwrap())
+                .await
+                .unwrap();
+        let mut config = test_config();
+        config.paths.temp_audio = dir.join("audio").to_string_lossy().into_owned();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let state = test_state(
+            config.clone(),
+            Arc::new(tokens),
+            Arc::new(Some(AudioManager::for_test(tx))),
+        );
+        for id in ["pocket-tts", "qwen3-gguf"] {
+            let provider = Arc::new(Stub(id, ProviderStatusState::Ready));
+            let profile = profile(&config, &provider);
+            let request = plugin_clone_request(
+                &config,
+                provider.as_ref(),
+                id,
+                profile.clone(),
+                reference(),
+                "test",
+                None,
+            )
+            .unwrap();
+            assert_eq!(request.model, profile.model);
+            assert_eq!(request.voice, profile.id);
+            assert_eq!(request.reference_transcript, profile.transcript);
+            assert_eq!(request.clone_mode.unwrap().as_str(), profile.clone_mode);
+            let audio = synthesize_provider_bounded(&state, provider, request)
+                .await
+                .unwrap();
+            let bytes = encode_output(audio.samples, audio.sample_rate, audio::AudioFormat::Wav)
+                .await
+                .unwrap();
+            for (play_now, reject) in [(false, false), (true, false), (false, true)] {
+                let future = enqueue_generated_wav(&state, bytes.clone(), play_now);
+                let consume = async {
+                    let command = rx.recv().await.unwrap();
+                    let (path, temporary, reply) = match command {
+                        AudioCommand::Enqueue {
+                            path,
+                            temporary,
+                            reply,
+                            ..
+                        } if !play_now => (path, temporary, reply),
+                        AudioCommand::PlayNow {
+                            path,
+                            temporary,
+                            reply,
+                            ..
+                        } if play_now => (path, temporary, reply),
+                        _ => panic!("wrong playback command"),
+                    };
+                    assert!(temporary);
+                    let wav = hound::WavReader::open(&path).unwrap();
+                    assert_eq!(wav.spec().sample_rate, 24_000);
+                    assert_eq!(wav.duration(), 2400);
+                    reply
+                        .send(if reject {
+                            Err(AudioManagerError::QueueFull)
+                        } else {
+                            Ok(())
+                        })
+                        .unwrap();
+                    path
+                };
+                let (result, path) = tokio::join!(future, consume);
+                if reject {
+                    assert!(matches!(result, Err(AppError::TooManyRequests(_))));
+                    assert!(!path.exists());
+                } else {
+                    assert_eq!(result.unwrap().status(), StatusCode::OK);
+                    std::fs::remove_file(path).unwrap();
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn clone_validation_rejects_unavailable_revision_language_and_provider_mismatch() {
+        let config = crate::api::tests::test_config();
+        for status in [
+            ProviderStatusState::Disabled,
+            ProviderStatusState::Loading,
+            ProviderStatusState::NotInstalled,
+            ProviderStatusState::Error,
+        ] {
+            let provider = Stub("pocket-tts", status);
+            assert!(matches!(
+                plugin_clone_request(
+                    &config,
+                    &provider,
+                    "pocket-tts",
+                    profile(&config, &provider),
+                    reference(),
+                    "test",
+                    None
+                ),
+                Err(AppError::ServiceUnavailable(_))
+            ));
+        }
+        let provider = Stub("pocket-tts", ProviderStatusState::Ready);
+        let p = profile(&config, &provider);
+        assert!(matches!(
+            plugin_clone_request(
+                &config,
+                &provider,
+                "pocket-tts",
+                p.clone(),
+                reference(),
+                "test",
+                Some("es".into())
+            ),
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            plugin_clone_request(
+                &config,
+                &provider,
+                "qwen3-gguf",
+                p.clone(),
+                reference(),
+                "test",
+                None
+            ),
+            Err(AppError::BadRequest(_))
+        ));
+        let mut stale = p;
+        stale.model_revision = "different-revision".into();
+        assert!(matches!(
+            plugin_clone_request(
+                &config,
+                &provider,
+                "pocket-tts",
+                stale,
+                reference(),
+                "test",
+                None
+            ),
+            Err(AppError::BadRequest(_))
+        ));
+    }
 }
