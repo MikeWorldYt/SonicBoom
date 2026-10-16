@@ -583,6 +583,19 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
         secret: false,
         allowed_values_source: None,
     });
+    add(SettingSchema {
+        path: "providers.qwen3_gguf.enabled".to_string(),
+        description: "Enable the Qwen3-TTS GGUF/ONNX voice-cloning provider (default false)"
+            .to_string(),
+        type_name: "boolean",
+        apply: ApplyStrategy::Hot,
+        min: None,
+        max: None,
+        allowed_values: None,
+        nullable: false,
+        secret: false,
+        allowed_values_source: None,
+    });
     for (path, desc) in [
         (
             "providers.qwen3_gguf.model_dir",
@@ -816,6 +829,17 @@ mod tests {
             "security.trust_proxy",
         ] {
             assert!(map.contains_key(path), "schema missing {path}");
+        }
+    }
+
+    #[test]
+    fn schema_covers_every_reloadable_config_path() {
+        // The studio UI renders its enable toggles and setting fields from
+        // this schema: any reloadable key missing here is silently
+        // uneditable (e.g. a provider with no Enable button).
+        let map = schema();
+        for path in super::super::loader::ALL_CONFIG_PATHS {
+            assert!(map.contains_key(*path), "schema missing {path}");
         }
     }
 
