@@ -46,12 +46,25 @@ impl Engine {
             "mock" => Ok(Self::Mock),
             "pocket" => {
                 use sonicboom::tts::providers::pocket_tts::{PocketTtsConfig, PocketTtsProvider};
-                let p = PocketTtsProvider::new(PocketTtsConfig {
+                let config = PocketTtsConfig {
                     enabled: true,
                     model_dir: dir.into(),
                     model_id: model.into(),
+                    lsd_steps: std::env::var("AUDIT_POCKET_STEPS")
+                        .unwrap_or_else(|_| "1".into())
+                        .parse()?,
+                    temperature: std::env::var("AUDIT_POCKET_TEMPERATURE")
+                        .unwrap_or_else(|_| "0.7".into())
+                        .parse()?,
                     ..Default::default()
-                });
+                };
+                ensure!(
+                    (1..=8).contains(&config.lsd_steps)
+                        && config.temperature.is_finite()
+                        && (0.0..=2.0).contains(&config.temperature),
+                    "invalid Pocket audit settings"
+                );
+                let p = PocketTtsProvider::new(config);
                 p.load(model)?;
                 Ok(Self::Pocket(p))
             }
@@ -123,6 +136,11 @@ fn main() -> Result<()> {
     } else {
         None
     };
+    let primary_reference = request.reference_audio.clone();
+    let alternate = std::env::var("AUDIT_ALT_REFERENCE_WAV")
+        .ok()
+        .map(|path| -> Result<_> { Ok((reference(Path::new(&path))?, hash(&fs::read(path)?))) })
+        .transpose()?;
     if provider == "qwen" {
         request.clone_mode = Some(sonicboom::tts::providers::CloneMode::Icl);
         request.reference_transcript = Some(
@@ -148,7 +166,7 @@ fn main() -> Result<()> {
     let mut index = String::from(
         "<!doctype html><meta charset=utf-8><title>TTS audit</title><p>Speech-content and listening review pending. Mock audio is not speech.</p>",
     );
-    for (i, text) in [
+    let defaults = [
         "hola",
         "test",
         "mundo",
@@ -160,15 +178,49 @@ fn main() -> Result<()> {
         "¿Qué tal?",
         "hola test",
         "Hola mundo. Esto es una prueba.",
-    ]
-    .iter()
-    .enumerate()
-    {
+    ];
+    let mut texts: Vec<String> = match std::env::var("AUDIT_TEXTS_JSON") {
+        Ok(value) => serde_json::from_str(&value)?,
+        Err(_) => defaults.iter().map(|s| (*s).into()).collect(),
+    };
+    let alternation_start = texts.len();
+    if alternate.is_some() {
+        texts.extend(["test".into(), "test".into(), "test".into(), "test".into()]);
+    }
+    let primary_transcript = request.reference_transcript.clone();
+    let alternate_transcript = if provider == "qwen" && alternate.is_some() {
+        Some(
+            std::env::var("AUDIT_ALT_REFERENCE_TRANSCRIPT")
+                .context("set exact alternate transcript")?,
+        )
+    } else {
+        None
+    };
+    let executable_hash = hash(&fs::read(std::env::current_exe()?)?);
+    ensure!(
+        !texts.is_empty() && texts.len() <= 100 && texts.iter().all(|s| !s.trim().is_empty()),
+        "invalid audit text matrix"
+    );
+    for (i, text) in texts.iter().enumerate() {
         if i == 3 {
             drop(engine);
             engine = Engine::load(provider, model, dir)?;
         }
-        request.text = (*text).into();
+        let use_alternate =
+            alternate.is_some() && i >= alternation_start && (i - alternation_start) % 2 == 1;
+        let effective_reference_hash = if use_alternate {
+            let (audio, hash) = alternate.as_ref().unwrap();
+            request.reference_audio = Some(audio.clone());
+            request.reference_transcript = alternate_transcript.clone();
+            request.voice = "audit-authorized-B".into();
+            Some(hash.clone())
+        } else {
+            request.reference_audio = primary_reference.clone();
+            request.reference_transcript = primary_transcript.clone();
+            request.voice = "audit-authorized-A".into();
+            reference_hash.clone()
+        };
+        request.text = text.clone();
         let started = Instant::now();
         let (audio, metrics) = engine.synthesize(&request)?;
         let elapsed = started.elapsed().as_secs_f64();
@@ -200,7 +252,7 @@ fn main() -> Result<()> {
             .sum::<f64>()
             / n)
             .sqrt();
-        let row = json!({"request_id":uuid::Uuid::new_v4().to_string(),"job_id":null,"boundary":"direct-provider","provider":provider,"model":model,"revision":revision,"git_sha":String::from_utf8_lossy(&git.stdout).trim(),"effective_device":"cpu","language":language,"voice":"audit-authorized-A","reference_hash":reference_hash,"text_hash":hash(text.as_bytes()),"seed":42,"chunk_index":null,"sample_count":audio.samples.len(),"sample_rate":audio.sample_rate,"wav_hash":wav_hash,"output":name,"elapsed_secs":elapsed,"duration_secs":audio.duration_secs(),"rtf":elapsed/audio.duration_secs(),"peak":audio.samples.iter().fold(0f32,|a,b|a.max(b.abs())),"rms":rms,"dc_offset":audio.samples.iter().map(|s| *s as f64).sum::<f64>()/n,"clipping_fraction":audio.samples.iter().filter(|s|s.abs()>=1.0).count() as f64/n,"same_as_first_test":if *text=="test" {Some(test_hash.as_ref()==Some(&wav_hash))}else{None},"metrics":metrics,"content_review":"NOT RUN"});
+        let row = json!({"request_id":uuid::Uuid::new_v4().to_string(),"job_id":null,"boundary":"direct-provider","provider":provider,"model":model,"revision":revision,"inference_binary_sha256":executable_hash,"ort_build":ort::info(),"git_sha":String::from_utf8_lossy(&git.stdout).trim(),"effective_device":"cpu","language":language,"voice":request.voice,"reference_hash":effective_reference_hash,"text_hash":hash(text.as_bytes()),"seed":42,"reference_preprocessing":sonicboom::tts::audio::REFERENCE_RESAMPLER_VERSION,"mode":request.clone_mode.map(|m|m.as_str()),"pocket_steps":std::env::var("AUDIT_POCKET_STEPS").unwrap_or_else(|_|"1".into()),"pocket_temperature":std::env::var("AUDIT_POCKET_TEMPERATURE").unwrap_or_else(|_|"0.7".into()),"chunk_index":null,"sample_count":audio.samples.len(),"sample_rate":audio.sample_rate,"wav_hash":wav_hash,"output":name,"elapsed_secs":elapsed,"duration_secs":audio.duration_secs(),"rtf":elapsed/audio.duration_secs(),"peak":audio.samples.iter().fold(0f32,|a,b|a.max(b.abs())),"rms":rms,"dc_offset":audio.samples.iter().map(|s| *s as f64).sum::<f64>()/n,"clipping_fraction":audio.samples.iter().filter(|s|s.abs()>=1.0).count() as f64/n,"same_as_first_test":if *text=="test" {Some(test_hash.as_ref()==Some(&wav_hash))}else{None},"metrics":metrics,"content_review":"NOT RUN"});
         writeln!(manifest, "{row}")?;
         manifest.flush()?;
         index.push_str(&format!(
