@@ -1,0 +1,99 @@
+{
+  "test": "BC-250 CPU vs Vulkan identical-input comparison (release build, seed 42, max_tokens 256)",
+  "date": "2026-10-16",
+  "host": {
+    "gpu": "AMD BC-250 (RADV GFX1013)",
+    "driver": "radv Mesa 26.2.4-arch3.1",
+    "vulkan_api": "1.4.354",
+    "device": "/dev/dri/renderD128"
+  },
+  "build": {
+    "features": "qwen-gguf-vulkan",
+    "profile": "release",
+    "llama_cpp": "c1d0e7a004015f23bc0233470b747b596f29b264 (submodule)",
+    "spirv_headers": "86f980c731e62ae4eaf383d320449d71687936bf (local build dep, headers+cmake only)"
+  },
+  "inputs": {
+    "text": "Hello, this is a native voice cloning test.",
+    "language": "en",
+    "seed": 42,
+    "max_tokens": 256,
+    "reference": "test-owned 24kHz mono WAV + exact transcript (same bytes both runs)"
+  },
+  "cpu": {
+    "audio_secs": 3.28,
+    "conditioning_secs": 0.8166753,
+    "decode_secs": 7.431787733,
+    "device": "cpu",
+    "finite": true,
+    "frames": 41,
+    "generation_secs": 77.738710808,
+    "load_secs": 3.606110426,
+    "model_revision": "0a36d692562f83a862466b0bf8c12154ddf1965d",
+    "onnx_device": "cpu",
+    "output": "/tmp/qwen-vulkan-cmp-cpu.wav",
+    "peak": 0.4275570809841156,
+    "reached_eos": true,
+    "rtf": 25.966615408841466,
+    "seed": 42
+  },
+  "vulkan_run1": {
+    "audio_secs": 2.72,
+    "conditioning_secs": 0.855600301,
+    "decode_secs": 4.943585661,
+    "device": "vulkan",
+    "finite": true,
+    "frames": 34,
+    "generation_secs": 2.764317085,
+    "load_secs": 3.014807797,
+    "model_revision": "0a36d692562f83a862466b0bf8c12154ddf1965d",
+    "onnx_device": "cpu",
+    "output": "/tmp/qwen-vulkan-cmp-vk.wav",
+    "peak": 0.5610743761062622,
+    "reached_eos": true,
+    "rtf": 2.8337877742647057,
+    "seed": 42
+  },
+  "vulkan_run2": {
+    "audio_secs": 2.72,
+    "conditioning_secs": 0.848957371,
+    "decode_secs": 4.918107372,
+    "device": "vulkan",
+    "finite": true,
+    "frames": 34,
+    "generation_secs": 1.2987092040000001,
+    "load_secs": 2.461280882,
+    "model_revision": "0a36d692562f83a862466b0bf8c12154ddf1965d",
+    "onnx_device": "cpu",
+    "output": "/tmp/qwen-vulkan-cmp-vk2.wav",
+    "peak": 0.5610743761062622,
+    "reached_eos": true,
+    "rtf": 2.285594329411764,
+    "seed": 42
+  },
+  "findings": {
+    "vulkan_initializes": true,
+    "vulkan_eos_finite": true,
+    "vulkan_deterministic_across_runs": true,
+    "generation_secs": {
+      "cpu": 77.738710808,
+      "vulkan_run1": 2.764317085,
+      "vulkan_run2": 1.2987092040000001
+    },
+    "rtf": {
+      "cpu": 25.966615408841466,
+      "vulkan": 2.285594329411764
+    },
+    "cpu_vulkan_waveform_correlation_shared_prefix": -0.01,
+    "cpu_vulkan_content_equivalent": "NOT ESTABLISHED (near-zero correlation from the first samples; different frame counts 41 vs 34)",
+    "vulkan_speech_plausibility": "plausible (peak 0.56, rms 0.066, zcr 0.155, dynamic envelope with pauses); intelligibility NOT verified by listening or ASR"
+  },
+  "limitations": [
+    "single text/seed/reference; no statistical power",
+    "no listening test or ASR transcription of either output",
+    "no cancellation/unload/reload or low-memory Vulkan runs",
+    "no fallback-without-driver run (driver present)",
+    "CPU and Vulkan runs share one binary; ONNX stages ran on CPU in both",
+    "Vulkan output equivalence vs validated CPU path requires logits-level investigation before any quality claim"
+  ]
+}

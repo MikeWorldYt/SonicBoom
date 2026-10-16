@@ -95,3 +95,69 @@ fn int8_onnx_components_execute_on_shared_runtime() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[cfg(feature = "qwen-gguf")]
+#[test]
+#[ignore = "requires pinned GGUF/ONNX bundle and test-owned reference WAV/transcript"]
+fn native_worker_reuses_conditioning_and_recovers_after_cancellation() -> anyhow::Result<()> {
+    use sonicboom::tts::{
+        control::{self, InferenceControl},
+        providers::{
+            qwen_gguf::worker::{Device, Settings, Worker},
+            types::{CloneMode, ProviderRequest, ReferenceAudio},
+        },
+    };
+    use std::time::Duration;
+    let dir = model_dir();
+    let mut wav = hound::WavReader::open(std::env::var("QWEN_REFERENCE_WAV")?)?;
+    let spec = wav.spec();
+    anyhow::ensure!(
+        spec.channels == 1 && spec.sample_format == hound::SampleFormat::Int,
+        "test reference must be integer mono WAV"
+    );
+    let scale = 2f32.powi(spec.bits_per_sample as i32 - 1);
+    let pcm = wav
+        .samples::<i32>()
+        .map(|v| v.map(|v| v as f32 / scale))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut request = ProviderRequest::new(
+        "qwen3-tts-1.7b-base",
+        "test-owned-reference",
+        "Hello, this is a native voice cloning test.",
+        "en",
+    );
+    request.clone_mode = Some(CloneMode::Icl);
+    request.seed = Some(42);
+    request.reference_transcript = Some(std::env::var("QWEN_REFERENCE_TRANSCRIPT")?);
+    request.reference_audio = Some(ReferenceAudio {
+        pcm,
+        sample_rate: spec.sample_rate,
+    });
+    let worker = Worker::spawn(Settings {
+        dir,
+        device: Device::Cpu,
+        gpu_layers: 0,
+        threads: 4,
+        max_tokens: 256,
+        cache_capacity: 2,
+    })?;
+    assert_eq!(worker.ready.effective_device, "cpu");
+    let first = worker.synthesize(request.clone())?;
+    assert!(!first.metrics.reference_cache_hit);
+    assert!(first.metrics.reached_eos && first.audio.is_audible());
+    assert_eq!(first.audio.sample_rate, 24_000);
+    assert!(first.audio.samples.iter().all(|v| v.is_finite()));
+    let cancelled = InferenceControl::new(Duration::from_secs(60));
+    cancelled.cancel();
+    let result = control::scope(cancelled, || worker.synthesize(request.clone()));
+    assert!(result.unwrap_err().to_string().contains("cancelled"));
+    let second = worker.synthesize(request)?;
+    assert!(second.metrics.reference_cache_hit);
+    assert_eq!(
+        first.audio.samples, second.audio.samples,
+        "same seed/reference must reproduce CPU samples"
+    );
+    eprintln!("first={:?}; reused={:?}", first.metrics, second.metrics);
+    drop(worker); // joins owner thread and releases model/session ownership.
+    Ok(())
+}

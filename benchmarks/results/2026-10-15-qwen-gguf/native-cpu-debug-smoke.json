@@ -1,0 +1,24 @@
+{
+  "audio_secs": 0.64,
+  "conditioning_secs": 1.6080164030000001,
+  "decode_secs": 0.834145212,
+  "device": "cpu",
+  "finite": true,
+  "frames": 8,
+  "generation_secs": 62.551988824,
+  "load_secs": 3.5631158899999997,
+  "model_revision": "0a36d692562f83a862466b0bf8c12154ddf1965d",
+  "onnx_device": "cpu",
+  "peak": 0.4260087311267853,
+  "reached_eos": false,
+  "rtf": 99.04083443125,
+  "seed": 42,
+  "test": "eight-frame native CPU tensor-path smoke",
+  "limitations": [
+    "unoptimized Rust build",
+    "concurrent release compilation on host",
+    "deliberately limited to eight frames; EOS not reached",
+    "not a speech intelligibility or cloning-quality test",
+    "not a performance comparison"
+  ]
+}
