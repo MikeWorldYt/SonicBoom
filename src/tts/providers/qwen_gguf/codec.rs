@@ -148,25 +148,17 @@ impl Codec {
             };
             audio.extend_from_slice(&wav[..len]);
             if !is_last {
-                let mut inputs = Vec::with_capacity(19);
-                for (input, output) in [
-                    ("pre_conv_history", "next_pre_conv_history"),
-                    ("latent_buffer", "next_latent_buffer"),
-                    ("conv_history", "next_conv_history"),
-                ] {
+                // Input names are fixed by the decoder graph: reuse the
+                // precomputed table instead of formatting 19 strings per
+                // 12-frame group. The state tensors themselves must still be
+                // copied — ORT outputs borrow from `outputs`, which is
+                // dropped after `run`, so zero-copy reuse would dangle.
+                let mut inputs = Vec::with_capacity(DECODER_STATE_NAMES.len());
+                for (input, output) in DECODER_STATE_NAMES {
                     inputs.push((
-                        input.to_string(),
+                        input.to_owned(),
                         copy_tensor(outputs.get(output).context("decoder history missing")?)?,
                     ));
-                }
-                for kind in ["key", "value"] {
-                    for layer in 0..8 {
-                        let output = format!("next_{kind}_{layer}");
-                        inputs.push((
-                            format!("past_{kind}_{layer}"),
-                            copy_tensor(outputs.get(&output).context("decoder KV missing")?)?,
-                        ));
-                    }
                 }
                 state = DecoderState { inputs };
             }
@@ -186,30 +178,97 @@ fn copy_tensor(value: &DynValue) -> Result<DynValue> {
     Ok(Tensor::from_array((shape.to_vec(), data.to_vec()))?.into_dyn())
 }
 
+/// Fixed decoder state wiring: `(session input name, session output name)`.
+/// The graph carries 3 convolution histories plus 8 layers × (key, value).
+/// Order matches the historical construction (conv histories, then key
+/// layers 0–7, then value layers 0–7).
+const DECODER_STATE_NAMES: [(&str, &str); 19] = [
+    ("pre_conv_history", "next_pre_conv_history"),
+    ("latent_buffer", "next_latent_buffer"),
+    ("conv_history", "next_conv_history"),
+    ("past_key_0", "next_key_0"),
+    ("past_key_1", "next_key_1"),
+    ("past_key_2", "next_key_2"),
+    ("past_key_3", "next_key_3"),
+    ("past_key_4", "next_key_4"),
+    ("past_key_5", "next_key_5"),
+    ("past_key_6", "next_key_6"),
+    ("past_key_7", "next_key_7"),
+    ("past_value_0", "next_value_0"),
+    ("past_value_1", "next_value_1"),
+    ("past_value_2", "next_value_2"),
+    ("past_value_3", "next_value_3"),
+    ("past_value_4", "next_value_4"),
+    ("past_value_5", "next_value_5"),
+    ("past_value_6", "next_value_6"),
+    ("past_value_7", "next_value_7"),
+];
+
 struct DecoderState {
     inputs: Vec<(String, DynValue)>,
 }
 impl DecoderState {
     fn empty() -> Result<Self> {
-        let mut inputs = Vec::with_capacity(19);
-        for (name, channels) in [
-            ("pre_conv_history", 512),
-            ("latent_buffer", 1024),
-            ("conv_history", 1024),
-        ] {
-            inputs.push((
-                name.to_owned(),
-                Tensor::from_array(([1, channels, 0], Vec::<f32>::new()))?.into_dyn(),
-            ));
-        }
-        for kind in ["key", "value"] {
-            for layer in 0..8 {
-                inputs.push((
-                    format!("past_{kind}_{layer}"),
-                    Tensor::from_array(([1, 16, 0, 64], Vec::<f32>::new()))?.into_dyn(),
-                ));
-            }
+        let mut inputs = Vec::with_capacity(DECODER_STATE_NAMES.len());
+        for (input, _) in DECODER_STATE_NAMES {
+            let value = match input {
+                "pre_conv_history" => {
+                    Tensor::from_array(([1, 512, 0], Vec::<f32>::new()))?.into_dyn()
+                }
+                "latent_buffer" | "conv_history" => {
+                    Tensor::from_array(([1, 1024, 0], Vec::<f32>::new()))?.into_dyn()
+                }
+                _ => Tensor::from_array(([1, 16, 0, 64], Vec::<f32>::new()))?.into_dyn(),
+            };
+            inputs.push((input.to_owned(), value));
         }
         Ok(Self { inputs })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoder_state_wiring_covers_all_histories_in_order() {
+        assert_eq!(DECODER_STATE_NAMES.len(), 19);
+        assert_eq!(
+            DECODER_STATE_NAMES[0],
+            ("pre_conv_history", "next_pre_conv_history")
+        );
+        // Key layers precede value layers, each 0–7 in order.
+        for layer in 0..8 {
+            assert_eq!(
+                DECODER_STATE_NAMES[3 + layer].0,
+                format!("past_key_{layer}")
+            );
+            assert_eq!(
+                DECODER_STATE_NAMES[3 + layer].1,
+                format!("next_key_{layer}")
+            );
+            assert_eq!(
+                DECODER_STATE_NAMES[11 + layer].0,
+                format!("past_value_{layer}")
+            );
+            assert_eq!(
+                DECODER_STATE_NAMES[11 + layer].1,
+                format!("next_value_{layer}")
+            );
+        }
+        // Every output name is unique: no history slot is wired twice.
+        let mut outputs: Vec<&str> = DECODER_STATE_NAMES.iter().map(|(_, o)| *o).collect();
+        outputs.sort_unstable();
+        outputs.dedup();
+        assert_eq!(outputs.len(), 19);
+    }
+
+    #[test]
+    fn empty_decoder_state_matches_wiring_shapes() {
+        let state = DecoderState::empty().unwrap();
+        assert_eq!(state.inputs.len(), 19);
+        for (name, _) in DECODER_STATE_NAMES {
+            assert!(state.inputs.iter().any(|(n, _)| n == name));
+        }
     }
 }
