@@ -575,24 +575,32 @@ mod tests {
             state,
             query,
             body,
-            |_token, _state, query, body| async move {
-                if body == "fail" {
-                    return Err(AppError::BadRequest("synthetic failure".into()));
-                }
-                if body == "wait" {
-                    let control = active_control().unwrap();
-                    control.update("mock", 1);
-                    while !control.stopped() {
-                        tokio::time::sleep(Duration::from_millis(1)).await;
-                    }
-                    // Deliberately returns bytes after cancellation/deadline. The
-                    // real publication boundary must withhold this partial result.
-                }
-                Ok((
-                    [(header::CONTENT_TYPE, "audio/wav")],
-                    mock_wav(&body, &query),
-                )
-                    .into_response())
+            |_token, state, query, body| async move {
+                state
+                    .inference_gate
+                    .run_bounded(move || {
+                        if body == "fail" {
+                            return Err(AppError::BadRequest("synthetic failure".into()));
+                        }
+                        if body == "wait" {
+                            let control = sonicboom::tts::control::current().unwrap();
+                            control.update("mock", 1);
+                            while !control.stopped() {
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                        } else {
+                            // Overlapping callers must serialize at the real model
+                            // gate, with the permit owned by this blocking worker.
+                            std::thread::sleep(Duration::from_millis(2));
+                        }
+                        Ok((
+                            [(header::CONTENT_TYPE, "audio/wav")],
+                            mock_wav(&body, &query),
+                        )
+                            .into_response())
+                    })
+                    .await
+                    .map_err(|e| AppError::internal(format!("mock execution: {e:?}")))?
             },
         )
         .await
@@ -655,10 +663,44 @@ mod tests {
         );
         let a = json(first).await["id"].as_str().unwrap().to_string();
         let b = json(second).await["id"].as_str().unwrap().to_string();
-        assert_ne!(a, b);
+        let c = json(
+            send(
+                "POST",
+                "/jobs?lang=es&voice=M1&format=wav".into(),
+                &alice,
+                "mundo",
+            )
+            .await,
+        )
+        .await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let d = json(
+            send(
+                "POST",
+                "/jobs?lang=es&voice=M1&format=wav".into(),
+                &alice,
+                "test",
+            )
+            .await,
+        )
+        .await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            [&a, &b, &c, &d]
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            4
+        );
         for (id, owner, text, profile, voice) in [
             (&a, &alice, "hola", None, Some("M1")),
             (&b, &bob, "test", Some("voice-B"), None),
+            (&c, &alice, "mundo", None, Some("M1")),
+            (&d, &alice, "test", None, Some("M1")),
         ] {
             tokio::time::timeout(Duration::from_secs(2), async {
                 loop {
