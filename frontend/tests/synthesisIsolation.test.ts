@@ -134,3 +134,28 @@ test('server failure retains error and never fetches audio; next request is new'
     assert.equal(f.synthesis.error.value, null);
   } finally { f.synthesis.dispose(); }
 });
+
+
+test('late cancellation acknowledgement cannot resume a newer failed job', async () => {
+  const f = fixture();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  f.studio.api.cancelJob = async () => { await gate; return new Response(); };
+  try {
+    f.fail(true);
+    await f.synthesis.generate();
+    const oldCancellation = f.synthesis.cancel();
+    f.fail(false);
+    await f.synthesis.resume();
+    f.studio.text.value = 'test';
+    f.fail(true);
+    await f.synthesis.generate();
+    assert.equal(f.synthesis.jobId.value, 'job-2');
+    f.fail(false);
+    release();
+    await oldCancellation;
+    assert.equal(f.synthesis.jobId.value, 'job-2');
+    assert.equal(f.synthesis.audioUrl.value, '');
+    assert.equal(f.synthesis.complete.value, false);
+  } finally { release(); f.synthesis.dispose(); }
+});

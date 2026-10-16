@@ -91,6 +91,7 @@ export function useSynthesis(studio: Studio) {
     cancelling.value = true;
     try {
       await studio.api.cancelJob(generation.jobId);
+      if (disposed || generation.requestEpoch !== epoch || active.value?.jobId !== generation.jobId) return;
       // The acknowledgement is not terminal. Reconcile server state if disconnected.
       if (!pending.value) await resume();
     } catch (failure) {
