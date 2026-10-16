@@ -58,6 +58,10 @@ rocm = ["ort/rocm"]
 qwen = ["dep:qwen3-tts"]
 gpt-sovits = ["dep:gpt-sovits-onnx-rs"]
 qwen-cuda = ["qwen", "qwen3-tts/cuda"]
+# Experimental native GGUF/ONNX backend; independent of Candle.
+qwen-gguf = ["dep:tokenizers", "dep:rustfft", "dep:half", "dep:sonicboom-qwen-llama"]
+qwen-gguf-vulkan = ["qwen-gguf", "sonicboom-qwen-llama/vulkan"]
+qwen-gguf-cuda = ["qwen-gguf", "sonicboom-qwen-llama/cuda"]
 
 [dependencies]
 # Async runtime (only the features actually used)
@@ -92,6 +96,11 @@ tower-sessions = { version = "0.14", features = ["memory-store"], optional = tru
 # rendered via Display. Verified: CPU/cuda/rocm/coreml checks green.
 ort = { version = "2.0.0-rc.13", features = ["ndarray"] }
 ndarray = "0.17"
+
+sonicboom-qwen-llama = { path = "native/qwen-llama", optional = true }
+tokenizers = { version = "0.22", default-features = false, features = ["onig"], optional = true }
+rustfft = { version = "6.2", optional = true }
+half = { version = "2", optional = true }
 
 # Audio encoding/decoding
 opus = "0.4"
@@ -212,3 +221,7 @@ codegen-units = 1
 # esaxx 0.1.10 forces /MT; match Rust, knf and ORT /MD on MSVC.
 [patch.crates-io]
 esaxx-rs = { path = "vendor/esaxx-rs" }
+
+[[example]]
+name = "qwen_gguf_smoke"
+required-features = ["qwen-gguf"]

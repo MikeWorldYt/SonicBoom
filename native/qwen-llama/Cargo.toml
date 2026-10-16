@@ -1,0 +1,14 @@
+[package]
+name = "sonicboom-qwen-llama"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[features]
+default = []
+vulkan = []
+cuda = []
+
+[build-dependencies]
+cmake = "0.1"

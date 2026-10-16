@@ -14,6 +14,7 @@ dependencies = [
  "flacenc",
  "futures-util",
  "gpt-sovits-onnx-rs",
+ "half",
  "hex",
  "hound",
  "image",
@@ -29,14 +30,17 @@ dependencies = [
  "rand 0.9.5",
  "reqwest",
  "rodio",
+ "rustfft",
  "serde",
  "serde_json",
  "sha2",
  "shine-rs",
+ "sonicboom-qwen-llama",
  "tao",
  "thiserror 2.0.18",
  "tiktools-plugin-sdk",
  "time",
+ "tokenizers 0.22.2",
  "tokio",
  "toml",
  "tower",
@@ -5693,6 +5697,13 @@ dependencies = [
  "byteorder",
  "libc",
  "winapi",
+]
+
+[[package]]
+name = "sonicboom-qwen-llama"
+version = "0.1.0"
+dependencies = [
+ "cmake",
 ]
 
 [[package]]
