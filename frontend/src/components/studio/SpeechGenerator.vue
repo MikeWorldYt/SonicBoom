@@ -6,7 +6,7 @@ import { useSynthesis } from '../../composables/useSynthesis';
 import VoiceSelector from './VoiceSelector.vue';
 const studio = useStudio();
 const { text, model, voice, language, models, selectedModel, availableVoices, preview } = studio;
-const { pending, cancelling, jobId, active, snapshot, audioUrl, error, complete, canGenerate, generate, resume, cancel } = useSynthesis(studio);
+const { pending, cancelling, jobId, active, snapshot, audioUrl, audioFilename, error, complete, canGenerate, generate, resume, cancel } = useSynthesis(studio);
 const player = ref<HTMLAudioElement | null>(null);
 const languages = computed(() => selectedModel.value.languages.length ? selectedModel.value.languages : ['en','ko','ja','zh','es','pt','fr','de','it','ru','ar','hi','nl','pl','tr','vi','id','th','sv','da','fi','el','cs','sk','sl','hr','ro','hu','bg','uk','lt','lv','et']);
 watch(preview, () => void generate(true));
@@ -28,6 +28,6 @@ onBeforeUnmount(detachPlayback);
   <div id="status" role="status" aria-live="polite"><template v-if="pending && snapshot"><span v-if="snapshot.context">{{ snapshot.context.model }} · {{ snapshot.context.effective_device }} · </span>{{ t(snapshot.stage) }} · {{ t('{seconds}s elapsed', { seconds: Math.floor(snapshot.elapsed_secs || 0) }) }}<span v-if="snapshot.frames"> · {{ t('{count} generated frames', { count: snapshot.frames }) }}</span><p v-if="snapshot.context?.provider === 'qwen3-gguf' && snapshot.context.effective_device === 'cpu'" class="muted">{{ t('CPU inference can be slow.') }}</p></template><span v-if="complete">{{ t('Completed. Audio is ready to play or download.') }}</span></div>
   <details v-if="snapshot?.context"><summary>{{ t('Generation diagnostics') }}</summary><p>{{ snapshot.context.provider }} · {{ snapshot.context.model }} · {{ snapshot.context.effective_device }} · {{ snapshot.context.voice }}</p><p v-if="snapshot.audio_secs">{{ t('Generated duration: {seconds}s', { seconds: snapshot.audio_secs.toFixed(2) }) }} · RTF {{ snapshot.rtf?.toFixed(2) ?? '—' }}</p><p v-if="snapshot.context.seed">{{ t('Seed: {seed}', { seed: snapshot.context.seed }) }}</p><p v-else>{{ t('Seed: not exposed by this API') }}</p></details>
   <p v-if="error" role="alert" class="feedback error">{{ renderMessage(error) }} <span v-if="jobId">{{ t('Use Resume monitoring or Cancel generation.') }}</span></p>
-  <template v-if="audioUrl"><audio id="player" ref="player" :src="audioUrl" controls/><a id="downloadAudio" :href="audioUrl" download="sonicboom.wav">{{ t('Download generated audio') }}</a></template>
+  <template v-if="audioUrl"><audio id="player" ref="player" :src="audioUrl" controls/><a id="downloadAudio" :href="audioUrl" :download="audioFilename">{{ t('Download generated audio') }}</a></template>
   <p v-else class="output-hint">{{ t('Your audio will appear here, ready to listen or download.') }}</p>
 </template>

@@ -42,6 +42,7 @@ test('hola -> test -> mundo get independent jobs and old audio clears immediatel
       assert.equal(f.synthesis.audioUrl.value, '');
       await pending;
       assert.equal(await (await fetch(f.synthesis.audioUrl.value)).text(), `job-${f.inputs.length}`);
+      assert.equal(f.synthesis.audioFilename.value, `sonicboom-job-${f.inputs.length}.wav`);
     }
     assert.deepEqual(f.inputs.map(input => input[0]), ['hola', 'test', 'mundo']);
     assert.deepEqual(f.downloads, ['job-1', 'job-2', 'job-3']);

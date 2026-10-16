@@ -13,6 +13,7 @@ export function useSynthesis(studio: Studio) {
   const jobId = computed(() => active.value?.jobId ?? null);
   const snapshot = shallowRef<Job | null>(null);
   const audioUrl = ref('');
+  const audioFilename = ref('');
   const error = shallowRef<Message | null>(null);
   const complete = ref(false);
   let control: AbortController | null = null;
@@ -22,6 +23,7 @@ export function useSynthesis(studio: Studio) {
   function clearAudio() {
     if (audioUrl.value) URL.revokeObjectURL(audioUrl.value);
     audioUrl.value = '';
+    audioFilename.value = '';
   }
   async function monitor(generation: ActiveGeneration, signal: AbortSignal) {
     const current = () => !disposed && generation.requestEpoch === epoch;
@@ -37,6 +39,7 @@ export function useSynthesis(studio: Studio) {
       const audio = await studio.api.jobAudio(generation.jobId, signal);
       if (!current()) return;
       clearAudio();
+      audioFilename.value = `sonicboom-${generation.jobId}.wav`;
       audioUrl.value = URL.createObjectURL(audio);
       active.value = null;
       complete.value = true;
@@ -100,5 +103,5 @@ export function useSynthesis(studio: Studio) {
   }
   function dispose() { disposed = true; ++epoch; control?.abort(); clearAudio(); }
   if (getCurrentScope()) onScopeDispose(dispose);
-  return { pending, cancelling, jobId, active, snapshot, audioUrl, error, complete, canGenerate, generate, resume, cancel, dispose };
+  return { pending, cancelling, jobId, active, snapshot, audioUrl, audioFilename, error, complete, canGenerate, generate, resume, cancel, dispose };
 }
