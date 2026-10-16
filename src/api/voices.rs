@@ -128,6 +128,86 @@ pub struct CachedVoices {
     stamp: Option<Vec<u64>>,
     references: std::collections::VecDeque<(String, Option<Vec<u64>>, ReferenceAudio)>,
 }
+
+/// Stored-reference size bound (16 MiB) and total decoded-reference cache
+/// budget (64 MiB across at most 16 entries).
+pub(crate) const MAX_STORED_REFERENCE_BYTES: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_DECODED_CACHE_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_DECODED_CACHE_ENTRIES: usize = 16;
+
+impl CachedVoices {
+    /// Fast validated cache lookup: LRU-bump a decoded reference whose
+    /// identity (profile id, owner, reference hash) and file stamp match.
+    /// Pure metadata work — callers must still re-verify after any slow
+    /// path (see [`verify_resident_identity`]).
+    fn probe(&mut self, key: &str, stamp: &Option<Vec<u64>>) -> Option<ReferenceAudio> {
+        let pos = self
+            .references
+            .iter()
+            .position(|(k, identity, _)| k == key && identity == stamp && stamp.is_some())?;
+        let entry = self.references.remove(pos).expect("cache index exists");
+        let result = entry.2.clone();
+        self.references.push_back(entry);
+        Some(result)
+    }
+
+    /// Publish freshly decoded audio, evicting least-recently-used entries
+    /// until both the entry-count and byte budgets hold. Oversized single
+    /// references are decoded for the caller but not cached.
+    fn publish(&mut self, key: String, stamp: Option<Vec<u64>>, reference: ReferenceAudio) {
+        let size = reference.pcm.len() * 4;
+        while self.references.len() >= MAX_DECODED_CACHE_ENTRIES
+            || self
+                .references
+                .iter()
+                .map(|(_, _, r)| r.pcm.len() * 4)
+                .sum::<usize>()
+                + size
+                > MAX_DECODED_CACHE_BYTES
+        {
+            if self.references.pop_front().is_none() {
+                break;
+            }
+        }
+        self.references.retain(|(old, _, _)| old != &key);
+        if size <= MAX_DECODED_CACHE_BYTES {
+            self.references.push_back((key, stamp, reference));
+        }
+    }
+}
+
+/// Refresh the resident manifest when the directory or manifest stamp
+/// changed, dropping decoded entries that the new manifest may have
+/// invalidated. Callers must hold the voices lock.
+fn ensure_resident_store(cached: &mut CachedVoices, dir: &str) -> Result<(), AppError> {
+    let manifest = VoiceProfileStore::manifest_path(std::path::Path::new(dir));
+    let stamp = file_stamp(&manifest);
+    if cached.store.is_none() || cached.dir != dir || cached.stamp != stamp {
+        cached.store = Some(
+            VoiceProfileStore::open(std::path::PathBuf::from(dir)).map_err(AppError::internal)?,
+        );
+        cached.dir = dir.to_string();
+        cached.stamp = stamp;
+        cached.references.clear();
+    }
+    Ok(())
+}
+
+/// Re-authorize a profile against the resident store after any slow path
+/// (disk read, decode): a deletion, owner change, or reference replacement
+/// since the first check must never serve stale or foreign audio.
+fn verify_resident_identity(
+    store: &VoiceProfileStore,
+    profile: &sonicboom::tts::voices::VoiceProfile,
+) -> Result<(), AppError> {
+    if store.get(&profile.id).is_some_and(|p| {
+        p.reference_hash == profile.reference_hash && p.owner_token_hash == profile.owner_token_hash
+    }) {
+        Ok(())
+    } else {
+        Err(AppError::NotFound("unknown voice profile".into()))
+    }
+}
 fn file_stamp(path: &std::path::Path) -> Option<Vec<u64>> {
     let m = std::fs::metadata(path).ok()?;
     #[cfg(unix)]
@@ -196,16 +276,8 @@ pub(crate) async fn with_store<T: Send + 'static>(
                 }
             }
         }
+        ensure_resident_store(&mut cached, &dir)?;
         let manifest = VoiceProfileStore::manifest_path(std::path::Path::new(&dir));
-        let stamp = file_stamp(&manifest);
-        if cached.store.is_none() || cached.dir != dir || cached.stamp != stamp {
-            cached.store = Some(
-                VoiceProfileStore::open(std::path::PathBuf::from(&dir))
-                    .map_err(AppError::internal)?,
-            );
-            cached.dir = dir;
-            cached.references.clear();
-        }
         let result = work(cached.store.as_mut().expect("store initialized"));
         cached.stamp = file_stamp(&manifest);
         result
@@ -213,6 +285,16 @@ pub(crate) async fn with_store<T: Send + 'static>(
     .await
     .map_err(|e| AppError::internal(format!("voice store task failed: {e}")))?
 }
+/// Outcome of the locked lookup stage: either a validated decoded-cache hit
+/// or the file path and stamp to read and decode without holding the lock.
+enum StageResult {
+    Hit(ReferenceAudio),
+    Miss {
+        path: std::path::PathBuf,
+        stamp: Option<Vec<u64>>,
+    },
+}
+
 /// Authorization is checked against resident metadata before looking in the
 /// decoded cache. The ID, owner and reference hash scope the cache identity.
 pub(crate) async fn owned_reference(
@@ -230,6 +312,79 @@ pub(crate) async fn owned_reference(
     .await?;
     let cache = state.inference_gate.voices.clone();
     let profile_copy = profile.clone();
+    let store_dir = state.config.get().await.voices.store_dir.clone();
+    let key = format!(
+        "{}:{}:{}",
+        profile_copy.id,
+        profile_copy.owner_token_hash.as_deref().unwrap_or(""),
+        profile_copy.reference_hash
+    );
+    // Stage 1 (lock held, metadata only): refresh a stale resident store,
+    // re-authorize against it, and probe the decoded cache. The lock is
+    // released before any disk IO or decoding, so parallel reads no longer
+    // serialize on the slow path.
+    let staged = {
+        let cache = cache.clone();
+        let profile_copy = profile_copy.clone();
+        let key = key.clone();
+        let store_dir = store_dir.clone();
+        let preparation_lease = super::jobs::preparation_lease();
+        let reference_lease = super::jobs::reference_lease();
+        tokio::task::spawn_blocking(move || {
+            let _preparation_lease = preparation_lease;
+            let _reference_lease = reference_lease;
+            let mut cached = cache
+                .lock()
+                .map_err(|_| AppError::internal("voice cache lock poisoned"))?;
+            // Recheck after acquiring the lock: deletion or store
+            // reconfiguration may have occurred since the first check.
+            ensure_resident_store(&mut cached, &store_dir)?;
+            let store = cached
+                .store
+                .as_ref()
+                .ok_or_else(|| AppError::NotFound("unknown voice profile".into()))?;
+            verify_resident_identity(store, &profile_copy)?;
+            let path = store
+                .reference_path(&profile_copy.id)
+                .map_err(AppError::internal)?;
+            let stamp = file_stamp(&path);
+            if let Some(hit) = cached.probe(&key, &stamp) {
+                return Ok::<_, AppError>(StageResult::Hit(hit));
+            }
+            Ok::<_, AppError>(StageResult::Miss { path, stamp })
+        })
+        .await
+        .map_err(|e| AppError::internal(format!("reference lookup task failed: {e}")))?
+    }?;
+    let (path, stamp) = match staged {
+        StageResult::Hit(reference) => return Ok((profile, reference)),
+        StageResult::Miss { path, stamp } => (path, stamp),
+    };
+    // Stage 2 (no lock): bounded disk read plus WAV decode.
+    if std::fs::metadata(&path)
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .len()
+        > MAX_STORED_REFERENCE_BYTES
+    {
+        return Err(AppError::PayloadTooLarge(
+            "stored reference exceeds 16 MiB bound".into(),
+        ));
+    }
+    let (pcm, sample_rate) = {
+        let bytes =
+            std::fs::read(&path).map_err(|_| AppError::internal("reference audio unavailable"))?;
+        decode_wav_bytes(&bytes)?
+    };
+    if file_stamp(&path) != stamp {
+        return Err(AppError::ServiceUnavailable(
+            "reference recording changed while decoding; retry".into(),
+        ));
+    }
+    let reference = ReferenceAudio { pcm, sample_rate };
+    // Stage 3 (lock held, metadata only): re-verify identity and stamp after
+    // the slow path — a deletion, owner change, reference replacement, or
+    // store reconfiguration mid-decode must never publish stale audio — then
+    // re-probe (a concurrent request may have published first) and publish.
     let preparation_lease = super::jobs::preparation_lease();
     let reference_lease = super::jobs::reference_lease();
     let reference = tokio::task::spawn_blocking(move || {
@@ -238,81 +393,30 @@ pub(crate) async fn owned_reference(
         let mut cached = cache
             .lock()
             .map_err(|_| AppError::internal("voice cache lock poisoned"))?;
-        // Recheck after acquiring the lock: deletion or store reconfiguration
-        // may have occurred since the first authorization check.
+        ensure_resident_store(&mut cached, &store_dir)?;
         let store = cached
             .store
             .as_ref()
             .ok_or_else(|| AppError::NotFound("unknown voice profile".into()))?;
-        if !store.get(&profile_copy.id).is_some_and(|p| {
-            p.reference_hash == profile_copy.reference_hash
-                && p.owner_token_hash == profile_copy.owner_token_hash
-        }) {
-            return Err(AppError::NotFound("unknown voice profile".into()));
-        }
-        let key = format!(
-            "{}:{}:{}",
-            profile_copy.id,
-            profile_copy.owner_token_hash.as_deref().unwrap_or(""),
-            profile_copy.reference_hash
-        );
-        let path = cached
-            .store
-            .as_ref()
-            .expect("store initialized")
-            .reference_path(&profile_copy.id)
-            .map_err(AppError::internal)?;
-        let stamp = file_stamp(&path);
-        if let Some(pos) = cached
-            .references
-            .iter()
-            .position(|(k, identity, _)| k == &key && identity == &stamp && stamp.is_some())
+        verify_resident_identity(store, &profile_copy)?;
+        if file_stamp(
+            &store
+                .reference_path(&profile_copy.id)
+                .map_err(AppError::internal)?,
+        ) != stamp
         {
-            let entry = cached.references.remove(pos).expect("cache index exists");
-            let result = entry.2.clone();
-            cached.references.push_back(entry);
-            return Ok(result);
-        }
-        if std::fs::metadata(&path)
-            .map_err(|e| AppError::internal(e.to_string()))?
-            .len()
-            > 16 * 1024 * 1024
-        {
-            return Err(AppError::PayloadTooLarge(
-                "stored reference exceeds 16 MiB bound".into(),
-            ));
-        }
-        let bytes =
-            std::fs::read(&path).map_err(|_| AppError::internal("reference audio unavailable"))?;
-        let (pcm, sample_rate) = decode_wav_bytes(&bytes)?;
-        if file_stamp(&path) != stamp {
             return Err(AppError::ServiceUnavailable(
                 "reference recording changed while decoding; retry".into(),
             ));
         }
-        let reference = ReferenceAudio { pcm, sample_rate };
-        let size = reference.pcm.len() * 4;
-        while cached.references.len() >= 16
-            || cached
-                .references
-                .iter()
-                .map(|(_, _, r)| r.pcm.len() * 4)
-                .sum::<usize>()
-                + size
-                > 64 * 1024 * 1024
-        {
-            if cached.references.pop_front().is_none() {
-                break;
-            }
+        if let Some(hit) = cached.probe(&key, &stamp) {
+            return Ok(hit);
         }
-        cached.references.retain(|(old, _, _)| old != &key);
-        if size <= 64 * 1024 * 1024 {
-            cached.references.push_back((key, stamp, reference.clone()));
-        }
-        Ok::<_, AppError>(reference)
+        cached.publish(key, stamp, reference.clone());
+        Ok(reference)
     })
     .await
-    .map_err(|e| AppError::internal(format!("reference decoding task failed: {e}")))??;
+    .map_err(|e| AppError::internal(format!("reference publish task failed: {e}")))??;
     Ok((profile, reference))
 }
 
@@ -739,6 +843,138 @@ async fn post_preview_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sonicboom::tts::voices::{NewVoiceProfile, VoiceProfileStore};
+
+    fn decoded(samples: usize, rate: u32) -> ReferenceAudio {
+        ReferenceAudio {
+            pcm: vec![0.25; samples],
+            sample_rate: rate,
+        }
+    }
+
+    #[test]
+    fn probe_returns_only_stamp_matched_entries_in_lru_order() {
+        let mut cached = CachedVoices::default();
+        let stamp_a = Some(vec![1u64]);
+        let stamp_b = Some(vec![2u64]);
+        cached.publish("a".into(), stamp_a.clone(), decoded(8, 24_000));
+        cached.publish("b".into(), stamp_b.clone(), decoded(8, 24_000));
+        // Exact stamp hits and bumps recency.
+        assert!(cached.probe("a", &stamp_a).is_some());
+        // Wrong stamp, missing stamp, and unknown key all miss.
+        assert!(cached.probe("a", &stamp_b).is_none());
+        assert!(cached.probe("a", &None).is_none());
+        assert!(cached.probe("ghost", &stamp_a).is_none());
+        // `a` was bumped, so `b` is now least-recently-used.
+        assert_eq!(cached.references.front().unwrap().0, "b");
+        assert_eq!(cached.references.back().unwrap().0, "a");
+    }
+
+    #[test]
+    fn publish_enforces_count_and_byte_budgets() {
+        let mut cached = CachedVoices::default();
+        for i in 0..MAX_DECODED_CACHE_ENTRIES {
+            cached.publish(format!("v{i}"), Some(vec![i as u64]), decoded(4, 24_000));
+        }
+        assert_eq!(cached.references.len(), MAX_DECODED_CACHE_ENTRIES);
+        cached.publish("new".into(), Some(vec![999]), decoded(4, 24_000));
+        assert_eq!(cached.references.len(), MAX_DECODED_CACHE_ENTRIES);
+        // `v0` was least-recently-used: evicted first.
+        assert!(cached.probe("v0", &Some(vec![0])).is_none());
+        assert!(cached.probe("new", &Some(vec![999])).is_some());
+        // Re-publishing an existing key replaces it instead of duplicating.
+        cached.publish("new".into(), Some(vec![1000]), decoded(4, 24_000));
+        assert_eq!(
+            cached
+                .references
+                .iter()
+                .filter(|(k, _, _)| k == "new")
+                .count(),
+            1
+        );
+        // An oversized single reference is served but never cached.
+        cached.publish(
+            "huge".into(),
+            Some(vec![7]),
+            decoded(MAX_DECODED_CACHE_BYTES / 4 + 1, 24_000),
+        );
+        assert!(cached.probe("huge", &Some(vec![7])).is_none());
+    }
+
+    fn test_profile_input(owner: Option<&str>) -> NewVoiceProfile {
+        NewVoiceProfile {
+            name: "test".into(),
+            provider: "pocket-tts".into(),
+            model: "pocket-tts-en".into(),
+            model_revision: "rev".into(),
+            language: "en".into(),
+            clone_mode: "audio_prompt".into(),
+            reference_pcm: vec![0.1; 48_000],
+            reference_sample_rate: 24_000,
+            transcript: None,
+            owner_token_hash: owner.map(str::to_string),
+            consent_basis: "owner".into(),
+            consent_note: String::new(),
+        }
+    }
+
+    #[test]
+    fn verify_resident_identity_rejects_deletion_and_replacement() {
+        let dir = std::env::temp_dir().join(format!(
+            "sonicboom-voices-verify-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut store = VoiceProfileStore::open(dir.clone()).unwrap();
+        let profile = store
+            .create(test_profile_input(Some("owner-hash")))
+            .unwrap();
+
+        // Exact identity verifies.
+        assert!(verify_resident_identity(&store, &profile).is_ok());
+        // Unknown ids never verify (404 isolation, never foreign audio).
+        let mut ghost = profile.clone();
+        ghost.id = uuid::Uuid::new_v4().to_string();
+        assert!(verify_resident_identity(&store, &ghost).is_err());
+        // A replaced reference hash fails even when id and owner match.
+        let mut replaced = profile.clone();
+        replaced.reference_hash = "tampered".into();
+        assert!(verify_resident_identity(&store, &replaced).is_err());
+        // An owner change fails even when id and reference match.
+        let mut foreign = profile.clone();
+        foreign.owner_token_hash = Some("someone-else".into());
+        assert!(verify_resident_identity(&store, &foreign).is_err());
+        // Deletion invalidates immediately.
+        assert!(store.delete(&profile.id).unwrap());
+        assert!(verify_resident_identity(&store, &profile).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_resident_store_refreshes_on_manifest_change() {
+        let dir = std::env::temp_dir().join(format!(
+            "sonicboom-voices-ensure-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_str = dir.to_str().unwrap().to_string();
+        let mut cached = CachedVoices::default();
+        ensure_resident_store(&mut cached, &dir_str).unwrap();
+        assert!(cached.store.is_some());
+        // A concurrent mutation (profile created through another handle)
+        // changes the manifest stamp: the next ensure reopens and drops
+        // decoded entries the new manifest may have invalidated.
+        let mut other = VoiceProfileStore::open(dir.clone()).unwrap();
+        let profile = other.create(test_profile_input(None)).unwrap();
+        cached.publish("stale".into(), Some(vec![1]), decoded(8, 24_000));
+        ensure_resident_store(&mut cached, &dir_str).unwrap();
+        assert!(cached.references.is_empty());
+        assert!(verify_resident_identity(cached.store.as_ref().unwrap(), &profile).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn oversized_wav_header_is_rejected_before_sample_allocation() {
         let mut wav = sonicboom::tts::audio::encode_audio(

@@ -2,7 +2,7 @@
 use crate::{AppState, auth::AuthenticatedToken, error::AppError};
 use axum::{
     Json,
-    body::Body,
+    body::{Body, Bytes},
     extract::{Path, Query, State},
     http::{StatusCode, header},
     response::{
@@ -100,6 +100,11 @@ impl JobStatus {
         matches!(self.stage.as_str(), "completed" | "failed" | "cancelled")
     }
 }
+/// Per-job completed-audio cap enforced when buffering the response body.
+pub const MAX_JOB_AUDIO_BYTES: usize = 16 * 1024 * 1024;
+/// Total retained completed-audio cap across all jobs.
+pub const MAX_RETAINED_AUDIO_BYTES: usize = 64 * 1024 * 1024;
+
 #[derive(Debug)]
 struct Job {
     owner: String,
@@ -107,15 +112,68 @@ struct Job {
     status: JobStatus,
     finished: Option<Instant>,
     retention: Duration,
-    audio: Option<(String, Vec<u8>)>,
+    /// Reference-counted audio: concurrent fetches share the buffer with an
+    /// O(1) handle clone instead of copying the whole payload, and expiry
+    /// drops the store's handle without touching in-flight responses.
+    audio: Option<(String, Bytes)>,
 }
 #[derive(Debug, Default)]
 pub struct JobStore {
     entries: Mutex<HashMap<String, Job>>,
+    /// Incrementally maintained sum of resident `audio` payload bytes.
+    /// Every mutation happens while the `entries` lock is held, so relaxed
+    /// accesses under that lock are exact and completion no longer scans
+    /// all jobs to recompute the total.
+    retained_bytes: std::sync::atomic::AtomicUsize,
 }
 impl JobStore {
-    fn reap(entries: &mut HashMap<String, Job>) {
-        entries.retain(|_, j| j.finished.is_none_or(|t| t.elapsed() < j.retention));
+    /// Remove expired jobs, subtracting their audio from the retained total.
+    /// Callers must hold the `entries` lock (same discipline as before).
+    fn reap_locked(&self, entries: &mut HashMap<String, Job>) {
+        let mut freed = 0usize;
+        entries.retain(|_, j| {
+            let keep = j.finished.is_none_or(|t| t.elapsed() < j.retention);
+            if !keep {
+                freed = freed.saturating_add(j.audio.as_ref().map(|(_, b)| b.len()).unwrap_or(0));
+            }
+            keep
+        });
+        let owed = self
+            .retained_bytes
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .min(freed);
+        self.retained_bytes
+            .fetch_sub(owed, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Current retained audio bytes. Exact when called with the `entries`
+    /// lock held (all mutations take that lock).
+    fn retained_locked(&self) -> usize {
+        self.retained_bytes
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Retain a completed job's audio under the total cap. Returns `false`
+    /// (retaining nothing) when the entry is gone or the cap is reached;
+    /// saturating addition keeps a pathological length from wrapping the
+    /// check. Callers must hold the `entries` lock.
+    fn store_completed_audio_locked(
+        &self,
+        entries: &mut HashMap<String, Job>,
+        job_id: &str,
+        kind: String,
+        bytes: Bytes,
+    ) -> bool {
+        if self.retained_locked().saturating_add(bytes.len()) > MAX_RETAINED_AUDIO_BYTES {
+            return false;
+        }
+        let Some(job) = entries.get_mut(job_id) else {
+            return false;
+        };
+        self.retained_bytes
+            .fetch_add(bytes.len(), std::sync::atomic::Ordering::Relaxed);
+        job.audio = Some((kind, bytes));
+        true
     }
     fn snapshot(&self, id: &str, owner: &str) -> Result<JobStatus, AppError> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
@@ -203,7 +261,7 @@ pub async fn create(
     let store = state.inference_gate.jobs.clone();
     {
         let mut entries = store.entries.lock().unwrap_or_else(|e| e.into_inner());
-        JobStore::reap(&mut entries);
+        store.reap_locked(&mut entries);
         if entries.len() >= config.inference.max_retained_jobs
             || entries.values().filter(|j| !j.status.terminal()).count()
                 >= config
@@ -267,21 +325,20 @@ pub async fn create(
                     .unwrap_or("application/octet-stream")
                     .to_owned();
                 control.update("encoding", control.snapshot().frames);
-                let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
+                let bytes = axum::body::to_bytes(response.into_body(), MAX_JOB_AUDIO_BYTES)
                     .await
                     .map_err(|_| AppError::internal("job audio exceeds 16 MiB"))?;
-                Ok::<_, AppError>((content_type, bytes.to_vec()))
+                // `Bytes` moves by handle: no copy of the audio payload.
+                Ok::<_, AppError>((content_type, bytes))
             }),
         ))
         .await;
         {
             let mut entries = store.entries.lock().unwrap_or_else(|e| e.into_inner());
-            let used: usize = entries
-                .values()
-                .filter_map(|j| j.audio.as_ref())
-                .map(|(_, b)| b.len())
-                .sum();
-            if let Some(j) = entries.get_mut(&job_id) {
+            // Snapshot first (short borrow), then resolve the terminal state:
+            // the audio-store helper needs `&mut entries`, so no entry
+            // borrow survives across it.
+            let stopped = if let Some(j) = entries.get_mut(&job_id) {
                 let p = j.control.snapshot();
                 j.status.cancellation_requested = j.control.cancellation_requested();
                 j.status.deadline_exceeded = j.control.deadline_exceeded();
@@ -291,39 +348,60 @@ pub async fn create(
                 j.status.audio_secs = p.audio_secs;
                 j.status.rtf = p.audio_secs.map(|audio| p.elapsed_secs / audio);
                 j.status.stage_secs = p.stage_secs;
-                if j.control.stopped() {
+                Some(j.control.stopped())
+            } else {
+                // Entry vanished mid-completion (only expiry removes entries,
+                // and only finished ones, so this is defensive): skip terminal
+                // publication but still run the retention sleep below.
+                None
+            };
+            if stopped.is_some_and(|s| s) {
+                if let Some(j) = entries.get_mut(&job_id) {
                     j.status.stage = "cancelled".into();
-                } else {
-                    match execution {
-                        Ok(Ok((kind, bytes))) if used + bytes.len() <= 64 * 1024 * 1024 => {
-                            j.audio = Some((kind, bytes));
-                            j.status.stage = "completed".into();
+                }
+            } else {
+                match execution {
+                    Ok(Ok((kind, bytes))) => {
+                        if store.store_completed_audio_locked(&mut entries, &job_id, kind, bytes) {
+                            if let Some(j) = entries.get_mut(&job_id) {
+                                j.status.stage = "completed".into();
+                            }
+                        } else if let Some(j) = entries.get_mut(&job_id) {
+                            j.status.stage = "failed".into();
+                            j.status.error =
+                                Some("Job failed or audio retention capacity reached".into());
                         }
-                        Ok(Err(error)) => {
-                            let detail = match &error {
-                                AppError::Internal(_) => {
-                                    "Inference failed; consult server logs".to_string()
-                                }
-                                _ => error.to_string(),
-                            };
-                            tracing::error!(job_id, error = %error, "synthesis job failed");
+                    }
+                    Ok(Err(error)) => {
+                        let detail = match &error {
+                            AppError::Internal(_) => {
+                                "Inference failed; consult server logs".to_string()
+                            }
+                            _ => error.to_string(),
+                        };
+                        tracing::error!(job_id, error = %error, "synthesis job failed");
+                        if let Some(j) = entries.get_mut(&job_id) {
                             j.status.stage = "failed".into();
                             j.status.error = Some(detail);
                         }
-                        _ => {
+                    }
+                    _ => {
+                        if let Some(j) = entries.get_mut(&job_id) {
                             j.status.stage = "failed".into();
                             j.status.error =
                                 Some("Job failed or audio retention capacity reached".into());
                         }
                     }
                 }
+            }
+            if let Some(j) = entries.get_mut(&job_id) {
                 j.status.updated_at = chrono::Utc::now();
                 j.finished = Some(Instant::now());
             }
         }
         tokio::time::sleep(retention).await;
         let mut entries = store.entries.lock().unwrap_or_else(|e| e.into_inner());
-        JobStore::reap(&mut entries);
+        store.reap_locked(&mut entries);
     });
     Ok((StatusCode::ACCEPTED, Json(status)))
 }
@@ -380,12 +458,17 @@ pub async fn audio(
         .as_ref()
         .filter(|_| j.status.stage == "completed")
         .ok_or_else(|| AppError::ServiceUnavailable("job has no completed audio".into()))?;
+    // `Bytes::clone` bumps the refcount only: concurrent fetches share the
+    // retained buffer with no copy, and expiry never touches in-flight data.
+    // (`kind` borrows the locked entry, so the guard stays live through the
+    // synchronous response construction, exactly as before.)
+    let body = Body::from(bytes.clone());
     Ok((
         [
             (header::CONTENT_TYPE, kind.as_str()),
             (header::CACHE_CONTROL, "private, no-store"),
         ],
-        Body::from(bytes.clone()),
+        body,
     )
         .into_response())
 }
@@ -458,7 +541,153 @@ mod tests {
             Err(AppError::NotFound(_))
         ));
         assert_eq!(store.snapshot("id", "alice").unwrap().stage, "failed");
-        JobStore::reap(&mut store.entries.lock().unwrap());
+        store.reap_locked(&mut store.entries.lock().unwrap());
         assert!(store.snapshot("id", "alice").is_err());
+    }
+
+    fn unfinished_job(owner: &str, retention: Duration) -> (String, Job) {
+        let control = InferenceControl::new(Duration::from_secs(60));
+        let id = control.id.clone();
+        let now = chrono::Utc::now();
+        let job = Job {
+            owner: owner.into(),
+            control,
+            status: JobStatus {
+                id: id.clone(),
+                created_at: now,
+                updated_at: now,
+                context: None,
+                cancellation_requested: false,
+                deadline_exceeded: false,
+                stage: "queued".into(),
+                frames: 0,
+                elapsed_secs: 0.0,
+                audio_secs: None,
+                rtf: None,
+                error: None,
+                stage_secs: Default::default(),
+            },
+            finished: None,
+            retention,
+            audio: None,
+        };
+        (id, job)
+    }
+
+    #[test]
+    fn retained_audio_is_shared_without_copying() {
+        let store = JobStore::default();
+        let (id, job) = unfinished_job("alice", Duration::from_secs(3600));
+        store.entries.lock().unwrap().insert(id.clone(), job);
+        let payload = Bytes::from(vec![7u8; 1024]);
+        {
+            let mut entries = store.entries.lock().unwrap();
+            assert!(store.store_completed_audio_locked(
+                &mut entries,
+                &id,
+                "audio/ogg".into(),
+                payload
+            ));
+        }
+        // Concurrent fetches share the backing store: pointer-identical.
+        let first = {
+            let entries = store.entries.lock().unwrap();
+            entries.get(&id).unwrap().audio.as_ref().unwrap().1.clone()
+        };
+        let second = {
+            let entries = store.entries.lock().unwrap();
+            entries.get(&id).unwrap().audio.as_ref().unwrap().1.clone()
+        };
+        assert_eq!(first.as_ptr(), second.as_ptr());
+        assert_eq!(first.len(), 1024);
+        assert_eq!(store.retained_locked(), 1024);
+    }
+
+    #[test]
+    fn retained_counter_tracks_store_cap_and_expiry() {
+        let store = JobStore::default();
+        let (a, job_a) = unfinished_job("alice", Duration::from_secs(3600));
+        let (b, job_b) = unfinished_job("alice", Duration::ZERO);
+        {
+            let mut entries = store.entries.lock().unwrap();
+            entries.insert(a.clone(), job_a);
+            entries.insert(b.clone(), job_b);
+            assert!(store.store_completed_audio_locked(
+                &mut entries,
+                &a,
+                "audio/ogg".into(),
+                Bytes::from(vec![0u8; 100])
+            ));
+            assert!(store.store_completed_audio_locked(
+                &mut entries,
+                &b,
+                "audio/ogg".into(),
+                Bytes::from(vec![0u8; 50])
+            ));
+        }
+        assert_eq!(store.retained_locked(), 150);
+        // Cap: a payload that would exceed the total is refused and retains
+        // nothing (no partial accounting, no counter change).
+        {
+            let mut entries = store.entries.lock().unwrap();
+            assert!(!store.store_completed_audio_locked(
+                &mut entries,
+                &a,
+                "audio/ogg".into(),
+                Bytes::from(vec![0u8; MAX_RETAINED_AUDIO_BYTES]),
+            ));
+        }
+        assert_eq!(store.retained_locked(), 150);
+        // Missing entries retain nothing.
+        {
+            let mut entries = store.entries.lock().unwrap();
+            assert!(!store.store_completed_audio_locked(
+                &mut entries,
+                "ghost",
+                "audio/ogg".into(),
+                Bytes::from(vec![0u8; 8])
+            ));
+        }
+        // Expiry subtracts exactly the reaped payloads; the counter never
+        // underflows, even across repeated reaps.
+        {
+            let mut entries = store.entries.lock().unwrap();
+            // Mark `b` finished long ago with zero retention so it expires.
+            entries.get_mut(&b).unwrap().finished = Some(Instant::now());
+            store.reap_locked(&mut entries);
+        }
+        assert_eq!(store.retained_locked(), 100);
+        {
+            let mut entries = store.entries.lock().unwrap();
+            store.reap_locked(&mut entries);
+        }
+        assert_eq!(store.retained_locked(), 100);
+    }
+
+    #[test]
+    fn retention_cap_boundary_is_exact() {
+        let store = JobStore::default();
+        let (a, job_a) = unfinished_job("alice", Duration::from_secs(3600));
+        let (b, job_b) = unfinished_job("alice", Duration::from_secs(3600));
+        let mut entries = store.entries.lock().unwrap();
+        entries.insert(a.clone(), job_a);
+        entries.insert(b.clone(), job_b);
+        // Exactly the cap is accepted…
+        assert!(store.store_completed_audio_locked(
+            &mut entries,
+            &a,
+            "audio/ogg".into(),
+            Bytes::from(vec![0u8; MAX_RETAINED_AUDIO_BYTES]),
+        ));
+        assert_eq!(store.retained_locked(), MAX_RETAINED_AUDIO_BYTES);
+        // …and one byte more is refused with no accounting change. The
+        // saturating check (not wrapping addition) is what makes this exact.
+        assert!(!store.store_completed_audio_locked(
+            &mut entries,
+            &b,
+            "audio/ogg".into(),
+            Bytes::from(vec![0u8; 1]),
+        ));
+        assert_eq!(store.retained_locked(), MAX_RETAINED_AUDIO_BYTES);
     }
 }

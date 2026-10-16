@@ -419,6 +419,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_create_revoke_and_validate_lose_no_updates() {
+        // Token mutations hold the write lock across persistence (SB-016):
+        // this pins the guarantee that design exists to provide — no lost
+        // concurrent updates, in-flight reads always see persisted state,
+        // and a successful revocation is never observable as active.
+        let (store, path) = temp_store().await;
+        let store = std::sync::Arc::new(store);
+        let raws: Vec<String> = futures_util::future::join_all((0..8).map(|_| {
+            let store = store.clone();
+            async move { store.create(None).await.unwrap().1 }
+        }))
+        .await
+        .into_iter()
+        .collect();
+        for raw in &raws {
+            assert!(store.validate(raw).await);
+        }
+        // Concurrent revokes of distinct tokens plus concurrent validations.
+        let listed = store.list().await;
+        assert_eq!(listed.len(), 8);
+        let revoked: Vec<String> = listed.iter().take(4).map(|t| t.id.clone()).collect();
+        futures_util::future::join_all(revoked.iter().map(|id| {
+            let store = store.clone();
+            let id = id.clone();
+            async move { assert!(store.revoke(&id).await.unwrap()) }
+        }))
+        .await;
+        futures_util::future::join_all(raws.iter().map(|raw| {
+            let store = store.clone();
+            let raw = raw.clone();
+            async move {
+                let _ = store.validate(&raw).await;
+            }
+        }))
+        .await;
+        // Exactly the revoked set is dead; the rest validate. A successful
+        // revocation is never observable as active afterwards.
+        for raw in &raws {
+            let id = listed
+                .iter()
+                .find(|t| t.token_hash == hash_token_value(raw))
+                .expect("created token is listed")
+                .id
+                .clone();
+            assert_eq!(store.validate(raw).await, !revoked.contains(&id));
+        }
+        // Disk matches memory exactly (restart recovery sees the same state).
+        let reloaded = TokenStore::load(path.as_str()).await.unwrap();
+        assert_eq!(reloaded.list().await.len(), 8);
+        for raw in &raws {
+            let id = listed
+                .iter()
+                .find(|t| t.token_hash == hash_token_value(raw))
+                .expect("created token is listed")
+                .id
+                .clone();
+            assert_eq!(reloaded.validate(raw).await, !revoked.contains(&id));
+        }
+    }
+
+    #[tokio::test]
     async fn restart_state_matches_process_visible_state() {
         let path = tempfile_path::TempPath::new();
         let store = TokenStore::load(path.as_str()).await.unwrap();
