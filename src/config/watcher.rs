@@ -16,6 +16,57 @@ use super::manager::ConfigManager;
 
 /// Debounce window for filesystem events (spec §43).
 pub const DEBOUNCE_MILLIS: u64 = 400;
+/// Fallback poll cadence. Native notifications are primary; polling only
+/// covers filesystems where they are unreliable, so it checks cheap file
+/// metadata (not content) at this interval.
+pub const POLL_INTERVAL_SECS: u64 = 5;
+/// Every Nth poll tick re-reads the full content even when metadata looks
+/// unchanged, catching same-size replacements and metadata-blind network
+/// filesystems. Revision deduplication in the manager keeps spurious reloads
+/// free.
+pub const POLL_VERIFY_EVERY: u32 = 6;
+
+/// Cheap identity snapshot for change detection: length, modification time,
+/// and (on Unix) file identity, so atomic rename-over-write is observed even
+/// when length and mtime are preserved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileMeta {
+    len: u64,
+    mtime_secs: i64,
+    mtime_nanos: u32,
+    #[cfg(unix)]
+    ino: u64,
+    #[cfg(unix)]
+    dev: u64,
+}
+
+fn file_meta(path: &std::path::Path) -> Option<FileMeta> {
+    let meta = std::fs::metadata(path).ok()?;
+    let len = meta.len();
+    let modified = meta.modified().ok()?;
+    let age = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(FileMeta {
+            len,
+            mtime_secs: age.as_secs() as i64,
+            mtime_nanos: age.subsec_nanos(),
+            ino: meta.ino(),
+            dev: meta.dev(),
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        Some(FileMeta {
+            len,
+            mtime_secs: age.as_secs() as i64,
+            mtime_nanos: age.subsec_nanos(),
+        })
+    }
+}
 
 /// Handle for the background watcher task.
 pub struct ConfigWatcher {
@@ -131,18 +182,31 @@ pub fn start_watching(manager: Arc<ConfigManager>) -> Option<ConfigWatcher> {
     );
 
     // Some network/virtual filesystems silently omit native notifications.
-    // Content polling supplements notify; the manager deduplicates both paths.
+    // Metadata-first polling supplements notify at a slow cadence: cheap
+    // stat checks each tick, full content reads only when metadata changed
+    // or on the periodic verification tick (same-size replacements and
+    // metadata-blind filesystems). The manager deduplicates both paths, so a
+    // reload here is a no-op unless content actually changed.
     let poll_manager = Arc::clone(&manager);
     let poll_path = config_path;
-    let mut previous = std::fs::read(&poll_path).ok();
+    let mut previous_meta = file_meta(&poll_path);
+    let mut previous_content = std::fs::read(&poll_path).ok();
     let poll_task = tokio::spawn(async move {
         let _ = poll_manager.reload_from_filesystem().await;
-        let mut interval = tokio::time::interval(Duration::from_millis(DEBOUNCE_MILLIS));
+        let mut interval = tokio::time::interval(Duration::from_secs(POLL_INTERVAL_SECS));
+        let mut ticks: u32 = 0;
         loop {
             interval.tick().await;
+            ticks = ticks.wrapping_add(1);
+            let verify = ticks.is_multiple_of(POLL_VERIFY_EVERY);
+            let meta = file_meta(&poll_path);
+            if !verify && meta == previous_meta {
+                continue;
+            }
+            previous_meta = meta;
             let content = tokio::fs::read(&poll_path).await.ok();
-            if content != previous {
-                previous = content;
+            if content != previous_content {
+                previous_content = content;
                 let _ = poll_manager.reload_from_filesystem().await;
             }
         }
@@ -164,6 +228,70 @@ mod tests {
             (300..=500).contains(&DEBOUNCE_MILLIS),
             "debounce must be 300-500ms"
         );
+    }
+
+    #[test]
+    fn fallback_poll_stays_slow_with_periodic_verification() {
+        // The fallback exists for filesystems without native notifications:
+        // slow metadata ticks with an even slower full-content verification.
+        const {
+            assert!(POLL_INTERVAL_SECS >= 1);
+            assert!(POLL_VERIFY_EVERY >= 1);
+            assert!(POLL_VERIFY_EVERY as u64 * POLL_INTERVAL_SECS >= 10);
+        }
+    }
+
+    fn watch_file(dir: &std::path::Path, name: &str, content: &[u8]) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn metadata_detects_size_deletion_and_atomic_rename() {
+        let dir = std::env::temp_dir().join(format!("sonicboom-meta-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = watch_file(&dir, "config.toml", b"[server]\nport = 1\n");
+        let baseline = file_meta(&path).expect("fresh file has metadata");
+        // Repeated stats are stable: an unchanged file never triggers a read.
+        assert_eq!(file_meta(&path), Some(baseline));
+        // Size changes are always observed.
+        std::fs::write(&path, b"[server]\nport = 1\n# padding to change length\n").unwrap();
+        assert_ne!(file_meta(&path), Some(baseline));
+        // Deletion is observed as missing metadata.
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(file_meta(&path), None);
+        // Atomic rename-over-write changes file identity even when the
+        // replacement has identical length and lands within one mtime tick.
+        let replacement = watch_file(&dir, "swap.toml", b"[server]\nport = 2\n");
+        std::fs::write(&path, b"[server]\nport = 1\n").unwrap();
+        let before_swap = file_meta(&path).expect("restored file has metadata");
+        std::fs::rename(&replacement, &path).unwrap();
+        assert_ne!(
+            file_meta(&path),
+            Some(before_swap),
+            "rename-over-write must change file identity"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn same_size_replacement_changes_content_for_the_verify_tick() {
+        // Same-size edits may share length (and, on coarse filesystems,
+        // metadata): the periodic verification tick compares content, so it
+        // must observe the replacement.
+        let dir = std::env::temp_dir().join(format!("sonicboom-verify-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = watch_file(&dir, "config.toml", b"[server]\nport = 1111\n");
+        let previous = std::fs::read(&path).ok();
+        std::fs::write(&path, b"[server]\nport = 2222\n").unwrap();
+        assert_eq!(
+            previous.as_ref().unwrap().len(),
+            std::fs::metadata(&path).unwrap().len() as usize
+        );
+        // The verify tick's content comparison observes the replacement.
+        assert_ne!(std::fs::read(&path).ok(), previous);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]

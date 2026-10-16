@@ -273,9 +273,13 @@ impl SonicBoomPlugin {
             .generated_dir
             .as_deref()
             .ok_or_else(|| PluginError::other("plugin data directory is not initialized"))?;
+        // Pre-write cleanup bounds on-disk growth (expired/tmp/oldest files
+        // only). There is deliberately no post-write cleanup: the SDK offers
+        // no playback-completion acknowledgment, so a pass here could delete
+        // the file just handed to the host (single-file-over-budget or clock
+        // skew). The next synthesis re-bounds the directory instead.
         cleanup_generated(generated_dir);
         let path = write_generated_wav(generated_dir, &result.wav)?;
-        cleanup_generated(generated_dir);
 
         Ok(
             ActionResult::summary("Speech synthesized").intent(HostIntent::audio_play(
@@ -381,6 +385,17 @@ fn write_generated_wav(generated_dir: &Path, bytes: &[u8]) -> PluginResult<PathB
 }
 
 fn cleanup_generated(generated_dir: &Path) {
+    cleanup_generated_with_limits(generated_dir, MAX_GENERATED_BYTES, GENERATED_MAX_AGE);
+}
+
+/// Bounded generated-file lifecycle: stale `.tmp` files go immediately, files
+/// older than `max_age` are expired, and oldest-first eviction keeps the total
+/// under `max_bytes`. Everything stays inside the canonicalized plugin
+/// sandbox. Eviction is oldest-first, so the newest file (the one most likely
+/// still playing in the host) is always removed last; callers must still run
+/// this *before* writing, never after, because the host gives no
+/// playback-completion acknowledgment (see `speak_action`).
+fn cleanup_generated_with_limits(generated_dir: &Path, max_bytes: u64, max_age: Duration) {
     let Ok(root) = fs::canonicalize(generated_dir) else {
         return;
     };
@@ -405,7 +420,7 @@ fn cleanup_generated(generated_dir: &Path) {
             continue;
         }
         let modified = metadata.modified().unwrap_or(now);
-        if now.duration_since(modified).unwrap_or_default() > GENERATED_MAX_AGE {
+        if now.duration_since(modified).unwrap_or_default() > max_age {
             let _ = fs::remove_file(&path);
             continue;
         }
@@ -416,7 +431,7 @@ fn cleanup_generated(generated_dir: &Path) {
     let mut total = files.iter().map(|(_, _, size)| *size).sum::<u64>();
     files.sort_by_key(|(_, modified, _)| *modified);
     for (path, _, size) in files {
-        if total <= MAX_GENERATED_BYTES {
+        if total <= max_bytes {
             break;
         }
         if fs::remove_file(path).is_ok() {
@@ -449,6 +464,98 @@ mod tests {
         assert!(!temporary.exists());
         fs::remove_dir_all(root).expect("remove generated test directory");
     }
+
+    #[test]
+    fn over_budget_eviction_removes_oldest_first_and_keeps_newest() {
+        use std::time::Duration;
+        let root = std::env::temp_dir().join(format!(
+            "sonicboom-tiktools-plugin-evict-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let generated_dir = root.join("generated");
+        fs::create_dir_all(&generated_dir).expect("create generated test directory");
+        // Three 10-byte wavs, each older than the last; budget fits two.
+        let mut paths = Vec::new();
+        for name in ["old.wav", "mid.wav", "new.wav"] {
+            let path = generated_dir.join(name);
+            fs::write(&path, [0u8; 10]).expect("write wav");
+            paths.push(path);
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        // Far-future age bound so only the byte budget bites.
+        cleanup_generated_with_limits(&generated_dir, 20, Duration::from_secs(3600));
+        assert!(!paths[0].exists(), "oldest over-budget file must go");
+        assert!(paths[1].exists());
+        // The newest file — the one most likely still playing in the host —
+        // is always removed last.
+        assert!(paths[2].exists());
+        // Non-wav files and the sandbox root itself are never touched.
+        let notes = generated_dir.join("notes.txt");
+        fs::write(&notes, [0u8; 100]).expect("write notes");
+        cleanup_generated_with_limits(&generated_dir, 20, Duration::from_secs(3600));
+        assert!(notes.exists());
+        assert!(generated_dir.is_dir());
+        fs::remove_dir_all(root).expect("remove generated test directory");
+    }
+
+    #[test]
+    fn expired_and_temporary_files_are_reaped_without_touching_fresh_audio() {
+        use std::time::Duration;
+        let root = std::env::temp_dir().join(format!(
+            "sonicboom-tiktools-plugin-age-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let generated_dir = root.join("generated");
+        fs::create_dir_all(&generated_dir).expect("create generated test directory");
+        let stale = generated_dir.join("stale.wav");
+        fs::write(&stale, b"old").expect("write stale wav");
+        // Backdate past the age bound via a tiny budget-independent run.
+        filetime_backdate(&stale, Duration::from_secs(7200));
+        let fresh = generated_dir.join("fresh.wav");
+        fs::write(&fresh, b"new").expect("write fresh wav");
+        let tmp = generated_dir.join("orphan.wav.tmp");
+        fs::write(&tmp, b"tmp").expect("write tmp");
+        // The backdate is best-effort (no `touch` on some platforms):
+        // capture staleness before cleanup, then assert expiry only when
+        // the file is actually stale. Tmp/fresh behavior is deterministic
+        // everywhere.
+        let is_stale = fs::metadata(&stale)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .is_some_and(|t| {
+                std::time::SystemTime::now()
+                    .duration_since(t)
+                    .unwrap_or_default()
+                    > Duration::from_secs(3600)
+            });
+        cleanup_generated_with_limits(&generated_dir, u64::MAX, Duration::from_secs(3600));
+        assert_eq!(!stale.exists(), is_stale);
+        assert!(!tmp.exists());
+        assert!(fresh.exists(), "fresh host-playable audio must survive");
+        fs::remove_dir_all(root).expect("remove generated test directory");
+    }
+
+    /// Best-effort mtime backdate for age-expiry tests (UTIME via libc is
+    /// unavailable; rewrite-then-wait is flaky, so shell out to `touch` when
+    /// present and skip the backdate otherwise).
+    #[cfg(unix)]
+    fn filetime_backdate(path: &std::path::Path, age: std::time::Duration) {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let target = SystemTime::now()
+            .checked_sub(age)
+            .unwrap_or(UNIX_EPOCH)
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let _ = std::process::Command::new("touch")
+            .arg("-d")
+            .arg(format!("@{target}"))
+            .arg(path)
+            .output();
+    }
+
+    #[cfg(not(unix))]
+    fn filetime_backdate(_path: &std::path::Path, _age: std::time::Duration) {}
 }
 
 tiktools_process_plugin!(SonicBoomPlugin);
