@@ -571,3 +571,33 @@ Use the authenticated [background job API](inference-jobs.md) for long CPU
 inference, with progress and cooperative cancellation. The synchronous routes
 remain supported. See [ownership/cache architecture](inference-architecture.md)
 for model residency, integrity verification, reloads and cache bounds.
+
+### Resuming synthesis jobs
+
+A job ID identifies the original immutable submission, including its text and
+voice/profile selection. Fetching an old job does not submit edited input. The
+studio therefore exposes a separate resume action and displays the prior input;
+finish or cancel that job before submitting another request. SSE reconnection
+continues monitoring the same ID. Cancellation is a request until a terminal
+server status confirms that computation stopped. Completed job audio is private
+and served with `Cache-Control: private, no-store`.
+
+The offline quality runner's `job_id: null` denotes a direct-provider call;
+its request UUID must not be mistaken for an HTTP synthesis job ID. Detailed
+benchmark manifests are opt-in and hash text/reference identity; status endpoints
+do not acquire raw speech or transcripts as diagnostic fields.
+
+Voice creation responses also include additive `reference_health` and `warnings`
+fields. Health reports mono-mix duration, source channels/rate, peak, RMS, DC,
+near-full-scale fraction (absolute amplitude ≥0.999) and fraction below amplitude 1e-4 **before resampling**.
+The latter is a low-amplitude proxy, not speech/VAD coverage. Warning codes are
+`reference_nearly_silent`, `reference_heavily_clipped`, and
+`reference_large_dc_offset`. They are conservative advisories and do not reject,
+trim, normalize or modify an otherwise valid reference. Health data is returned
+to the authorized creator, not written into default telemetry or job status.
+
+Qwen/Pocket job `context.seed`, when present, is the effective request seed as a
+decimal **string**, so browser clients preserve all 64 bits. It is read-only
+metadata, not a new HTTP generation parameter. Reproduce it through the native
+`ProviderRequest.seed` API or offline runner `AUDIT_SEED=<decimal-u64>`. Omitted
+seeds are selected once per request and sampling state remains request-local.

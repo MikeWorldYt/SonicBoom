@@ -1,0 +1,21 @@
+   Compiling SonicBoom v0.1.0 (/home/meme/Documentos/GitHub/SonicBoom)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.88s
+     Running unittests src/lib.rs (target/debug/deps/sonicboom-510f56c5c9aa44ea)
+
+running 1 test
+
+thread 'tts::providers::pocket_tts::tests::real_bundles_match_pinned_exporter_prompts_states_and_decoder' (1373850) panicked at src/tts/providers/pocket_tts.rs:2929:13:
+assertion `left == right` failed: pocket-tts-en: EOS/latent frame count
+  left: 320
+ right: 288
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test tts::providers::pocket_tts::tests::real_bundles_match_pinned_exporter_prompts_states_and_decoder ... FAILED
+
+failures:
+
+failures:
+    tts::providers::pocket_tts::tests::real_bundles_match_pinned_exporter_prompts_states_and_decoder
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 112 filtered out; finished in 1.34s
+
+error: test failed, to rerun pass `--lib`

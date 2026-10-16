@@ -1,0 +1,24 @@
+   Compiling SonicBoom v0.1.0 (/home/meme/Documentos/GitHub/SonicBoom)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.58s
+     Running tests/tts_request_isolation.rs (target/debug/deps/tts_request_isolation-4d414945503d001d)
+
+running 1 test
+01.wav: 0.00s, 0.00s audio
+02.wav: 0.00s, 0.00s audio
+03.wav: 0.00s, 0.00s audio
+04.wav: 0.00s, 0.00s audio
+05.wav: 0.00s, 0.00s audio
+06.wav: 0.00s, 0.00s audio
+07.wav: 0.00s, 0.00s audio
+08.wav: 0.00s, 0.00s audio
+09.wav: 0.00s, 0.00s audio
+10.wav: 0.00s, 0.00s audio
+11.wav: 0.00s, 0.00s audio
+Error: output directory must be fresh; create parent beforehand
+
+Caused by:
+    File exists (os error 17)
+test mock_sequence_preserves_independent_wavs_and_manifest ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.15s
+

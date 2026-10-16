@@ -1,0 +1,15 @@
+   Compiling SonicBoom v0.1.0 (/home/meme/Documentos/GitHub/SonicBoom)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.07s
+     Running unittests src/lib.rs (target/debug/deps/sonicboom-10ffc3a3d087ecb2)
+
+running 1 test
+pocket-tts-en: exporter latent max abs error 0; 9 frames, 17280 samples
+pocket-tts-es: exporter latent max abs error 0; 6 frames, 11520 samples
+pocket-tts-pt: exporter latent max abs error 0; 6 frames, 11520 samples
+pocket-tts-de: exporter latent max abs error 0; 18 frames, 34560 samples
+pocket-tts-it: exporter latent max abs error 0; 5 frames, 9600 samples
+pocket-tts-fr-24l: exporter latent max abs error 0; 12 frames, 23040 samples
+test tts::providers::pocket_tts::tests::real_bundles_match_pinned_exporter_prompts_states_and_decoder ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 112 filtered out; finished in 13.10s
+

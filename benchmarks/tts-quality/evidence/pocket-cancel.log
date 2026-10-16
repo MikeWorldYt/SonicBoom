@@ -1,0 +1,9 @@
+   Compiling SonicBoom v0.1.0 (/home/meme/Documentos/GitHub/SonicBoom)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.51s
+     Running unittests src/lib.rs (target/debug/deps/sonicboom-510f56c5c9aa44ea)
+
+running 1 test
+test tts::providers::pocket_tts::tests::real_bundle_request_rng_and_active_cancellation_are_isolated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 112 filtered out; finished in 6.26s
+

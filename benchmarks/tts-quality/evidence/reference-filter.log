@@ -1,0 +1,15 @@
+   Compiling SonicBoom v0.1.0 (/home/meme/Documentos/GitHub/SonicBoom)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.63s
+     Running unittests src/lib.rs (target/debug/deps/sonicboom-5ed3a878861bad04)
+
+running 3 tests
+44100->24000: 18kHz alias vs linear = -129.29 dB
+44100->24000: 13-20kHz sweep alias vs linear = -100.41 dB
+48000->24000: 13-20kHz sweep alias vs linear = -103.95 dB
+test tts::audio::reference_resampling_tests::reference_sweeps_reject_stopband_and_upsampling_preserves_tone ... ok
+48000->24000: 18kHz alias vs linear = -134.16 dB
+test tts::audio::reference_resampling_tests::reference_filter_rejects_aliases_and_preserves_passband ... ok
+test tts::audio::reference_resampling_tests::reference_duration_dc_silence_impulse_and_equal_rate ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 104 filtered out; finished in 2.39s
+

@@ -1,0 +1,15 @@
+npm notice run sonicboom-ui@0.1.0 build
+npm notice run npm run typecheck && vite build
+npm notice run sonicboom-ui@0.1.0 typecheck
+npm notice run node scripts/check-i18n.mjs && tsc --noEmit
+2 language catalogs: 456 messages, matching keys and parameters.
+vite v8.3.4 building client environment for production...
+transforming...
+✓ 55 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.38 kB │ gzip:  0.29 kB
+dist/assets/index-8VTEdlu_.css   15.63 kB │ gzip:  4.14 kB
+dist/assets/index-C08ZSCjY.js   186.08 kB │ gzip: 58.78 kB
+
+✓ built in 278ms

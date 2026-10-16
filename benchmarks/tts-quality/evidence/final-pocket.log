@@ -1,0 +1,123 @@
+    Blocking waiting for file lock on build directory
+   Compiling SonicBoom v0.1.0 (/home/meme/Documentos/GitHub/SonicBoom)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.50s
+     Running unittests src/lib.rs (target/debug/deps/sonicboom-510f56c5c9aa44ea)
+
+running 114 tests
+test engine::tests::legacy_requests_adapt_to_the_provider_contract ... ok
+test engine::tests::validates_synthesis_inputs_without_loading_a_model ... ok
+test tts::audio::tests::supported_formats_parse_case_insensitively ... ok
+test tts::control::tests::diagnostic_seed_preserves_full_u64_precision ... ok
+test tts::control::tests::scoped_control_is_restored_after_panics ... ok
+test tts::audio::tests::resampling_is_identity_at_equal_rates_and_scales_length ... ok
+test tts::audio::tests::unknown_formats_are_rejected_not_defaulted ... ok
+test tts::download::tests::commit_sha_validation ... ok
+test tts::download::tests::cached_file_with_wrong_size_is_rejected_before_hashing ... ok
+test tts::download::tests::builtin_manifest_is_complete_and_valid ... ok
+test tts::download::tests::builtin_manifest_carries_exact_sizes ... ok
+test tts::control::tests::cancellation_and_deadline_are_observed_at_checkpoints ... ok
+test tts::download::tests::known_matching_file_is_accepted ... ok
+test tts::download::tests::legacy_hash_only_manifest_loads_without_sizes ... ok
+test tts::download::tests::malformed_hash_is_rejected ... ok
+test tts::download::tests::download_rejects_mutable_revision_without_network ... ok
+test tts::audio::tests::opus_container_granules_track_audio_duration ... ok
+test tts::download::tests::manifest_shapes_must_not_mix ... ok
+test tts::download::tests::partial_manifest_is_rejected ... ok
+test tts::download::tests::resolve_trust_accepts_complete_custom_manifest ... ok
+test tts::download::tests::resolve_trust_couples_custom_revisions_to_manifests ... ok
+test tts::audio::tests::opus_encoder_produces_valid_ogg_container ... ok
+test tts::audio::tests::all_formats_encode_without_error ... ok
+test tts::download::tests::sha256_of_file_matches_known_digest ... ok
+test tts::download::tests::tampered_cached_file_is_rejected_without_tofu_fallback ... ok
+test tts::download::tests::unexpected_manifest_key_is_rejected ... ok
+test tts::download::tests::zero_size_is_rejected ... ok
+test tts::inference::tests::degenerate_model_geometry_is_rejected ... ok
+test tts::inference::tests::huge_and_boundary_durations_fail_before_allocation ... ok
+test tts::inference::tests::failure_messages_are_sanitized ... ok
+test tts::inference::tests::non_finite_and_non_positive_durations_fail ... ok
+test tts::inference::tests::latent_byte_budget_catches_small_chunk_attacks ... ok
+test tts::inference::tests::silence_and_request_budgets_use_checked_arithmetic ... ok
+test tts::inference::tests::valid_durations_derive_exact_lengths ... ok
+test tts::inference::tests::valid_lengths_match_the_legacy_formula_exactly ... ok
+test tts::providers::assets::tests::crash_cleanup_reaps_only_owned_dead_process_staging ... ok
+test tts::providers::assets::tests::downloads_and_verifies_a_pinned_file ... ignored, needs network: downloads one 4 KB manifest file from HuggingFace
+test tts::providers::assets::tests::absolute_and_parent_paths_are_rejected ... ok
+test tts::providers::assets::tests::huggingface_url_pins_revision ... ok
+test tts::providers::assets::tests::interrupted_staging_is_removed_on_drop ... ok
+test tts::providers::assets::tests::verification_metadata_recovers_and_detects_changed_assets ... ok
+test tts::providers::error::tests::error_codes_map_to_documented_http_status ... ok
+test tts::providers::error::tests::french_rejection_names_supported_languages ... ok
+test tts::providers::pocket_tts::tests::capabilities_advertise_verified_audio_prompt_languages ... ok
+test tts::providers::pocket_tts::tests::cloning_without_request_reference_audio_is_rejected ... ok
+test tts::download::tests::undersized_stream_fails ... ok
+test tts::providers::assets::tests::warm_cache_never_reports_a_download ... ok
+test tts::providers::pocket_tts::tests::conditioning_cache_is_isolated_by_model ... ok
+test tts::providers::pocket_tts::tests::delete_invalidates_only_the_matching_voice_entry ... ok
+test tts::providers::pocket_tts::tests::disabled_provider_reports_disabled_status ... ok
+test tts::providers::pocket_tts::tests::embeddings_codec_round_trips ... ok
+test tts::providers::pocket_tts::tests::english_and_spanish_pass_language_validation ... ok
+test tts::providers::pocket_tts::tests::every_model_accepts_only_its_own_language ... ok
+test tts::providers::pocket_tts::tests::gpu_requests_are_explicitly_unsupported ... ok
+test tts::providers::pocket_tts::tests::icl_and_xvector_modes_are_rejected_explicitly ... ok
+test tts::providers::pocket_tts::tests::loading_a_different_resident_bundle_fails_explicitly ... ok
+test tts::providers::pocket_tts::tests::latents_reservation_is_bounded_and_exact_for_ordinary_shapes ... ok
+test tts::providers::pocket_tts::tests::malformed_bundle_names_missing_members ... ok
+test tts::providers::pocket_tts::tests::manifest_pins_all_validated_bundles ... ok
+test tts::providers::pocket_tts::tests::npy_loader_reads_bos_vector ... ok
+test tts::providers::pocket_tts::tests::prepare_reference_rejects_non_audio_prompt_modes ... ok
+test tts::download::tests::oversized_stream_is_aborted_and_cleaned ... ok
+test tts::download::tests::hash_mismatch_never_reaches_final_path ... ok
+test tts::download::tests::verified_download_lands_at_final_path ... ok
+test tts::providers::pocket_tts::tests::model_language_pairs_are_isolated ... ok
+test tts::providers::pocket_tts::tests::real_bundle_matches_phase_a_reference ... ignored
+test tts::providers::pocket_tts::tests::real_bundle_new_languages_match_tokenizers_and_synthesize ... ignored
+test tts::providers::pocket_tts::tests::real_bundle_request_rng_and_active_cancellation_are_isolated ... ignored, requires authorized reference and real English ONNX bundle
+test tts::providers::pocket_tts::tests::real_bundle_synthesizes_audible_cloned_speech ... ignored
+test tts::providers::pocket_tts::tests::real_bundles_match_pinned_exporter_prompts_states_and_decoder ... ignored, requires all six verified Pocket ONNX bundles
+test tts::providers::pocket_tts::tests::push_states_rebuilds_inputs_without_changing_state ... ok
+test tts::providers::pocket_tts::tests::reconfigure_drops_resident_state_and_keeps_disabled_default ... ok
+test tts::providers::pocket_tts::tests::prompt_preparation_matches_upstream ... ok
+test tts::providers::pocket_tts::tests::retired_gpt_model_ids_are_never_rerouted ... ok
+test tts::providers::pocket_tts::tests::synthetic_unigram_model_encodes_and_decodes ... ok
+test tts::providers::pocket_tts::tests::transcript_is_optional_for_audio_prompt ... ok
+test tts::providers::pocket_tts::tests::unvalidated_variants_fail_explicitly ... ok
+test tts::providers::pool::tests::older_configuration_cannot_restore_a_retired_provider ... ok
+test tts::providers::pool::tests::sync_keeps_healthy_singletons_when_config_is_unchanged ... ok
+test tts::providers::pool::tests::pool_registers_all_providers ... ok
+test tts::providers::registry::tests::empty_model_selects_supertonic_for_backward_compatibility ... ok
+test tts::providers::registry::tests::provider_failure_does_not_remove_sibling_providers ... ok
+test tts::providers::registry::tests::routing_selects_the_owning_provider ... ok
+test tts::providers::registry::tests::unknown_models_are_rejected_with_known_model_list ... ok
+test tts::providers::supertonic::tests::legacy_voice_aliases_map_without_silent_defaults ... ok
+test tts::providers::supertonic::tests::unloaded_supertonic_reports_loading_not_silent_audio ... ok
+test tts::providers::supertonic::tests::unknown_supertonic_model_is_rejected ... ok
+test tts::providers::types::tests::device_preference_round_trips ... ok
+test tts::providers::worker::tests::distinct_references_have_distinct_keys ... ok
+test tts::providers::types::tests::pcm_audio_reports_audibility_and_duration ... ok
+test tts::providers::worker::tests::conditioning_cache_evicts_least_recently_used ... ok
+test tts::providers::worker::tests::single_key_removal_is_idempotent ... ok
+test tts::providers::worker::tests::model_invalidation_drops_only_that_revision ... ok
+test tts::text::tests::cjk_text_without_spaces_is_bounded ... ok
+test tts::text::tests::chunks_never_exceed_hard_limit_on_small_limit ... ok
+test tts::providers::pocket_tts::tests::unverified_languages_are_explicitly_unsupported ... ok
+test tts::text::tests::emoji_text_is_bounded_by_chars_not_bytes ... ok
+test tts::text::tests::long_punctuation_free_ascii_is_bounded ... ok
+test tts::text::tests::long_single_word_without_whitespace_is_bounded ... ok
+test tts::text::tests::normal_punctuation_splits ... ok
+test tts::text::tests::mixed_unicode_long_sentence_is_bounded ... ok
+test tts::text::tests::short_text_is_single_chunk ... ok
+test tts::voices::tests::consent_basis_is_required ... ok
+test tts::voices::tests::reference_bounds_are_enforced ... ok
+test tts::voices::tests::traversal_ids_are_rejected ... ok
+test tts::download::tests::content_length_mismatch_is_rejected ... ok
+test tts::providers::pocket_tts::tests::concurrent_references_use_distinct_cache_keys ... ok
+test tts::providers::pocket_tts::tests::reference_validation_bounds ... ok
+test tts::voices::tests::create_get_delete_round_trip ... ok
+test tts::audio::reference_resampling_tests::reference_sweeps_reject_stopband_and_upsampling_preserves_tone ... ok
+test tts::audio::tests::opus_streaming_matches_two_phase_reference_byte_for_byte ... ok
+test tts::download::tests::download_timeout_cleans_temporary_file ... ok
+test tts::audio::reference_resampling_tests::reference_filter_rejects_aliases_and_preserves_passband ... ok
+test tts::audio::reference_resampling_tests::reference_duration_dc_silence_impulse_and_equal_rate ... ok
+
+test result: ok. 108 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 2.51s
+

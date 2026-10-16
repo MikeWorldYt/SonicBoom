@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.53s
+     Running tests/qwen_gguf_artifacts.rs (target/debug/deps/qwen_gguf_artifacts-22373cc228fd7e10)
+
+running 1 test
+ORT ORT Build Info: git-branch=rel-1.28.0, git-commit-id=da9b5e3, fp8-kv-cache=1, build type=Release: encoded 13 frames; decoded 24960 finite samples
+test int8_onnx_components_execute_on_shared_runtime ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 3.97s
+

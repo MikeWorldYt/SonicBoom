@@ -1,0 +1,342 @@
+{
+  "baseline_git_sha": "35416e8",
+  "overall": "PARTIAL: core isolation fixes verified; listening and cross-build/device fidelity gates remain open",
+  "environment": {
+    "os": "Linux-7.2.9-2-cachyos-x86_64-with-glibc2.44",
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)",
+    "node": "v26.11.1",
+    "cpu": "x86_64",
+    "device": "CPU",
+    "inference_threads": 4,
+    "gpu": "NOT RUN"
+  },
+  "checks": [
+    {
+      "command": "cargo test",
+      "status": "PASS",
+      "evidence": "evidence/final-cargo-test.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.72s",
+        "test result: ok. 170 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 10.82s",
+        "test result: ok. 228 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.10s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.55s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "command": "cargo clippy --all-targets -- -D warnings",
+      "status": "PASS",
+      "evidence": "evidence/final-clippy.log",
+      "summary": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 25.96s"
+      ]
+    },
+    {
+      "command": "cargo test --no-default-features --lib",
+      "status": "PASS",
+      "evidence": "evidence/final-minimal.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.30s",
+        "test result: ok. 105 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 2.72s"
+      ]
+    },
+    {
+      "command": "cargo test --lib --no-default-features --features pocket-tts",
+      "status": "PASS",
+      "evidence": "evidence/final-pocket.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.50s",
+        "test result: ok. 108 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 2.51s"
+      ]
+    },
+    {
+      "command": "cargo test --lib --no-default-features --features qwen-gguf",
+      "status": "PASS",
+      "evidence": "evidence/final-qwen.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.46s",
+        "test result: ok. 131 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 10.07s"
+      ]
+    },
+    {
+      "command": "cd frontend && npm test",
+      "status": "PASS",
+      "evidence": "evidence/final-frontend-tests.log",
+      "summary": [
+        "ℹ tests 17",
+        "ℹ pass 17",
+        "ℹ fail 0",
+        "ℹ tests 4",
+        "ℹ pass 4",
+        "ℹ fail 0"
+      ]
+    },
+    {
+      "command": "cd frontend && npm run typecheck",
+      "status": "PASS",
+      "evidence": "evidence/final-frontend-typecheck.log",
+      "summary": [
+        "2 language catalogs: 460 messages, matching keys and parameters."
+      ]
+    },
+    {
+      "command": "cd frontend && npm run build",
+      "status": "PASS",
+      "evidence": "evidence/final-frontend-build.log",
+      "summary": [
+        "2 language catalogs: 460 messages, matching keys and parameters.",
+        "✓ built in 543ms"
+      ]
+    },
+    {
+      "command": "cargo test --no-default-features --features server --bin SonicBoom mock_http_jobs_keep_inputs_owners_failures_and_cancellation_isolated",
+      "status": "PASS",
+      "evidence": "evidence/final-bounded-http-mock.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.52s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 1.02s"
+      ]
+    },
+    {
+      "command": "QWEN_GGUF_MODEL_DIR=models/qwen3-tts-1.7b-gguf cargo test --no-default-features --features qwen-gguf --test qwen_gguf_artifacts icl_prompt_exactly_matches_pinned_upstream_fixture -- --ignored --nocapture",
+      "status": "PASS",
+      "evidence": "evidence/qwen-prompt.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.77s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 3.43s"
+      ]
+    },
+    {
+      "command": "QWEN_GGUF_MODEL_DIR=models/qwen3-tts-1.7b-gguf cargo test --no-default-features --features qwen-gguf --test qwen_gguf_artifacts int8_onnx_components_execute_on_shared_runtime -- --ignored --nocapture",
+      "status": "PASS",
+      "evidence": "evidence/qwen-codec.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.53s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 3.97s"
+      ]
+    },
+    {
+      "command": "QWEN_GGUF_MODEL_DIR=models/qwen3-tts-1.7b-gguf QWEN_REFERENCE_WAV=benchmarks/tts-quality/fixtures/synthetic-sin-hola.wav QWEN_REFERENCE_TRANSCRIPT='La lluvia cae sobre la ciudad.' cargo test --no-default-features --features qwen-gguf --test qwen_gguf_artifacts native_worker_reuses_conditioning_and_recovers_after_cancellation -- --ignored --nocapture",
+      "status": "PASS",
+      "evidence": "evidence/qwen-cancel.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.63s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 224.45s"
+      ]
+    },
+    {
+      "command": "POCKET_TTS_BUNDLE_DIR=models/pocket-tts POCKET_TTS_REF_WAV=benchmarks/pocket/results/2026-10-15-bc250/reference-espeak.wav cargo test --no-default-features --features pocket-tts --lib real_bundle_request_rng_and_active_cancellation_are_isolated -- --ignored --nocapture",
+      "status": "PASS",
+      "evidence": "evidence/pocket-cancel.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.51s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 112 filtered out; finished in 6.26s"
+      ]
+    },
+    {
+      "command": "POCKET_TTS_BUNDLE_DIR=models/pocket-tts ORT_DYLIB_PATH=PINNED_PYTHON_CPU_LIBRARY cargo test --no-default-features --features pocket-tts,ort/load-dynamic --lib real_bundles_match_pinned_exporter_prompts_states_and_decoder -- --ignored --nocapture",
+      "status": "PASS",
+      "evidence": "evidence/pocket-exporter-same-runtime.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.07s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 112 filtered out; finished in 13.10s"
+      ]
+    },
+    {
+      "command": "cargo test --no-default-features --lib reference_resampling_tests -- --nocapture",
+      "status": "PASS",
+      "evidence": "evidence/reference-filter.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.63s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 104 filtered out; finished in 2.39s"
+      ]
+    },
+    {
+      "status": "FAIL",
+      "scope": "cross-build numeric comparison; fixture runtime differs from production static ORT",
+      "evidence": "evidence/pocket-cross-ort131.log"
+    },
+    {
+      "status": "FAIL",
+      "scope": "cross-build numeric comparison; fixture runtime differs from production static ORT",
+      "evidence": "evidence/pocket-cross-ort128.log"
+    },
+    {
+      "command": "cargo test --all-targets",
+      "status": "PASS",
+      "evidence": "evidence/final-default-tests.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.16s",
+        "test result: ok. 170 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 11.53s",
+        "test result: ok. 228 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.21s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.72s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "command": "cargo test --no-default-features --test tts_request_isolation",
+      "status": "PASS",
+      "evidence": "evidence/final-audit-mock.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.58s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.15s"
+      ]
+    },
+    {
+      "command": "cargo test --no-default-features --features server --bin SonicBoom reference_health",
+      "status": "PASS",
+      "evidence": "evidence/reference-health.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.18s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 205 filtered out; finished in 0.02s"
+      ]
+    },
+    {
+      "command": "cargo test --no-default-features --lib diagnostic_seed_preserves_full_u64_precision",
+      "status": "PASS",
+      "evidence": "evidence/diagnostic-seed.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.59s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 107 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "command": "cargo run --no-default-features --bin tts-quality-audit -- --help",
+      "status": "PASS",
+      "evidence": "evidence/audit-help.log",
+      "summary": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.48s"
+      ]
+    },
+    {
+      "status": "PASS",
+      "scope": "strict Pocket exporter comparison: matching runtime required",
+      "evidence": "evidence/same-runtime-full-hashes.log",
+      "summary": [
+        "pocket-tts-en: exporter latent max abs error 0; 9 frames, 17280 samples",
+        "pocket-tts-es: exporter latent max abs error 0; 6 frames, 11520 samples",
+        "pocket-tts-pt: exporter latent max abs error 0; 6 frames, 11520 samples",
+        "pocket-tts-de: exporter latent max abs error 0; 18 frames, 34560 samples",
+        "pocket-tts-it: exporter latent max abs error 0; 5 frames, 9600 samples",
+        "pocket-tts-fr-24l: exporter latent max abs error 0; 12 frames, 23040 samples",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 113 filtered out; finished in 15.44s"
+      ]
+    },
+    {
+      "status": "FAIL",
+      "scope": "strict Pocket exporter comparison: matching runtime required",
+      "evidence": "evidence/static-runtime-build-rejected.log",
+      "summary": [
+        "assertion `left == right` failed: export fixture/runtime build mismatch: run the documented ort/load-dynamic comparison against the same pinned Python CPU library",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 113 filtered out; finished in 0.00s"
+      ]
+    }
+  ],
+  "format": "PASS: cargo fmt --all -- --check",
+  "layer_diagnosis": {
+    "ui": "CONFIRMED stale job identity/reused audio visibility; fixed with immutable input, explicit resume and epoch guards",
+    "api": "Mock HTTP identities, failures, active cancellation, deadline and private downloads PASS",
+    "codec": "All runner WAV counts equal provider PCM lengths; Qwen native ONNX execution PASS",
+    "reference_prompt": "Qwen exact upstream token/prompt/trailing fixture PASS; no transcript/code deletion",
+    "model_state": "Qwen and Pocket CPU warm/cold and active cancellation recovery PASS for tested cases; no unexplained prior-request dependence",
+    "speech_content": "ASR available; human listening NOT RUN; no perceptual parity claim"
+  },
+  "qwen": {
+    "requests": 9,
+    "warm_cold_test_hashes_match": true,
+    "alternating_references_reproduce_independently": true,
+    "asr": "qwen-final/asr-whisper.jsonl",
+    "scores": "qwen-final/asr-scores-v2.jsonl",
+    "extended_requests": 5,
+    "extended_asr_scores": "qwen-extended/asr-scores.jsonl"
+  },
+  "pocket": {
+    "ordered_requests": 15,
+    "warm_cold_test_hashes_match": true,
+    "alternating_references_reproduce_independently": true,
+    "grid_configurations": 72,
+    "grid_clips": 216,
+    "configurations_failed": 0,
+    "above_full_scale_clips": 31,
+    "max_peak": 1.5222703218460083,
+    "max_out_of_range_fraction": 0.0014039855072463768,
+    "same_runtime_exporter_full_latents_and_pcm": "PASS for all six bundles",
+    "production_static_vs_python_numeric_parity": "FAIL: distinct ORT builds, including EOS differences",
+    "quality_table": "pocket-grid-final/quality.csv",
+    "defaults_changed": false,
+    "long_segmented_request": {
+      "expected_upstream_chunks": 2,
+      "target_words": 42,
+      "sample_count": 339840,
+      "duration_secs": 14.16,
+      "elapsed_secs": 8.331614995,
+      "rtf": 0.5883908894774011,
+      "asr_wer": 0.0,
+      "asr_cer": 0.0,
+      "manual_listening": "NOT RUN",
+      "manifest": "pocket-long-final/manifest.jsonl"
+    }
+  },
+  "not_run": [
+    "human listening / naturalness / speaker similarity",
+    "real-model HTTP and live-browser boundary comparisons",
+    "native errors after partial inference",
+    "GPU/Vulkan/CUDA and macOS/Windows",
+    "Qwen intermediate logits and hidden-state numerical comparison",
+    "higher-precision speech comparisons",
+    "controlled startup/memory benchmarks",
+    "Unicode speech-content quality after byte decode fix",
+    "full random-seed and noisy/silent reference matrix",
+    "learned speech/noise coverage and language mismatch detection",
+    "complete Pocket per-chunk frame/cache/EOS telemetry"
+  ],
+  "commits": [
+    "4cda612 Record a long Pocket generation spanning two text chunks",
+    "1c22c38 Give completed audio downloads immutable job-specific filenames",
+    "1126c31 Record explicit Pocket audio-prompt mode in audit requests",
+    "30b918f Expose precise request seeds and make diagnostic runs reproducible",
+    "b4b4649 Verify duplicate-looking HTTP requests through serialized inference admission",
+    "ae6e0be Record Qwen punctuation and multi-sentence CPU comparisons",
+    "61ac4d6 Ignore stale cancellation acknowledgements after a new request",
+    "7b3242d Report reference health and show conservative recording warnings",
+    "f5b3a17 Record six-language Pocket quality grid and isolation evidence",
+    "7030d83 Record Qwen CPU warm-cold and alternating-reference audio evidence",
+    "938a774 Add pinned offline ASR scoring and parameter-grid summaries",
+    "d2ed276 Preserve existing Pocket frame progress stages",
+    "544e26a Restore Pocket UTF-8 fallback decoding and verify six exporter pipelines",
+    "e168fc4 Quantify reference resampler stopband rejection with sweeps",
+    "f700e68 Exercise full HTTP job lifecycle with deterministic model-independent synthesis",
+    "80e082c Detach obsolete playback before removal and preserve late cancellation status",
+    "e5857cf Verify exact ICL prompt tensors against the pinned Qwen builder",
+    "ef5927a Extend opt-in quality audits with parameter grids and reference alternation",
+    "58ec117 Isolate Pocket random streams and band-limit cached reference conditioning",
+    "8d6930f Keep completed job audio immutable and test concurrent private downloads",
+    "071a51c Explain previous-job ownership and expose compact generation diagnostics",
+    "4a82db1 Add Rust request-isolation audit runner with fresh WAV manifests",
+    "b111bdb Bind resumable synthesis jobs to immutable inputs and clear stale audio"
+  ],
+  "pr_url": null,
+  "reference_health": {
+    "status": "PASS",
+    "scope": "creation response and conservative UI warnings; non-destructive, no raw telemetry"
+  },
+  "seed_diagnostics": {
+    "status": "PASS",
+    "encoding": "decimal string preserves u64 precision",
+    "reproduction": "AUDIT_SEED=<u64> or ProviderRequest.seed"
+  },
+  "code_head": "4cda612a67f47292837b9accfe5424f4b7a291ef",
+  "sources_rechecked": {
+    "qwen_source": "74feb581bc8cefb835fc608107e857036d7580a1 (MIT notice checked)",
+    "pocket_source": "ec569b2dd3fec4a601b391aace185791e92b3785 (MIT notice checked)",
+    "pocket_export": "58a6d00cf13d239b6748cb0769f35c580a8f606c (CC-BY-4.0 card checked)"
+  }
+}

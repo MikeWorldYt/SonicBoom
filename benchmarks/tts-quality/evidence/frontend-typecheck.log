@@ -1,0 +1,3 @@
+npm notice run sonicboom-ui@0.1.0 typecheck
+npm notice run node scripts/check-i18n.mjs && tsc --noEmit
+2 language catalogs: 456 messages, matching keys and parameters.

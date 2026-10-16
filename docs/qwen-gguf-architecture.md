@@ -174,3 +174,43 @@ then run `python scripts/audit_qwen_onnx.py MODEL_DIR`. It reports hashes, opset
 tensor contracts, external-data locations and checker errors; a failed graph
 returns a nonzero status. Only present graphs are inspected, so success does not
 prove bundle completeness or inference compatibility.
+
+## Request isolation follow-up (2026-10-16)
+
+The earlier finite-PCM/EOS results establish executable tensor contracts, **not
+speech-content or perceptual parity**. See `benchmarks/tts-quality/README.md` for
+request-isolation evidence and remaining acceptance gates.
+
+Re-inspected the checkout at `74feb581bc8cefb835fc608107e857036d7580a1`
+(clean git status): `inference/talker.py` creates positions as
+`[arange(position, position+n)] * 3 + [zeros(n)]`; its step uses `[p,p,p,0]`.
+The native shim's plane-major indexing and zero fourth plane match this source.
+It extracts the final requested hidden vector via `llama_get_embeddings_ith(-1)`.
+This is a source comparison, not a new numerical intermediate-tensor parity run.
+
+`prompt_builder.py` tokenizes `ref_text + text` together, appends TTS_EOS,
+fuses the first text rows with codec BOS plus reference acoustic frames, pads
+exhausted text and carries remaining text embeddings into generation. The Rust
+conditioning path retains these semantics. Removing the reference transcript or
+reference codes would change the model contract and is not a remediation.
+`predictor.py` clears its context per frame and offsets codebook sampling by
+`(codebook-1)*2048`, matching the Rust path. `decoder.py` uses `valid_samples`
+for intermediate groups and all final residual samples on final flush, matching
+`Codec::decode`; each call constructs fresh decoder history. No blind leading
+trim or second residual append has been introduced.
+
+Both native contexts reset before generation; request-local sampler history and
+seeds remain independent of cached speaker/codes/transcript conditioning. The
+cache now includes the reference preprocessing version. Actual speech-content,
+reference-echo, cross-device and intermediate-logit parity gates remain separate
+from this source-level review. X-vector stays disabled: source support alone
+does not validate converted-asset contracts, speaker fidelity or leakage behavior.
+
+The opt-in `icl_prompt_exactly_matches_pinned_upstream_fixture` now validates
+exact token IDs and complete prompt/trailing f32 hashes for both padding and
+trailing-text branches against the real pinned Python PromptBuilder. The real
+CPU worker cancellation test waits for a generated frame (not a pre-cancelled
+request) and reproduces first PCM afterward. The final same-seed warm/cold and
+A/B/A/B synthetic-reference run completed; see
+`benchmarks/tts-quality/REPORT.md` and its WAV index. These outcomes do not turn
+ASR hypotheses or finite PCM into a listening-quality acceptance result.

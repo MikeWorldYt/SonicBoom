@@ -1,0 +1,5 @@
+   Compiling SonicBoom v0.1.0 (/home/meme/Documentos/GitHub/SonicBoom)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.48s
+     Running `target/debug/tts-quality-audit --help`
+tts-quality-audit PROVIDER MODEL LANGUAGE MODEL_DIR NEW_OUTPUT_DIR [AUTHORIZED_REFERENCE_WAV]
+Providers: mock, pocket, qwen (feature required). Reference positional argument explicitly certifies authorized diagnostic use. Qwen requires exact QWEN_REFERENCE_TRANSCRIPT. No outputs overwritten. CPU, default seed 42 (AUDIT_SEED overrides), default sampling. Writes hashed inputs only.

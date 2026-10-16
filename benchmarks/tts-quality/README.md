@@ -17,11 +17,10 @@ Native inspection: Qwen calls `runtime.reset()` before generation; it clears bot
 contexts. Predictor clears each frame. Pocket clones prefilled state for each
 chunk and initializes decoder state per decode. No model-state cause is confirmed.
 
-Pending gates (NOT RUN): real-model ordered warm/cold sequence, actual native
-cancellation/error recovery, concurrent HTTP callers, authorized alternating
-references, ASR WER/CER, listening review, parameter grid and GPU comparisons.
-Local model directories exist; presence alone does not prove usable assets or
-reference consent. No speech-quality parity or changed sampling defaults claimed.
+Current completed runs, numerical runtime-build failures and remaining gates are
+reported in [REPORT.md](REPORT.md) and [verification.json](verification.json).
+Real CPU weights were available and executed; model directories alone were not
+counted as successful validation. Human listening and GPU acceptance remain open.
 
 ## Rust diagnostic runner
 
@@ -42,3 +41,99 @@ Unexposed Pocket metrics are null/unknown, not invented. `listen.html` provides
 playable clips. Same WAV hashes establish determinism only, never word accuracy.
 The mock test verifies independent files, identities, WAV lengths and no overwrite;
 it does not exercise real HTTP jobs or infer speech correctness from mock signals.
+
+## Offline parameter and content evaluation
+
+`pocket_grid.py RUNNER MODEL_DIR AUTHORIZED_REFERENCE NEW_OUTPUT` runs the Rust
+binary for every supported language and all steps {1,2,4,8}/temperatures
+{0.5,0.7,0.9}, using short, medium and multi-sentence targets local to each model.
+It writes one run status per combination and never downloads models. `AUDIT_TEXTS_JSON`
+overrides the direct runner's fixture array; `AUDIT_POCKET_STEPS` and
+`AUDIT_POCKET_TEMPERATURE` select validated benchmark settings, without changing
+server defaults. The grid is serialized; model startup is outside per-request
+RTF. Resource/memory attribution and perceptual review require separate measurement.
+
+`score_asr.py MANIFEST TARGETS_JSON ASR_JSONL NEW_OUTPUT` accepts explicitly
+provided offline ASR results (schema in its docstring), requires an ASR model and
+revision, checks exact target hashes, joins by request UUID and reports NFC,
+case-folded, punctuation-separated WER/CER with insertions/deletions/substitutions.
+Accents remain significant. It explicitly flags `hola test` for a `test` request
+and requires manual review of suspect clips; it never turns ASR guesses into a
+passing content assertion. No production Python or ASR dependency is added.
+
+Local baseline references use the already documented eSpeak NG synthetic clip
+in `benchmarks/pocket/results/2026-10-15-bc250/`; no human recording is included.
+It does not contain `hola`. Its exact transcript and provenance are recorded in
+that directory's `summary.json`. The synthetic Spanish pair in `fixtures/` supplies both the containing-`hola`
+and non-containing-`hola` cases without a human recording.
+
+For alternating references, explicitly set `AUDIT_ALT_REFERENCE_WAV` and (Qwen)
+`AUDIT_ALT_REFERENCE_TRANSCRIPT`. Four extra requests run A/B/A/B at fixed seed
+with reference hashes and independent voice IDs. A and B never come from generated
+audio. `fixtures/README.md` identifies the synthetic `hola`-containing fixture.
+The manifest includes the executable SHA-256 and ORT build, so runtime git HEAD
+alone is not mistaken for a precise inference-build identity.
+
+Active native cancellation regression (no pre-cancelled substitute):
+
+```
+POCKET_TTS_BUNDLE_DIR=models/pocket-tts POCKET_TTS_REF_WAV=benchmarks/pocket/results/2026-10-15-bc250/reference-espeak.wav cargo test --no-default-features --features pocket-tts --lib real_bundle_request_rng_and_active_cancellation_are_isolated -- --ignored --nocapture
+QWEN_GGUF_MODEL_DIR=models/qwen3-tts-1.7b-gguf QWEN_REFERENCE_WAV=AUTHORIZED.wav QWEN_REFERENCE_TRANSCRIPT='exact transcript' cargo test --no-default-features --features qwen-gguf --test qwen_gguf_artifacts native_worker_reuses_conditioning_and_recovers_after_cancellation -- --ignored --nocapture
+```
+
+Each watcher waits for at least one real inference frame before cancellation and
+fails if that never happens. Pocket also checks continued random streams across
+identical chunks, deterministic request restart, and fresh decoder histories.
+
+The optional offline ASR helper is `transcribe_whisper.py LOCAL_MODEL AUDIT_ROOT
+NEW_JSONL`. Development environment used: faster-whisper 1.2.1, CTranslate2 4.8.3,
+PyAV **16.0.1** (PyAV 19 fails this faster-whisper decoder API), CPU INT8,
+2 threads, beam 5, forced fixture language, no VAD filtering and no previous-text
+conditioning. Model: `Systran/faster-whisper-tiny` revision
+`d90ca5fe260221311c53c58e660288d3deb8d356`; actual binary SHA-256 is recorded in
+every ASR row. Download this development-only model explicitly before running;
+the helper only opens local files. No ASR or Python package enters SonicBoom's
+Cargo dependency graph or default CI.
+
+`summarize_grid.py GRID_ROOT TARGETS_JSON ASR_JSONL NEW_CSV` aggregates pinned ASR
+scores and audio health/RTF for each language/step/temperature. These are noisy
+ASR diagnostics on synthetic reference voices. Timings include concurrent audit
+load and are not controlled speed benchmarks. Manual naturalness, speaker
+similarity and suspect-clip listening remain separate gates.
+
+### Pocket independent exporter comparison
+
+`pocket_export_fixture.py PINNED_RUNTIME MODEL_ROOT NEW_JSON` calls the pinned
+exporter's actual code on deterministic synthetic 24 kHz PCM, temperature zero
+and LSD=1; it does not reimplement its generator. It records tokenizer/chunks,
+latents and decoder samples for all six bundles. `fixtures/pocket-export.json`
+uses Python ORT 1.31; `pocket-export-ort128.json` records ORT 1.28. Both differ
+from the shipped static ORT build numerically. Do not describe those failed
+cross-build comparisons as passing runtime parity.
+
+For controlled parity, install `requirements-offline.txt`, use its Python ORT
+shared library, and explicitly run:
+
+```
+POCKET_TTS_BUNDLE_DIR=models/pocket-tts ORT_DYLIB_PATH=/absolute/path/to/venv/lib/python3.14/site-packages/onnxruntime/capi/libonnxruntime.so.1.28.0 cargo test --no-default-features --features pocket-tts,ort/load-dynamic --lib real_bundles_match_pinned_exporter_prompts_states_and_decoder -- --ignored --nocapture
+```
+
+The test remains a hard failure with a mismatched runtime build. This opt-in
+comparison does not alter the production feature defaults or add a production
+Python dependency. The Unicode fix affects byte-fallback text. The parameter
+grid corpus contained no byte-fallback pieces in any language (see
+`pocket-grid-final/byte-fallback-audit.json`), so its recorded grid remains useful
+for those targets; it does not represent post-fix Unicode speech measurements.
+
+`AUDIT_SEED=<decimal-u64>` overrides the runner's default 42 and is recorded in
+each row. This also reproduces the exact decimal seed shown by Qwen/Pocket job
+diagnostics. To explore another seed, use a new output directory; never overwrite
+an earlier run. Fixed-seed comparisons must keep model/runtime build and device
+identical.
+
+Earlier Pocket manifest rows with `mode: null` recorded an omitted request mode;
+the provider's validated effective default was `audio_prompt`. New runner requests
+set it explicitly. Null Pocket frame/cache/EOS/chunk fields mean those metrics
+were not exposed by the provider return type, not fabricated values. Full detailed
+per-chunk trace plumbing remains an open audit enhancement; the independent
+exporter comparison records actual latent frame counts and complete decoder data.

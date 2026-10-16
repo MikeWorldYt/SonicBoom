@@ -1,0 +1,10 @@
+   Compiling SonicBoom v0.1.0 (/home/meme/Documentos/GitHub/SonicBoom)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.18s
+     Running unittests src/main.rs (target/debug/deps/SonicBoom-327fad8ecffd685b)
+
+running 2 tests
+test api::voices::tests::reference_health_warns_without_modifying_audio_or_logging_content ... ok
+test api::tests::voice_upload_returns_non_destructive_reference_health_warnings ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 205 filtered out; finished in 0.02s
+

@@ -1,0 +1,55 @@
+npm notice run sonicboom-ui@0.1.0 test
+npm notice run node --experimental-strip-types --import ./tests/register-resolver.mjs --import ./tests/setup-dom.mjs --test tests/pocketActivation.test.ts tests/studioRefresh.test.ts tests/synthesisIsolation.test.ts && node --test tests/engineCard.test.mjs
+(node:1369034) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1369034) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+✔ every supported Pocket model is enabled and selected atomically at the latest revision (1.874481ms)
+✔ conflicting settings revisions retry the explicit selection once (0.445337ms)
+✔ unsupported bundles never read or write configuration (0.388337ms)
+✔ authentication failures propagate without retry or unrelated configuration writes (1.834953ms)
+✔ a second conflict is reported instead of retrying indefinitely (0.571604ms)
+[Vue warn]: onMounted is called when there is no active component instance to be associated with. Lifecycle injection APIs can only be used during execution of setup(). If you are using async setup(), make sure to register lifecycle hooks before the first await statement.
+[Vue warn]: onUnmounted is called when there is no active component instance to be associated with. Lifecycle injection APIs can only be used during execution of setup(). If you are using async setup(), make sure to register lifecycle hooks before the first await statement.
+[Vue warn]: onMounted is called when there is no active component instance to be associated with. Lifecycle injection APIs can only be used during execution of setup(). If you are using async setup(), make sure to register lifecycle hooks before the first await statement.
+[Vue warn]: onUnmounted is called when there is no active component instance to be associated with. Lifecycle injection APIs can only be used during execution of setup(). If you are using async setup(), make sure to register lifecycle hooks before the first await statement.
+[Vue warn]: onMounted is called when there is no active component instance to be associated with. Lifecycle injection APIs can only be used during execution of setup(). If you are using async setup(), make sure to register lifecycle hooks before the first await statement.
+[Vue warn]: onUnmounted is called when there is no active component instance to be associated with. Lifecycle injection APIs can only be used during execution of setup(). If you are using async setup(), make sure to register lifecycle hooks before the first await statement.
+[Vue warn]: onMounted is called when there is no active component instance to be associated with. Lifecycle injection APIs can only be used during execution of setup(). If you are using async setup(), make sure to register lifecycle hooks before the first await statement.
+[Vue warn]: onUnmounted is called when there is no active component instance to be associated with. Lifecycle injection APIs can only be used during execution of setup(). If you are using async setup(), make sure to register lifecycle hooks before the first await statement.
+(node:1369035) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1369035) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+✔ slow metadata ticks every sixth fast tick (1.070966ms)
+✔ immutable built-in voices fetch once per readiness change, not every tick (4.748822ms)
+✔ voice list refreshes on slow ticks and explicit calls only (2.18091ms)
+✔ stale generations never overwrite state and never reject (1.386904ms)
+✔ failed requests record errors without unhandled rejections (0.855593ms)
+(node:1369036) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1369036) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+✔ hola -> test -> mundo get independent jobs and old audio clears immediately (49.025633ms)
+✔ changed text, voice, model and preview cannot implicitly resume a failed download (2.196756ms)
+✔ repeated clicks submit once; teardown prevents late audio publication (2.094957ms)
+✔ API maps exact body, language and profile versus built-in voice (0.961094ms)
+✔ confirmed cancellation clears resumability and permits a distinct new job (1.400477ms)
+✔ server failure retains error and never fetches audio; next request is new (0.939031ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 343.485747
+✔ ready English exposes activation buttons for all five other languages (8.208363ms)
+✔ disabled provider offers activation for every supported model (1.236481ms)
+✔ loading selection is not labeled active and prevents overlapping switches (1.158811ms)
+✔ Spanish activation controls and loading help are localized (0.981728ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 752.632115

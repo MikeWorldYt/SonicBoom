@@ -1,0 +1,19 @@
+   Compiling SonicBoom v0.1.0 (/home/meme/Documentos/GitHub/SonicBoom)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.07s
+     Running unittests src/lib.rs (target/debug/deps/sonicboom-510f56c5c9aa44ea)
+
+running 1 test
+
+thread 'tts::providers::pocket_tts::tests::real_bundles_match_pinned_exporter_prompts_states_and_decoder' (1372471) panicked at src/tts/providers/pocket_tts.rs:2938:17:
+pocket-tts-en: latent 0: -0.49609718 vs -0.51529354
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test tts::providers::pocket_tts::tests::real_bundles_match_pinned_exporter_prompts_states_and_decoder ... FAILED
+
+failures:
+
+failures:
+    tts::providers::pocket_tts::tests::real_bundles_match_pinned_exporter_prompts_states_and_decoder
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 112 filtered out; finished in 1.17s
+
+error: test failed, to rerun pass `--lib`

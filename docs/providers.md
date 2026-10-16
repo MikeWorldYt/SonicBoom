@@ -333,3 +333,54 @@ GGUF CPU can remain substantially slower than real-time (RTF ~26 measured);
 use jobs rather than raising an HTTP timeout alone. Measured resident/peak RAM
 can be several GB per model; see the current benchmark rows before enabling
 multiple backends.
+
+### Audio isolation and quality follow-up (2026-10-16)
+
+Use `tts-quality-audit --help` (Rust binary) and the commands in
+`benchmarks/tts-quality/README.md` for independent direct-provider WAV manifests.
+The UI now separates new submission from explicitly resuming the stored previous
+input; a changed text/model/voice cannot silently resume an older job. A new
+submission clears and releases old audio, and disposal invalidates callbacks.
+Cancellation acknowledgement does not imply native completion.
+
+Qwen remains **1.7B Base ICL only**. Provide an authorized clean reference
+(3–10 seconds is a useful starting range, subject to provider bounds) and its
+exact transcript, punctuation and language. Transcript mismatch and reference
+utterance echo are different from previous-request contamination. No transcript,
+reference codes or leading audio have been removed as a workaround. Experimental
+X-vector remains disabled: the converted speaker-only prompt and decoder path
+have no validated intelligibility/speaker/leakage comparison with ICL.
+
+Pocket uses transcript-free audio prompting and separate en/es/pt/de/it/fr
+bundles (French is `pocket-tts-fr-24l`); unsupported pairings still fail explicitly.
+Reviewed exporter `KevinAHM/pocket-tts-onnx` revision
+`58a6d00cf13d239b6748cb0769f35c580a8f606c`, `pocket_tts_onnx.py` SHA-256
+`4381a4396ba08b2626a25a87001e3c51dbacd136e1022d2d40a8cefb14b44be0`.
+Prompt preparation, chunk-state cloning and EOS `> -4.0` follow that runtime.
+Its normal sampler continues across chunks. Rust now owns one seeded RNG per
+request rather than restarting the same seed for every chunk. This changes
+seeded multi-chunk outputs intentionally; single-chunk sampling semantics and
+production temperature 0.7 / LSD steps 1 are preserved. No claim of NumPy/Rust
+bit-identical RNG or perceptual improvement follows from that correction.
+
+Only reference conditioning uses the new centered Blackman windowed-sinc
+resampler (`sinc-blackman-96-zero-phase-v1`), with integer ceil duration and
+versioned conditioning identity. Same-rate audio is copied unchanged. The
+filter does not denoise, trim, stretch or normalize waveforms. Interpolation
+can ring at sharp discontinuities; there is no hidden clipping/limiting step.
+Playback and output-format resampling retain their existing implementation.
+
+Pocket's independent exporter fixture exposed and fixed a tokenizer decode bug:
+byte-fallback IDs were rendered as literal `<0xXX>` strings during sentence
+splitting. UTF-8 bytes are now reassembled before Unicode decoding. Regression
+cases cover accents, emoji and CJK without model files. The real exporter check
+covers preparation, token IDs, long-text chunk order and all six language bundles.
+
+Numerical parity must also pin the **runtime build**, not merely the ORT version.
+The production static ORT reports `rel-1.28.0/da9b5e3`; the Python 1.28 wheel
+reports `HEAD/45de2a8b06`. A temperature-zero diagnostic produces different English
+latent values and EOS counts between those builds (10 vs 9 frames). Loading the
+Python wheel's same CPU library into the Rust opt-in comparison yields zero
+latent error for all six bundles. This is controlled same-runtime pipeline
+validation, not a change to the shipped static runtime. Cross-build speech
+fidelity is still unvalidated; see the audit report and explicit invocation.
