@@ -232,6 +232,58 @@ pub async fn create(
     Query(query): Query<JobQuery>,
     body: String,
 ) -> Result<impl IntoResponse, AppError> {
+    create_with_executor(token, State(state), Query(query), body, execute_request).await
+}
+
+async fn execute_request(
+    token: AuthenticatedToken,
+    state: AppState,
+    query: JobQuery,
+    body: String,
+) -> Result<Response, AppError> {
+    if let Some(profile) = query.profile {
+        super::voices::post_preview(
+            token,
+            State(state),
+            Path(profile),
+            Query(super::voices::PreviewQuery {
+                format: query.format,
+                language: query.lang,
+            }),
+            body,
+        )
+        .await
+        .map(IntoResponse::into_response)
+    } else {
+        super::tts::post_tts(
+            token,
+            State(state),
+            Query(super::tts::TtsQuery {
+                voice: query.voice,
+                lang: query.lang,
+                format: query.format,
+                #[cfg(feature = "playback")]
+                play_now: None,
+            }),
+            body,
+        )
+        .await
+    }
+}
+
+// The executor boundary keeps admission, immutable input ownership, terminal
+// publication and downloads identical in model-independent HTTP regressions.
+async fn create_with_executor<F, Fut>(
+    token: AuthenticatedToken,
+    State(state): State<AppState>,
+    Query(query): Query<JobQuery>,
+    body: String,
+    execute: F,
+) -> Result<impl IntoResponse, AppError>
+where
+    F: FnOnce(AuthenticatedToken, AppState, JobQuery, String) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<Response, AppError>> + Send + 'static,
+{
     super::tts::check_rate_limit(&state, &token)?;
     let config = state.config.get().await;
     if body.trim().is_empty() || body.chars().count() > config.tts.max_text_length {
@@ -296,34 +348,7 @@ pub async fn create(
         let execution = tokio::spawn(ADMISSION.scope(
             std::cell::RefCell::new(Some(admission)),
             ACTIVE.scope(control.clone(), async move {
-                let response = if let Some(profile) = query.profile {
-                    super::voices::post_preview(
-                        token,
-                        State(state),
-                        Path(profile),
-                        Query(super::voices::PreviewQuery {
-                            format: query.format,
-                            language: query.lang,
-                        }),
-                        body,
-                    )
-                    .await
-                    .map(IntoResponse::into_response)
-                } else {
-                    super::tts::post_tts(
-                        token,
-                        State(state),
-                        Query(super::tts::TtsQuery {
-                            voice: query.voice,
-                            lang: query.lang,
-                            format: query.format,
-                            #[cfg(feature = "playback")]
-                            play_now: None,
-                        }),
-                        body,
-                    )
-                    .await
-                }?;
+                let response = execute(token, state, query, body).await?;
                 let content_type = response
                     .headers()
                     .get(header::CONTENT_TYPE)
@@ -518,6 +543,205 @@ pub async fn events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn mock_wav(text: &str, query: &JobQuery) -> Vec<u8> {
+        use sha2::{Digest, Sha256};
+        let identity = format!(
+            "{}|{}|{}|{}",
+            text,
+            query.lang.as_deref().unwrap_or(""),
+            query.profile.as_deref().unwrap_or(""),
+            query.voice.as_deref().unwrap_or("")
+        );
+        let samples: Vec<f32> = Sha256::digest(identity)
+            .iter()
+            .map(|b| (*b as f32 - 128.0) / 256.0)
+            .collect();
+        sonicboom::tts::audio::encode_audio(
+            &samples,
+            24000,
+            sonicboom::tts::audio::AudioFormat::Wav,
+        )
+        .unwrap()
+    }
+
+    async fn mock_create(
+        token: AuthenticatedToken,
+        state: State<AppState>,
+        query: Query<JobQuery>,
+        body: String,
+    ) -> Result<impl IntoResponse, AppError> {
+        create_with_executor(
+            token,
+            state,
+            query,
+            body,
+            |_token, _state, query, body| async move {
+                if body == "fail" {
+                    return Err(AppError::BadRequest("synthetic failure".into()));
+                }
+                if body == "wait" {
+                    let control = active_control().unwrap();
+                    control.update("mock", 1);
+                    while !control.stopped() {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                    // Deliberately returns bytes after cancellation/deadline. The
+                    // real publication boundary must withhold this partial result.
+                }
+                Ok((
+                    [(header::CONTENT_TYPE, "audio/wav")],
+                    mock_wav(&body, &query),
+                )
+                    .into_response())
+            },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn mock_http_jobs_keep_inputs_owners_failures_and_cancellation_isolated() {
+        use crate::auth::store::TokenStore;
+        use axum::{
+            Router,
+            routing::{get, post},
+        };
+        use tower::ServiceExt;
+        let path =
+            std::env::temp_dir().join(format!("sonicboom-job-mock-{}.json", uuid::Uuid::new_v4()));
+        let tokens = TokenStore::load(path.to_str().unwrap()).await.unwrap();
+        let (_, alice) = tokens.create(None).await.unwrap();
+        let (_, bob) = tokens.create(None).await.unwrap();
+        let mut config = crate::api::tests::test_config();
+        config.inference.generation_deadline_secs = 1;
+        let state = crate::api::tests::test_state(config, Arc::new(tokens), Arc::new(None));
+        let app = Router::new()
+            .route("/jobs", post(mock_create))
+            .route("/jobs/{id}", get(status))
+            .route("/jobs/{id}/audio", get(audio))
+            .route("/jobs/{id}/cancel", post(cancel))
+            .with_state(state);
+        let send = |method: &str, uri: String, token: &str, body: &str| {
+            let request = axum::http::Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            let app = app.clone();
+            async move { app.oneshot(request).await.unwrap() }
+        };
+        let json = |response: Response| async move {
+            serde_json::from_slice::<serde_json::Value>(
+                &axum::body::to_bytes(response.into_body(), 8192)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let (first, second) = tokio::join!(
+            send(
+                "POST",
+                "/jobs?lang=es&voice=M1&format=wav".into(),
+                &alice,
+                "hola"
+            ),
+            send(
+                "POST",
+                "/jobs?lang=es&profile=voice-B&format=wav".into(),
+                &bob,
+                "test"
+            )
+        );
+        let a = json(first).await["id"].as_str().unwrap().to_string();
+        let b = json(second).await["id"].as_str().unwrap().to_string();
+        assert_ne!(a, b);
+        for (id, owner, text, profile, voice) in [
+            (&a, &alice, "hola", None, Some("M1")),
+            (&b, &bob, "test", Some("voice-B"), None),
+        ] {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    let snapshot = json(send("GET", format!("/jobs/{id}"), owner, "").await).await;
+                    assert!(snapshot.get("text").is_none());
+                    if snapshot["stage"] == "completed" {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            let expected = mock_wav(
+                text,
+                &JobQuery {
+                    lang: Some("es".into()),
+                    profile: profile.map(str::to_string),
+                    voice: voice.map(str::to_string),
+                    format: Some("wav".into()),
+                },
+            );
+            let response = send("GET", format!("/jobs/{id}/audio"), owner, "").await;
+            assert_eq!(
+                axum::body::to_bytes(response.into_body(), 8192)
+                    .await
+                    .unwrap()
+                    .as_ref(),
+                expected
+            );
+        }
+        assert_eq!(
+            send("GET", format!("/jobs/{b}/audio"), &alice, "")
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        for (body, cancelled, expected_stage) in [
+            ("fail", false, "failed"),
+            ("wait", true, "cancelled"),
+            ("wait", false, "cancelled"),
+        ] {
+            let id = json(send("POST", "/jobs?lang=es&voice=M1".into(), &alice, body).await).await
+                ["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            if cancelled {
+                tokio::time::timeout(Duration::from_secs(1), async {
+                    loop {
+                        let snapshot =
+                            json(send("GET", format!("/jobs/{id}"), &alice, "").await).await;
+                        if snapshot["stage"] == "mock" {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                send("POST", format!("/jobs/{id}/cancel"), &alice, "").await;
+            }
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    let snapshot = json(send("GET", format!("/jobs/{id}"), &alice, "").await).await;
+                    if snapshot["stage"] == expected_stage {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                send("GET", format!("/jobs/{id}/audio"), &alice, "")
+                    .await
+                    .status(),
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[tokio::test]
     async fn separate_http_downloads_preserve_job_and_owner_identity() {
         use axum::{Router, routing::get};

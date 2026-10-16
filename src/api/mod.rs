@@ -140,7 +140,7 @@ mod tests {
     use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    fn test_config() -> AppConfig {
+    pub(super) fn test_config() -> AppConfig {
         let mut config = AppConfig::default();
         config.server.auth_mode = crate::config::AuthMode::Token;
         config.tts.max_body_bytes = 65_536;
@@ -150,7 +150,7 @@ mod tests {
         config
     }
 
-    fn test_state(
+    pub(super) fn test_state(
         config: AppConfig,
         token_store: Arc<TokenStore>,
         audio_manager: Arc<Option<crate::AudioManager>>,
