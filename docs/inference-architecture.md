@@ -91,13 +91,47 @@ retrieval. An eagerly prepared identical prompt can be rebound without encoding
 again. Deletion logically invalidates the profile and retires artifacts at a
 safe worker boundary.
 
+The Qwen GGUF reference cache is additionally bounded by measured heap bytes
+(256 MiB default hard cap alongside the entry-count bound), with hit/miss,
+resident-byte and eviction counters. A single oversized entry is retained so
+synthesis can proceed, with the overshoot visible in stats; clones already
+handed to in-flight requests stay valid across eviction.
+
 The server caches one manifest plus a decoded-reference LRU (16 entries/64 MiB).
 Manifest and WAV identities detect changes, and create/delete operations keep
-invalidation coherent. Profile directories are owner-private; manifests and
+invalidation coherent. Reference lookup holds the voices lock only for metadata
+(probe, identity re-check); disk reads and WAV decoding run without the lock,
+then re-verify profile identity and file stamp before publishing, so parallel
+reads no longer serialize on the slow path and a mid-decode deletion,
+replacement or reconfiguration can never publish stale audio. Profile
+directories are owner-private; manifests and
 reference writes remain atomic. Pocket TTS retains only its last conditioned
 profile/reference under its serialized model transaction and invalidates that
 reuse on changes/deletion. Its native data is replaced at the next safe reference
-preparation rather than unloading healthy weights.
+preparation rather than unloading healthy weights. Prefilled Pocket flow states
+stay per-request (rebuilt from cached embeddings): sharing mutable
+request-local KV across voices would be unsound, and per-request cloning
+(which isolation would still require) has no measured win over re-prefill —
+warm-request benchmarking against pinned weights is outstanding (see
+benchmarks), so the embeddings-only cache stands.
+
+Server-generated playback files transfer ownership atomically on admission:
+the audio thread registers the temp file before it can complete, stop, or be
+replaced, so no interleaving orphans it and no separate registration round-trip
+exists. Failed admissions are never registered (the caller deletes its file),
+caller-owned library files are never registered (cleanup never deletes them),
+and a deletion that fails because the backend still holds the file keeps its
+registration for a later pass instead of orphaning the path. The healthy idle
+audio thread blocks indefinitely on the command channel (zero wakeups);
+it polls only while a sink is active (completion/controls) or while a throttled
+device-recovery retry is pending.
+
+Supertonic duration-predictor outputs are validated before any tensor
+allocation (finite, positive, per-chunk 60 s / latent-byte budgets, plus a
+per-request sample budget with checked arithmetic); valid inputs derive
+bit-identical lengths to the previous formula. The reusable engine releases
+its inference lock after native synthesis and before WAV encoding, so encoding
+never blocks the next inference.
 
 ## Instrumentation and profiling
 

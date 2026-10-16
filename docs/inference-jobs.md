@@ -80,6 +80,12 @@ keep their issued deadline/retention. Audio storage is additionally bounded to
 16 MiB per output and 64 MiB process-wide. The profile manifest has a 64 MiB
 bound; oversized WAV headers are rejected before sample allocation.
 
+Completed audio is retained as reference-counted buffers: concurrent audio
+fetches share the payload with a handle clone instead of copying it, expiry
+drops only the store's handle, and the 64 MiB total is maintained by an
+incremental counter (exact under the store lock) rather than a per-completion
+scan, with saturating cap arithmetic.
+
 Jobs and their outputs are process-local. Restart/shutdown/retention expiry
 makes old IDs unavailable (`404`); jobs do not resume after restart. Shutdown
 requests cancellation of active jobs. Graceful shutdown and resource ownership

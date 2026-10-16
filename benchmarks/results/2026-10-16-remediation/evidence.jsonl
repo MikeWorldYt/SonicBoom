@@ -1,0 +1,15 @@
+{"build":"debug test profile","cold_or_warm":"cold single runs","cpu":"AMD BC-250, 12 online CPUs","features":"server,playback,qwen-gguf,pocket-tts (default)","machine":"remediation-verification","ort_backend":"cpu","ram_gib":14,"rustc":"1.99.0","toolchain_os":"Ubuntu"}
+{"cases":110,"identical_bytes":true,"item":"opus_streaming_byte_parity","lengths":[0,1,100,479,480,959,960,961,1920,24000,96000],"rates":[8000,16000,24000,44100,48000],"signals":["silence","sine"]}
+{"empty_pages":2,"item":"opus_container_granules","last_granule_1s_24k":48312,"tiny_last_granule":1272}
+{"extreme_selections":200,"history_evolution_match":true,"identical_selections":2250,"item":"qwen_sampler_parity","seeds":[1,7,12345]}
+{"identical_lengths":5000,"item":"duration_validation_parity","rejected_classes":["NaN","inf","-inf","negative","zero","huge","over_boundary","bad_geometry","byte_budget_overflow"]}
+{"early_live_deletions":0,"foreign_deletions":0,"interleavings":1000,"item":"playback_ownership_races","orphans":0}
+{"distinct_key_checks":50000,"item":"rate_limiter_burst","per_op_us_debug":1.545,"total_ms_debug":77.25}
+{"bin_tests":223,"ignored":0,"item":"cargo_test_default","lib_tests":166}
+{"item":"cargo_test_features","headless_core_lib":101,"pocket_only_lib":104,"qwen_only_lib":127,"tiktools_plugin_bin":3}
+{"item":"frontend","build":"pass","engineCard_preexisting_failures":3,"engineCard_same_on_pristine_head":true,"studioRefresh_new_tests":5,"typecheck":"pass"}
+{"clippy_all_targets":"zero warnings","fmt":"pass","item":"static_checks"}
+{"item":"real_model_rtf_rss_quality","status":"NOT RUN","why":"no pinned Supertonic/Pocket/Qwen weights on this machine"}
+{"item":"playback_gap_and_idle_cpu_on_hardware","status":"NOT RUN","why":"headless, no ALSA output device"}
+{"item":"windows_file_deletion","status":"NOT RUN","why":"Linux only"}
+{"item":"gpu_builds","status":"NOT RUN","why":"no CUDA/ROCm/Vulkan SDKs; --all-features fails in native llama.cpp build script (pre-existing)"}
