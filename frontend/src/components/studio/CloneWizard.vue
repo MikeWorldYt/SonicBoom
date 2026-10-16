@@ -12,6 +12,15 @@ const task = useTask(); const { pending, feedback } = task;
 const step = ref(0);
 const provider = ref(''); const model = ref(''); const language = ref('en'); const mode = ref('icl');
 const fileInput = ref<HTMLInputElement | null>(null);
+const referenceWarnings = ref<string[]>([]);
+function referenceWarning(code: string) {
+  const messages: Record<string, string> = {
+    reference_nearly_silent: 'The reference recording is nearly silent. Choose a clearer recording.',
+    reference_heavily_clipped: 'The reference recording has heavy clipping. Try recording at a lower input level.',
+    reference_large_dc_offset: 'The reference recording has a large DC offset. Check the recording source.',
+  };
+  return t(messages[code] || code);
+}
 const name = ref(''); const consent = ref(''); const transcript = ref(''); const file = ref<File | null>(null);
 const choices = computed(() => capabilities.value.filter(cap => cap.requires_reference_audio));
 const cap = computed(() => choices.value.find(item => item.provider_id === provider.value));
@@ -26,7 +35,7 @@ watch(cap, value => {
   if (!value?.clone_modes.includes(mode.value)) mode.value = value?.clone_modes[0] || 'icl';
 }, { immediate: true });
 watch(needsTranscript, value => { if (!value) transcript.value = ''; });
-function selectFile(event: Event) { file.value = (event.target as HTMLInputElement).files?.[0] || null; }
+function selectFile(event: Event) { referenceWarnings.value = []; file.value = (event.target as HTMLInputElement).files?.[0] || null; }
 async function validateRecording() {
   if (!file.value) throw uiError('Choose a WAV reference recording.');
   if (!file.value.size) throw uiError('The selected file is empty.');
@@ -47,7 +56,9 @@ async function save() {
     if (!name.value.trim() || name.value.trim().length > 64) throw uiError('Name must be 1–64 characters.');
     if (!consent.value.trim()) throw uiError('Consent basis is required (e.g. owner).');
     await validateRecording();
+    referenceWarnings.value = [];
     const profile = await studio.api.createVoice({ name: name.value.trim(), provider: provider.value, model: model.value, language: language.value, mode: mode.value, consent_basis: consent.value.trim(), ...(needsTranscript.value ? { transcript: transcript.value.trim() } : {}) }, file.value!);
+    referenceWarnings.value = profile.warnings || [];
     await studio.refreshVoices();
     studio.selectProfile(profile);
     step.value = 0; name.value = ''; consent.value = ''; transcript.value = ''; file.value = null; if (fileInput.value) fileInput.value.value = '';
@@ -76,6 +87,6 @@ async function save() {
         <div class="form-group"><label for="cloneConsent">{{ t('Consent basis') }}</label><input id="cloneConsent" v-model="consent" :placeholder="t('I own this voice or have permission')" autocomplete="off"></div>
       </fieldset>
       <div class="toolbar"><button v-if="step > 0" type="button" :disabled="pending" @click="step--; feedback = null">{{ t('Back') }}</button><button v-if="step < 2" class="primary" :disabled="pending || !cap">{{ t('Continue') }}</button><button v-else id="cloneSubmit" class="primary" :disabled="pending">{{ t(pending ? 'Cloning…' : 'Clone voice') }}</button><button v-if="step === 0 && !engineReady" type="button" class="btn-inline" @click="emit('engines')">{{ t('Manage engines') }}</button></div>
-    </form><FeedbackNotice :feedback="feedback"/>
+    </form><FeedbackNotice :feedback="feedback"/><p v-for="warning in referenceWarnings" :key="warning" role="status" class="help-note">{{ referenceWarning(warning) }}</p>
   </section>
 </template>

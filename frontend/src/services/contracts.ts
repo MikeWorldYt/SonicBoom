@@ -4,7 +4,7 @@ export interface ServerInfo { version: string; mode: string; setup_complete: boo
 export interface ProviderStatus { provider_id: string; state: string; enabled: boolean; effective_device?: string | null; active_model?: string | null; detail?: string | null }
 export interface Capabilities { provider_id: string; models: string[]; languages: string[]; devices: string[]; clone_modes: string[]; requires_reference_audio: boolean; requires_reference_transcript: boolean; sample_rate?: number }
 export interface ProvidersResponse { providers: ProviderStatus[]; capabilities: Capabilities[]; diagnostics?: unknown }
-export interface Voice { id: string; name: string; provider: string; model: string; language: string; clone_mode: string; reference_duration_secs?: number; reference_sample_rate?: number }
+export interface Voice { id: string; name: string; provider: string; model: string; language: string; clone_mode: string; reference_duration_secs?: number; reference_sample_rate?: number; warnings?: string[] }
 export interface BuiltinVoice { id: string; name: string }
 export interface ConfigSnapshot { revision: number; config: JsonObject }
 export type ApplyStrategy = 'hot' | 'restart_server' | 'restart_subsystem' | 'reload_model' | 'restart_process';

@@ -928,6 +928,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn voice_upload_returns_non_destructive_reference_health_warnings() {
+        let (app, valid, store_dir) = voices_test_app().await;
+        let wav = sonicboom::tts::audio::encode_audio(
+            &vec![0.0; 24000],
+            24000,
+            sonicboom::tts::audio::AudioFormat::Wav,
+        )
+        .unwrap();
+        let response = app.oneshot(raw_request("POST", "/api/voices/clones?name=synthetic-silence&provider=pocket-tts&model=pocket-tts-en&language=en&mode=audio_prompt&consent_basis=owner", Some(&valid), "audio/wav", &wav)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let result = body_json(response).await;
+        assert_eq!(result["reference_health"]["source_channels"], 1);
+        assert_eq!(result["reference_health"]["source_sample_rate"], 24000);
+        assert_eq!(result["reference_health"]["duration_secs"], 1.0);
+        assert_eq!(result["reference_health"]["peak"], 0.0);
+        assert!(
+            result["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w == "reference_nearly_silent")
+        );
+        assert!(result["reference_health"].get("pcm").is_none());
+        std::fs::remove_dir_all(store_dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn voice_upload_with_wrong_media_is_415() {
         let (app, valid, store_dir) = voices_test_app().await;
         let request = raw_request(

@@ -454,5 +454,8 @@
   "Seed: not exposed by this API": "Semilla: esta API no la expone",
   "Qwen ICL needs the exact words, punctuation and language of the recording. A mismatched transcript can cause reference words to be repeated. Speaker-only mode is not validated.": "Qwen ICL necesita las palabras, puntuación e idioma exactos de la grabación. Una transcripción incorrecta puede causar repeticiones. El modo de solo hablante no está validado.",
   "Pocket uses the recording without a transcript. Each language needs its own model; select a matching model and language.": "Pocket usa la grabación sin transcripción. Cada idioma necesita su propio modelo; selecciona un modelo y un idioma compatibles.",
-  "Generated duration: {seconds}s": "Duración generada: {seconds}s"
+  "Generated duration: {seconds}s": "Duración generada: {seconds}s",
+  "The reference recording is nearly silent. Choose a clearer recording.": "La grabación de referencia es casi silenciosa. Elige una grabación más clara.",
+  "The reference recording has heavy clipping. Try recording at a lower input level.": "La grabación de referencia tiene mucha saturación. Prueba grabar con un nivel de entrada menor.",
+  "The reference recording has a large DC offset. Check the recording source.": "La grabación de referencia tiene un gran desplazamiento de corriente continua. Revisa la fuente de grabación."
 }

@@ -119,6 +119,38 @@ fn decode_wav_bytes(bytes: &[u8]) -> Result<(Vec<f32>, u32), AppError> {
     Ok((mono, spec.sample_rate))
 }
 
+/// Non-destructive health readout of the mono mix before conditioning.
+/// These conservative warnings never reject or modify an otherwise valid clip.
+fn reference_health(
+    pcm: &[f32],
+    rate: u32,
+    source_channels: u16,
+) -> (serde_json::Value, Vec<&'static str>) {
+    let n = pcm.len().max(1) as f64;
+    let peak = pcm.iter().fold(0f32, |a, b| a.max(b.abs()));
+    let rms = (pcm.iter().map(|s| (*s as f64).powi(2)).sum::<f64>() / n).sqrt();
+    let dc = pcm.iter().map(|s| *s as f64).sum::<f64>() / n;
+    let clipping = pcm.iter().filter(|s| s.abs() >= 0.999).count() as f64 / n;
+    let low_amplitude = pcm.iter().filter(|s| s.abs() < 1e-4).count() as f64 / n;
+    let mut warnings = Vec::new();
+    if rms < 1e-4 {
+        warnings.push("reference_nearly_silent");
+    }
+    if clipping > 0.1 {
+        warnings.push("reference_heavily_clipped");
+    }
+    if dc.abs() > 0.1 {
+        warnings.push("reference_large_dc_offset");
+    }
+    (
+        serde_json::json!({"analysis":"mono_mix_before_resampling", "sample_count":pcm.len(),
+        "source_channels":source_channels,"source_sample_rate":rate,
+        "duration_secs":pcm.len() as f64 / rate.max(1) as f64,"peak":peak,"rms":rms,
+        "dc_offset":dc,"clipping_fraction":clipping,"low_amplitude_fraction":low_amplitude}),
+        warnings,
+    )
+}
+
 /// One resident manifest and bounded decoded-reference LRU. All disk work
 /// and mutation is serialized on blocking threads, never on Tokio executors.
 #[derive(Debug, Default)]
@@ -561,10 +593,16 @@ async fn post_clones_inner(
     }
     let preparation_lease = super::jobs::preparation_lease();
     let reference_lease = super::jobs::reference_lease();
-    let (pcm, rate) = tokio::task::spawn_blocking(move || {
+    let (pcm, rate, health, warnings) = tokio::task::spawn_blocking(move || {
         let _preparation_lease = preparation_lease;
         let _reference_lease = reference_lease;
-        decode_wav_bytes(&body)
+        let (pcm, rate) = decode_wav_bytes(&body)?;
+        let channels = hound::WavReader::new(std::io::Cursor::new(&body))
+            .map_err(|_| AppError::BadRequest("reference WAV header is invalid".into()))?
+            .spec()
+            .channels;
+        let (health, warnings) = reference_health(&pcm, rate, channels);
+        Ok::<_, AppError>((pcm, rate, health, warnings))
     })
     .await
     .map_err(|e| AppError::internal(e.to_string()))??;
@@ -606,7 +644,11 @@ async fn post_clones_inner(
         store.create(input).map_err(AppError::BadRequest)
     })
     .await?;
-    let body = serde_json::to_string(&profile).map_err(|e| AppError::internal(e.to_string()))?;
+    let mut response =
+        serde_json::to_value(&profile).map_err(|e| AppError::internal(e.to_string()))?;
+    response["reference_health"] = health;
+    response["warnings"] = serde_json::json!(warnings);
+    let body = serde_json::to_string(&response).map_err(|e| AppError::internal(e.to_string()))?;
     Ok((
         StatusCode::CREATED,
         [(header::CONTENT_TYPE, "application/json")],
@@ -843,6 +885,38 @@ async fn post_preview_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reference_health_warns_without_modifying_audio_or_logging_content() {
+        let clean: Vec<f32> = (0..24000)
+            .map(|i| 0.1 * (i as f32 * std::f32::consts::TAU * 440.0 / 24000.0).sin())
+            .collect();
+        let copy = clean.clone();
+        let (health, warnings) = reference_health(&clean, 24000, 2);
+        assert!(warnings.is_empty());
+        assert_eq!(health["source_channels"], 2);
+        assert_eq!(health["duration_secs"], 1.0);
+        assert_eq!(clean, copy);
+        assert!(health.get("pcm").is_none() && health.get("transcript").is_none());
+        assert!(
+            reference_health(&vec![0.0; 24000], 24000, 1)
+                .1
+                .contains(&"reference_nearly_silent")
+        );
+        let clipped: Vec<f32> = (0..24000)
+            .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+            .collect();
+        assert!(
+            reference_health(&clipped, 24000, 1)
+                .1
+                .contains(&"reference_heavily_clipped")
+        );
+        assert!(
+            reference_health(&vec![0.2; 24000], 24000, 1)
+                .1
+                .contains(&"reference_large_dc_offset")
+        );
+    }
+
     use sonicboom::tts::voices::{NewVoiceProfile, VoiceProfileStore};
 
     fn decoded(samples: usize, rate: u32) -> ReferenceAudio {
