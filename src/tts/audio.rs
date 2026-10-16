@@ -578,6 +578,25 @@ mod reference_resampling_tests {
         }
     }
     #[test]
+    fn reference_sweeps_reject_stopband_and_upsampling_preserves_tone() {
+        for rate in [44100, 48000] {
+            let sweep: Vec<f32> = (0..rate)
+                .map(|i| {
+                    let t = i as f64 / rate as f64;
+                    (0.5 * (std::f64::consts::TAU * (13000.0 * t + 3500.0 * t * t)).sin()) as f32
+                })
+                .collect();
+            let linear = resample_pcm_linear(&sweep, rate, 24000);
+            let filtered = resample_reference(&sweep, rate, 24000);
+            let db = 20.0 * (rms(&filtered[200..23800]) / rms(&linear[200..23800])).log10();
+            eprintln!("{rate}->24000: 13-20kHz sweep alias vs linear = {db:.2} dB");
+            assert!(db < -70.0, "sweep rejection {db}");
+        }
+        let up = resample_reference(&tone(16000, 1000.0), 16000, 24000);
+        assert!((rms(&up[200..23800]) - 0.5 / 2f64.sqrt()).abs() < 0.001);
+    }
+
+    #[test]
     fn reference_duration_dc_silence_impulse_and_equal_rate() {
         for rate in [16000, 24000, 44100, 48000] {
             let dc = vec![0.25; rate as usize];
