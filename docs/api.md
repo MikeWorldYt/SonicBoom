@@ -65,7 +65,8 @@ Synthesizes text and adds it directly to the server's playback queue in a single
 
 | Parameter  | Type    | Required | Default | Description                            |
 | ---------- | ------- | -------- | ------- | -------------------------------------- |
-| `voice`    | string  | No       | `M1`    | Voice style (M1-M5, F1-F5)             |
+| `provider` | string | No | `supertonic` | `supertonic`, `pocket-tts`, or `qwen3-gguf`; empty preserves legacy routing |
+| `voice` | string | For cloning | `M1` (Supertonic) | Built-in style or token-owned clone profile UUID; matching `provider:voice` option IDs accepted |
 | `lang`     | string  | No       | `en`    | Language code                          |
 | `play_now` | boolean | No       | `false` | If `true`, clears queue and plays now  |
 
@@ -88,6 +89,37 @@ curl -X POST "http://localhost:17842/api/tts/play?voice=F1&play_now=true" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -d "Synthesize and play this immediately on the server speakers."
 ```
+
+Cloning playback uses the profile's stored model, revision, reference audio and clone
+mode through the existing bounded inference gate. `lang` defaults to the profile
+language when omitted; Pocket requires its language-specific profile language.
+Qwen supports the languages advertised by its provider. No provider fallback occurs.
+Unknown/mismatched providers or voices and incompatible revisions return `400`;
+foreign/deleted profiles return `404`; unavailable providers return `503`. Existing
+rate limits (`429`), deadlines, secure temporary WAV ownership and queue semantics
+apply to every provider. Omitted/empty `provider` retains legacy Supertonic routing.
+
+### Plugin catalogs
+
+Authenticated `GET /api/tts/plugin/providers` returns a root array of enabled
+providers: `{id,name,state,disabled}`. Enabled-but-loading/error/not-installed
+providers remain visible with `disabled: true`; only `ready` providers are selectable.
+Disabled configuration entries are omitted. Count enabled rows to decide selector
+visibility, including enabled rows that are not ready. Provider labels are human
+readable and availability comes from the live resident registry.
+
+Authenticated `GET /api/tts/plugin/voices` returns a root array of
+`{id,name,disabled:false}` options, with IDs such as `supertonic:M1` or
+`pocket-tts:<uuid>`. Only ready built-in styles and the requesting token's compatible
+clone profiles are returned; models, revisions, language and clone mode are checked.
+Only the currently resident model is usable (Pocket language models are separate;
+select the matching model in server configuration). The array is sorted by qualified ID, limited to 500 items, with profile names limited
+to 128 characters. Both catalogs send `Cache-Control: private, no-store`. Refreshing
+these routes re-reads live state/profile manifests; it does not reload resident models.
+Clients must strictly filter voices by provider and must not submit an empty clone
+voice. The playback route validates qualified IDs against the authoritative provider.
+
+Example: `POST /api/tts/play?provider=pocket-tts&voice=pocket-tts%3A<uuid>&lang=en&play_now=false`.
 
 ---
 

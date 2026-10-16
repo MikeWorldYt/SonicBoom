@@ -259,6 +259,8 @@ async fn execute_request(
             token,
             State(state),
             Query(super::tts::TtsQuery {
+                #[cfg(feature = "playback")]
+                provider: None,
                 voice: query.voice,
                 lang: query.lang,
                 format: query.format,
