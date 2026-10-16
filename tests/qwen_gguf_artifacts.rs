@@ -147,9 +147,26 @@ fn native_worker_reuses_conditioning_and_recovers_after_cancellation() -> anyhow
     assert!(first.metrics.reached_eos && first.audio.is_audible());
     assert_eq!(first.audio.sample_rate, 24_000);
     assert!(first.audio.samples.iter().all(|v| v.is_finite()));
-    let cancelled = InferenceControl::new(Duration::from_secs(60));
-    cancelled.cancel();
+    let cancelled = InferenceControl::new(Duration::from_secs(300));
+    let watcher = cancelled.clone();
+    let cancellation = std::thread::spawn(move || {
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_secs(240) {
+            let progress = watcher.snapshot();
+            if progress.stage == "talker" && progress.frames >= 1 {
+                watcher.cancel();
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        watcher.cancel();
+        false
+    });
     let result = control::scope(cancelled, || worker.synthesize(request.clone()));
+    assert!(
+        cancellation.join().unwrap(),
+        "must cancel after a generated native frame"
+    );
     assert!(result.unwrap_err().to_string().contains("cancelled"));
     let second = worker.synthesize(request)?;
     assert!(second.metrics.reference_cache_hit);

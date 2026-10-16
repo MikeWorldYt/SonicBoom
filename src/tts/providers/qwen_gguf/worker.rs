@@ -278,7 +278,7 @@ impl State {
             metrics.reference_cache_hit = true;
             reference
         } else {
-            let pcm = crate::tts::audio::resample_pcm_linear(
+            let pcm = crate::tts::audio::resample_reference(
                 &reference.pcm,
                 reference.sample_rate,
                 24_000,

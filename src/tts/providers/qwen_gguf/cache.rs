@@ -92,6 +92,7 @@ impl ReferenceCache {
         }
         let identity = serde_json::to_vec(&(
             REVISION,
+            crate::tts::audio::REFERENCE_RESAMPLER_VERSION,
             voice,
             hex::encode(hash.finalize()),
             transcript,

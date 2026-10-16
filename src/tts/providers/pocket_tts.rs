@@ -1157,11 +1157,11 @@ impl PocketNative {
         base_state: &[StateTensor],
         token_ids: &[i64],
         options: &ChunkOptions<'_>,
+        rng: &mut StdRng,
     ) -> Result<Vec<f32>, ProviderError> {
         let frames_after_eos = options.frames_after_eos;
         let temperature = options.temperature;
         let lsd_steps = options.lsd_steps;
-        let seed = options.seed;
         let control = options.control;
         let dim = self.meta.conditioning_dim;
         let latent_dim = self.meta.latent_dim;
@@ -1208,9 +1208,6 @@ impl PocketNative {
 
         let frame_limit =
             ((token_ids.len() as f32 / 3.0 + 2.0).ceil() * self.meta.frame_rate) as usize;
-        let mut rng = seed
-            .map(StdRng::seed_from_u64)
-            .unwrap_or_else(StdRng::from_os_rng);
         let dt = 1.0 / lsd_steps.max(1) as f32;
         let mut curr = vec![f32::NAN; latent_dim];
         // Reserve the full frame budget up front (capped at the output
@@ -1224,6 +1221,9 @@ impl PocketNative {
         let mut x = vec![0.0f32; latent_dim];
         let mut eos_step: Option<usize> = None;
         for step in 0..frame_limit {
+            if let Some(control) = control {
+                control.update("flow", step);
+            }
             if control.is_some_and(|c| c.stopped()) {
                 return Err(ProviderError::inference_failed(
                     "inference cancelled or deadline exceeded",
@@ -1382,7 +1382,6 @@ struct ChunkOptions<'a> {
     frames_after_eos: usize,
     temperature: f32,
     lsd_steps: usize,
-    seed: Option<u64>,
     control: Option<&'a crate::tts::control::InferenceControl>,
 }
 
@@ -1671,7 +1670,12 @@ impl PocketTtsProvider {
     ) -> String {
         super::worker::ConditioningCache::cache_key(
             POCKET_TTS_PROVIDER_ID,
-            &format!("{}|{}", self.config_snapshot().revision, model_id),
+            &format!(
+                "{}|{}|{}",
+                self.config_snapshot().revision,
+                model_id,
+                crate::tts::audio::REFERENCE_RESAMPLER_VERSION
+            ),
             reference_hash,
             transcript,
             "audio_prompt",
@@ -1936,12 +1940,7 @@ impl PocketTtsProvider {
         transcript: Option<&str>,
     ) -> Result<(String, usize, Vec<f32>), ProviderError> {
         Self::validate_reference(reference_pcm, reference_rate)?;
-        let pcm24 = crate::tts::audio::resample_pcm_linear(
-            reference_pcm,
-            reference_rate,
-            POCKET_REFERENCE_RATE,
-        );
-        let hash = Self::reference_hash(&pcm24, POCKET_REFERENCE_RATE);
+        let hash = Self::reference_hash(reference_pcm, reference_rate);
         let key = self.conditioning_key(model_id, &hash, transcript);
         if let Some((frames, embeddings)) = self.cached_embeddings(&key) {
             return Ok((key, frames, embeddings));
@@ -1968,6 +1967,11 @@ impl PocketTtsProvider {
             let native = model
                 .as_mut()
                 .ok_or_else(|| ProviderError::loading("pocket-tts model is not loaded"))?;
+            let pcm24 = crate::tts::audio::resample_reference(
+                reference_pcm,
+                reference_rate,
+                POCKET_REFERENCE_RATE,
+            );
             native.encode_voice(&pcm24)?
         };
         self.store_embeddings(&key, frames, &embeddings);
@@ -2160,12 +2164,7 @@ impl TtsProvider for PocketTtsProvider {
             )));
         }
         Self::validate_reference(reference_pcm, reference_rate)?;
-        let pcm24 = crate::tts::audio::resample_pcm_linear(
-            reference_pcm,
-            reference_rate,
-            POCKET_REFERENCE_RATE,
-        );
-        let hash = Self::reference_hash(&pcm24, POCKET_REFERENCE_RATE);
+        let hash = Self::reference_hash(reference_pcm, reference_rate);
         let key = self.conditioning_key(model_id, &hash, transcript);
         // Eagerly warm cached embeddings when a model is loaded; otherwise
         // the key is derived now and materializes at synthesis.
@@ -2283,16 +2282,16 @@ impl TtsProvider for PocketTtsProvider {
             let native = model
                 .as_mut()
                 .ok_or_else(|| ProviderError::loading("pocket-tts model is not loaded"))?;
-            let pcm24 = crate::tts::audio::resample_pcm_linear(
-                &reference.pcm,
-                reference.sample_rate,
-                POCKET_REFERENCE_RATE,
-            );
-            let hash = Self::reference_hash(&pcm24, POCKET_REFERENCE_RATE);
+            let hash = Self::reference_hash(&reference.pcm, reference.sample_rate);
             let key = self.conditioning_key(&request.model, &hash, None);
             let (frames, embeddings) = match self.cached_embeddings(&key) {
                 Some(hit) => hit,
                 None => {
+                    let pcm24 = crate::tts::audio::resample_reference(
+                        &reference.pcm,
+                        reference.sample_rate,
+                        POCKET_REFERENCE_RATE,
+                    );
                     let (frames, embeddings) = native.encode_voice(&pcm24)?;
                     self.store_embeddings(&key, frames, &embeddings);
                     (frames, embeddings)
@@ -2316,6 +2315,12 @@ impl TtsProvider for PocketTtsProvider {
                 return Err(ProviderError::invalid_voice("text cannot be empty"));
             }
             let mut audio: Vec<f32> = Vec::new();
+            // One request-local random stream, continued across sentences, like
+            // the exporter's np.random stream. Never restart each chunk at seed.
+            let mut rng = request
+                .seed
+                .map(StdRng::seed_from_u64)
+                .unwrap_or_else(StdRng::from_os_rng);
             for chunk in &chunks {
                 if control.as_ref().is_some_and(|c| c.stopped()) {
                     return Err(ProviderError::inference_failed(
@@ -2339,10 +2344,10 @@ impl TtsProvider for PocketTtsProvider {
                     frames_after_eos,
                     temperature: config.temperature,
                     lsd_steps: config.lsd_steps.max(1),
-                    seed: request.seed,
                     control: control.as_deref(),
                 };
-                let latents = native.run_chunk(&base_state, &token_ids, &chunk_options)?;
+                let latents =
+                    native.run_chunk(&base_state, &token_ids, &chunk_options, &mut rng)?;
                 if control.as_ref().is_some_and(|c| c.stopped()) {
                     return Err(ProviderError::inference_failed(
                         "inference cancelled or deadline exceeded",
@@ -2835,6 +2840,82 @@ mod tests {
             .map(|model| p.conditioning_key(model, "same-reference", None))
             .collect();
         assert_eq!(keys.len(), POCKET_TTS_MODELS.len());
+    }
+
+    /// Uses actual ONNX execution to distinguish per-chunk random continuity,
+    /// fresh request state and recovery after cancellation during inference.
+    #[test]
+    #[ignore = "requires authorized reference and real English ONNX bundle"]
+    #[cfg(feature = "pocket-tts")]
+    fn real_bundle_request_rng_and_active_cancellation_are_isolated() {
+        use crate::tts::control::InferenceControl;
+        use std::time::{Duration, Instant};
+        let root = std::env::var("POCKET_TTS_BUNDLE_DIR").expect("set POCKET_TTS_BUNDLE_DIR");
+        let path = std::env::var("POCKET_TTS_REF_WAV").expect("set POCKET_TTS_REF_WAV");
+        let mut reader = hound::WavReader::open(path).unwrap();
+        let spec = reader.spec();
+        assert_eq!(spec.channels, 1);
+        assert_eq!(spec.bits_per_sample, 16);
+        let pcm: Vec<f32> = reader
+            .samples::<i16>()
+            .map(|s| s.unwrap() as f32 / 32768.0)
+            .collect();
+        let pcm = crate::tts::audio::resample_reference(&pcm, spec.sample_rate, 24000);
+        let mut native = PocketNative::open(Path::new(&root), "pocket-tts-en", 4).unwrap();
+        let (frames, embeddings) = native.encode_voice(&pcm).unwrap();
+        let base = native.prefill_voice(frames, &embeddings).unwrap();
+        let ids = native.tokenizer.encode("Hello world.");
+        let options = ChunkOptions {
+            frames_after_eos: 5,
+            temperature: 0.7,
+            lsd_steps: 1,
+            control: None,
+        };
+        let mut rng = StdRng::seed_from_u64(42);
+        let first = native.run_chunk(&base, &ids, &options, &mut rng).unwrap();
+        let second_chunk = native.run_chunk(&base, &ids, &options, &mut rng).unwrap();
+        assert_ne!(
+            first, second_chunk,
+            "identical chunks must continue the request RNG"
+        );
+        let first_pcm = native.decode_latents(&first).unwrap();
+        let control = InferenceControl::new(Duration::from_secs(180));
+        let watcher = control.clone();
+        let cancellation = std::thread::spawn(move || {
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_secs(120) {
+                if watcher.snapshot().frames >= 1 {
+                    watcher.cancel();
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            watcher.cancel();
+            false
+        });
+        let options_cancel = ChunkOptions {
+            control: Some(&control),
+            ..options
+        };
+        let result = native.run_chunk(&base, &ids, &options_cancel, &mut rng);
+        assert!(
+            cancellation.join().unwrap(),
+            "must cancel after native frame generation"
+        );
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        let mut fresh_rng = StdRng::seed_from_u64(42);
+        let recovered = native
+            .run_chunk(&base, &ids, &options, &mut fresh_rng)
+            .unwrap();
+        assert_eq!(
+            first, recovered,
+            "fresh request must recover its deterministic latent sequence"
+        );
+        assert_eq!(
+            first_pcm,
+            native.decode_latents(&recovered).unwrap(),
+            "decoder state must be fresh"
+        );
     }
 
     /// Opt-in verification of downloaded language-local tokenizers and five

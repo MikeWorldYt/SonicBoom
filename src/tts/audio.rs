@@ -111,6 +111,52 @@ pub fn resample_pcm_linear(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec
     out
 }
 
+/// Conditioning identity includes the algorithm and filter parameters.
+pub const REFERENCE_RESAMPLER_VERSION: &str = "sinc-blackman-96-zero-phase-v1";
+
+/// Offline reference-only windowed-sinc resampling. A Blackman window with
+/// 96 zero crossings and 6% transition guard rejects content above the new
+/// Nyquist frequency before decimation. The centered kernel compensates delay;
+/// truncated boundary kernels are DC-normalized. No denoising, gain normalization
+/// or clipping is performed (band-limited interpolation can ring at hard edges).
+/// Providers validate finite input and rates before calling this function.
+/// Output length uses ceil, matching the legacy duration convention.
+pub fn resample_reference(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    if samples.is_empty() || from_rate == 0 || to_rate == 0 {
+        return Vec::new();
+    }
+    if from_rate == to_rate {
+        return samples.to_vec();
+    }
+    let ratio = to_rate as f64 / from_rate as f64;
+    let cutoff = ratio.min(1.0) * 0.94;
+    let radius = 48.0 / cutoff;
+    let out_len = ((samples.len() as u128 * to_rate as u128).div_ceil(from_rate as u128)) as usize;
+    let mut output = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let center = i as f64 / ratio;
+        let start = ((center - radius).ceil() as isize).max(0) as usize;
+        let end = ((center + radius).floor() as usize).min(samples.len() - 1);
+        let (mut sum, mut weight_sum) = (0.0, 0.0);
+        for (offset, sample) in samples[start..=end].iter().enumerate() {
+            let distance = (start + offset) as f64 - center;
+            let phase = std::f64::consts::PI * distance * cutoff;
+            let sinc = if phase.abs() < 1e-12 {
+                1.0
+            } else {
+                phase.sin() / phase
+            };
+            let angle = std::f64::consts::PI * distance / radius;
+            let window = 0.42 + 0.5 * angle.cos() + 0.08 * (2.0 * angle).cos();
+            let weight = cutoff * sinc * window;
+            sum += *sample as f64 * weight;
+            weight_sum += weight;
+        }
+        output.push((sum / weight_sum) as f32);
+    }
+    output
+}
+
 /// Encode already-padded 48 kHz mono PCM into an Ogg Opus stream, writing
 /// each packet straight into the container. There is no intermediate packet
 /// store and no second per-packet clone: packet bytes move from the encoder
@@ -503,5 +549,61 @@ mod tests {
         // WAV magic check as a container sanity anchor.
         let wav = encode_audio(&samples, 24_000, AudioFormat::Wav).unwrap();
         assert_eq!(&wav[0..4], b"RIFF");
+    }
+}
+
+#[cfg(test)]
+mod reference_resampling_tests {
+    use super::*;
+    fn tone(rate: u32, hz: f64) -> Vec<f32> {
+        (0..rate)
+            .map(|i| (0.5 * (std::f64::consts::TAU * hz * i as f64 / rate as f64).sin()) as f32)
+            .collect()
+    }
+    fn rms(pcm: &[f32]) -> f64 {
+        (pcm.iter().map(|s| (*s as f64).powi(2)).sum::<f64>() / pcm.len() as f64).sqrt()
+    }
+    #[test]
+    fn reference_filter_rejects_aliases_and_preserves_passband() {
+        for rate in [44100, 48000] {
+            let high = tone(rate, 18000.0);
+            let linear = resample_pcm_linear(&high, rate, 24000);
+            let filtered = resample_reference(&high, rate, 24000);
+            let alias_db = 20.0 * (rms(&filtered[200..23800]) / rms(&linear[200..23800])).log10();
+            eprintln!("{rate}->24000: 18kHz alias vs linear = {alias_db:.2} dB");
+            assert!(alias_db < -60.0, "alias attenuation {alias_db}");
+            let low = resample_reference(&tone(rate, 1000.0), rate, 24000);
+            assert!((rms(&low[200..23800]) - 0.5 / 2f64.sqrt()).abs() < 0.001);
+            assert!(low.iter().all(|s| s.is_finite() && s.abs() < 0.6));
+        }
+    }
+    #[test]
+    fn reference_duration_dc_silence_impulse_and_equal_rate() {
+        for rate in [16000, 24000, 44100, 48000] {
+            let dc = vec![0.25; rate as usize];
+            let out = resample_reference(&dc, rate, 24000);
+            assert_eq!(out.len(), 24000);
+            assert!(out.iter().all(|s| (*s - 0.25).abs() < 1e-6));
+            assert_eq!(
+                resample_reference(&vec![0.0; rate as usize], rate, 24000),
+                vec![0.0; 24000]
+            );
+            let mut impulse = vec![0.0; rate as usize];
+            impulse[rate as usize / 2] = 0.5;
+            let out = resample_reference(&impulse, rate, 24000);
+            assert_eq!(out.len(), 24000);
+            assert!(out.iter().all(|s| s.is_finite() && s.abs() <= 0.51));
+            assert_eq!(
+                out.iter()
+                    .enumerate()
+                    .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+                    .unwrap()
+                    .0,
+                12000
+            );
+        }
+        let input = tone(24000, 7000.0);
+        assert_eq!(resample_reference(&input, 24000, 24000), input);
+        assert!(resample_reference(&input, 0, 24000).is_empty());
     }
 }
