@@ -141,6 +141,9 @@ fn main() -> Result<()> {
     } else {
         None
     };
+    if provider == "pocket" {
+        request.clone_mode = Some(sonicboom::tts::providers::CloneMode::AudioPrompt);
+    }
     let primary_reference = request.reference_audio.clone();
     let alternate = std::env::var("AUDIT_ALT_REFERENCE_WAV")
         .ok()
