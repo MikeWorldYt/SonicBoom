@@ -1231,9 +1231,6 @@ impl PocketNative {
         let mut x = vec![0.0f32; latent_dim];
         let mut eos_step: Option<usize> = None;
         for step in 0..frame_limit {
-            if let Some(control) = control {
-                control.update("flow", step);
-            }
             if control.is_some_and(|c| c.stopped()) {
                 return Err(ProviderError::inference_failed(
                     "inference cancelled or deadline exceeded",
