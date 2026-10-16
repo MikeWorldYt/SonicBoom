@@ -170,6 +170,12 @@ impl JobStore {
         let Some(job) = entries.get_mut(job_id) else {
             return false;
         };
+        // A completed result is immutable. Late duplicate completion must not
+        // replace audio or double-count its retained bytes; stopped jobs never
+        // acquire a downloadable payload.
+        if job.audio.is_some() || job.status.terminal() || job.control.stopped() {
+            return false;
+        }
         self.retained_bytes
             .fetch_add(bytes.len(), std::sync::atomic::Ordering::Relaxed);
         job.audio = Some((kind, bytes));
@@ -443,15 +449,14 @@ pub async fn audio(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    let entries = state
-        .inference_gate
-        .jobs
-        .entries
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    audio_response(&state.inference_gate.jobs, &id, &token.rate_limit_key())
+}
+
+fn audio_response(store: &JobStore, id: &str, owner: &str) -> Result<Response, AppError> {
+    let entries = store.entries.lock().unwrap_or_else(|e| e.into_inner());
     let j = entries
-        .get(&id)
-        .filter(|j| j.owner == token.rate_limit_key())
+        .get(id)
+        .filter(|j| j.owner == owner)
         .ok_or_else(|| AppError::NotFound("unknown synthesis job".into()))?;
     let (kind, bytes) = j
         .audio
@@ -506,6 +511,77 @@ pub async fn events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn separate_http_downloads_preserve_job_and_owner_identity() {
+        use axum::{Router, routing::get};
+        use tower::ServiceExt;
+        let store = Arc::new(JobStore::default());
+        let (a, job_a) = unfinished_job("alice", Duration::from_secs(60));
+        let (b, job_b) = unfinished_job("bob", Duration::from_secs(60));
+        let pcm_a = vec![0.1f32; 24];
+        let pcm_b = vec![-0.2f32; 48];
+        let wav = |pcm: &[f32]| {
+            sonicboom::tts::audio::encode_audio(pcm, 24000, sonicboom::tts::audio::AudioFormat::Wav)
+                .unwrap()
+        };
+        let bytes_a = wav(&pcm_a);
+        let bytes_b = wav(&pcm_b);
+        {
+            let mut entries = store.entries.lock().unwrap();
+            entries.insert(a.clone(), job_a);
+            entries.insert(b.clone(), job_b);
+            for (id, bytes) in [(&a, &bytes_a), (&b, &bytes_b)] {
+                assert!(store.store_completed_audio_locked(
+                    &mut entries,
+                    id,
+                    "audio/wav".into(),
+                    Bytes::from(bytes.clone())
+                ));
+                entries.get_mut(id).unwrap().status.stage = "completed".into();
+            }
+        }
+        let app = Router::new().route(
+            "/{owner}/{id}",
+            get(move |Path((owner, id)): Path<(String, String)>| {
+                let store = store.clone();
+                async move { audio_response(&store, &id, &owner) }
+            }),
+        );
+        let fetch = |path: String| {
+            let app = app.clone();
+            async move {
+                app.oneshot(
+                    axum::http::Request::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        let (response_a, response_b, foreign) = tokio::join!(
+            fetch(format!("/alice/{a}")),
+            fetch(format!("/bob/{b}")),
+            fetch(format!("/alice/{b}"))
+        );
+        assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+        for (response, expected) in [(response_a, bytes_a), (response_b, bytes_b)] {
+            assert_eq!(
+                response.headers()[header::CACHE_CONTROL],
+                "private, no-store"
+            );
+            assert_eq!(response.headers()[header::CONTENT_TYPE], "audio/wav");
+            assert_eq!(
+                axum::body::to_bytes(response.into_body(), 4096)
+                    .await
+                    .unwrap()
+                    .as_ref(),
+                expected
+            );
+        }
+    }
+
     #[test]
     fn snapshots_enforce_owner_and_retention() {
         let store = JobStore::default();
@@ -572,6 +648,41 @@ mod tests {
             audio: None,
         };
         (id, job)
+    }
+
+    #[test]
+    fn late_completion_cannot_replace_audio_or_publish_after_cancel() {
+        let store = JobStore::default();
+        let (id, job) = unfinished_job("alice", Duration::from_secs(60));
+        let (cancelled, stopped) = unfinished_job("bob", Duration::from_secs(60));
+        stopped.control.cancel();
+        let mut entries = store.entries.lock().unwrap();
+        entries.insert(id.clone(), job);
+        entries.insert(cancelled.clone(), stopped);
+        assert!(store.store_completed_audio_locked(
+            &mut entries,
+            &id,
+            "audio/wav".into(),
+            Bytes::from_static(b"first")
+        ));
+        assert!(!store.store_completed_audio_locked(
+            &mut entries,
+            &id,
+            "audio/wav".into(),
+            Bytes::from_static(b"second")
+        ));
+        assert!(!store.store_completed_audio_locked(
+            &mut entries,
+            &cancelled,
+            "audio/wav".into(),
+            Bytes::from_static(b"partial")
+        ));
+        assert_eq!(
+            entries[&id].audio.as_ref().unwrap().1,
+            Bytes::from_static(b"first")
+        );
+        assert!(entries[&cancelled].audio.is_none());
+        assert_eq!(store.retained_locked(), 5);
     }
 
     #[test]
