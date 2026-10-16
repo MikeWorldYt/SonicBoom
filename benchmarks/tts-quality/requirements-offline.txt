@@ -1,0 +1,9 @@
+# Optional validation venv only; never install in the production Rust runtime.
+faster-whisper==1.2.1
+ctranslate2==4.8.3
+av==16.0.1
+numpy==2.5.4
+tokenizers==0.23.3
+onnxruntime==1.28.0
+sentencepiece==0.2.1
+safetensors==0.6.2

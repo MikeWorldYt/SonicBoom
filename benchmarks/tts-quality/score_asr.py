@@ -73,8 +73,10 @@ def main():
                    'asr_model': hypothesis['asr_model'], 'asr_revision': hypothesis['asr_revision'],
                    'wer': words[0] / max(1, len(expected.split())),
                    'cer': chars[0] / max(1, len(expected)),
+                   'reference_words': len(expected.split()), 'reference_characters': len(expected),
                    'substituted_words': words[1], 'omitted_words': words[2], 'inserted_words': words[3],
                    'hola_test_for_test': expected == 'test' and actual == 'hola test',
+                   'unexpected_hola': 'hola' not in expected.split() and 'hola' in actual.split(),
                    'manual_review_required': words[0] > 0 and not hypothesis.get('manually_reviewed', False)}
             output.write(json.dumps(row) + '\n')
 
