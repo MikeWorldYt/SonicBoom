@@ -366,15 +366,18 @@ async fn post_tts_and_play_inner(
         .await
         .map_err(|e| AppError::internal(format!("temp audio write failed: {e}")))?;
 
-    // Enqueue first; register for cleanup only after the queue accepted
-    // the item, so a rejection cannot orphan the file. Every failure path
-    // below deletes the newly generated file.
+    // Ownership of the generated file transfers atomically on admission
+    // (`temporary: true`): the audio thread registers the file before it
+    // can complete, be stopped, or be replaced, so no interleaving can
+    // orphan it and no separate `RegisterTemp` round-trip is needed. Every
+    // failure path below deletes the newly generated file, since a rejected
+    // or failed admission is never registered by the audio thread.
     use crate::tts::queue::AudioManagerError;
     let queued = if play_now {
         // Acknowledged start: `Ok` means playback is audible, anything else
         // maps to a precise status — never "Playing immediately" on failure.
         audio_manager
-            .play_now(id.clone(), path.clone())
+            .play_now_temp(id.clone(), path.clone())
             .await
             .map_err(|e| match e {
                 AudioManagerError::Unavailable => {
@@ -396,7 +399,7 @@ async fn post_tts_and_play_inner(
             })
     } else {
         audio_manager
-            .add_to_queue(id.clone(), path.clone())
+            .add_to_queue_temp(id.clone(), path.clone())
             .await
             .map_err(|e| match e {
                 AudioManagerError::QueueFull => AppError::TooManyRequests(
@@ -418,16 +421,6 @@ async fn post_tts_and_play_inner(
     if let Err(error) = queued {
         let _ = tokio::fs::remove_file(&path).await;
         return Err(error);
-    }
-    if let Err(crate::tts::queue::AudioManagerError::Unavailable) =
-        audio_manager.register_temp(path.clone()).await
-    {
-        // The audio thread died between enqueue and registration; remove
-        // the file rather than leaving it permanently unreachable.
-        let _ = tokio::fs::remove_file(&path).await;
-        return Err(AppError::ServiceUnavailable(
-            "Audio playback system unavailable.".to_string(),
-        ));
     }
 
     Ok((

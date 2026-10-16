@@ -180,16 +180,26 @@ impl Default for AudioQueue {
 #[derive(Debug)]
 pub enum AudioCommand {
     /// Add to queue (replies with admission decision: bound enforcement).
+    ///
+    /// `temporary` marks a server-generated file owned by SonicBoom: the
+    /// audio thread registers ownership atomically on admission, before the
+    /// item can complete, be evicted, stopped, or interrupted. Caller-owned
+    /// library files must always send `temporary: false` so cleanup never
+    /// deletes them.
     Enqueue {
         id: String,
         path: PathBuf,
+        temporary: bool,
         reply: oneshot::Sender<Result<(), AudioManagerError>>,
     },
     /// Play immediately (clears queue). Replies once the playback thread
     /// has attempted to start playback — never a blind "sent" success.
+    ///
+    /// `temporary` has the same ownership meaning as in [`AudioCommand::Enqueue`].
     PlayNow {
         id: String,
         path: PathBuf,
+        temporary: bool,
         reply: oneshot::Sender<Result<(), AudioManagerError>>,
     },
     /// Play next in queue
@@ -207,7 +217,13 @@ pub enum AudioCommand {
         max_items: usize,
         reply: oneshot::Sender<()>,
     },
-    /// Register a temp file for cleanup after playback
+    /// Register a temp file for cleanup after playback.
+    ///
+    /// Retained for backward compatibility with external callers that admit
+    /// caller-owned files and register them separately. The server-generated
+    /// playback path no longer uses this split protocol: it sends
+    /// `temporary: true` on admission instead (see [`AudioManager::add_to_queue_temp`]
+    /// and [`AudioManager::play_now_temp`]).
     RegisterTemp { path: PathBuf },
     /// Get status (returns sender for response)
     GetStatus(oneshot::Sender<QueueStatus>),
@@ -277,17 +293,40 @@ impl AudioManager {
         Self { command_tx }
     }
 
-    /// Add an audio file to the queue.
+    /// Add a caller-owned audio file to the queue (`temporary: false`).
     ///
     /// Returns [`AudioManagerError::QueueFull`] when the bound is reached
     /// (the caller must delete any caller-owned temp file) or
     /// [`AudioManagerError::Unavailable`] when the audio thread is dead.
+    /// The queued file is never deleted by playback cleanup.
     pub async fn add_to_queue(&self, id: String, path: PathBuf) -> Result<(), AudioManagerError> {
+        self.enqueue_with_ownership(id, path, false).await
+    }
+
+    /// Add a server-generated temporary file to the queue. Ownership is
+    /// registered atomically inside the audio thread on admission, so no
+    /// separate [`AudioManager::register_temp`] call is needed. On rejection
+    /// the file is *not* registered and the caller must delete it.
+    pub async fn add_to_queue_temp(
+        &self,
+        id: String,
+        path: PathBuf,
+    ) -> Result<(), AudioManagerError> {
+        self.enqueue_with_ownership(id, path, true).await
+    }
+
+    async fn enqueue_with_ownership(
+        &self,
+        id: String,
+        path: PathBuf,
+        temporary: bool,
+    ) -> Result<(), AudioManagerError> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(AudioCommand::Enqueue {
                 id,
                 path,
+                temporary,
                 reply: tx,
             })
             .await
@@ -295,18 +334,38 @@ impl AudioManager {
         rx.await.map_err(|_| AudioManagerError::Unavailable)?
     }
 
-    /// Play a specific audio file immediately (clears queue).
+    /// Play a caller-owned audio file immediately (clears queue,
+    /// `temporary: false`).
     ///
     /// Completes only after the playback thread has attempted to start
     /// playback: `Ok` means playback started, [`AudioManagerError::OutputUnavailable`]
     /// means no output stream/sink, [`AudioManagerError::InvalidAudio`] means
     /// the file cannot be opened/decoded.
     pub async fn play_now(&self, id: String, path: PathBuf) -> Result<(), AudioManagerError> {
+        self.play_now_with_ownership(id, path, false).await
+    }
+
+    /// Play a server-generated temporary file immediately. Ownership is
+    /// registered atomically inside the audio thread before playback starts,
+    /// so no separate [`AudioManager::register_temp`] call is needed. On
+    /// failure the file is *not* left registered and the caller must delete
+    /// it; on success cleanup happens at the normal lifecycle point.
+    pub async fn play_now_temp(&self, id: String, path: PathBuf) -> Result<(), AudioManagerError> {
+        self.play_now_with_ownership(id, path, true).await
+    }
+
+    async fn play_now_with_ownership(
+        &self,
+        id: String,
+        path: PathBuf,
+        temporary: bool,
+    ) -> Result<(), AudioManagerError> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(AudioCommand::PlayNow {
                 id,
                 path,
+                temporary,
                 reply: tx,
             })
             .await
@@ -374,6 +433,11 @@ impl AudioManager {
     /// Register a temporary file for automatic cleanup after playback completes.
     /// Temp files (e.g., WAV files synthesized for local playback) are tracked
     /// and deleted once they have finished playing to prevent disk space leaks.
+    ///
+    /// Retained for backward compatibility with external callers. The
+    /// server-generated playback path uses [`AudioManager::add_to_queue_temp`]
+    /// / [`AudioManager::play_now_temp`] instead, which register ownership
+    /// atomically on admission with no window for orphaning.
     pub async fn register_temp(&self, path: PathBuf) -> Result<(), AudioManagerError> {
         self.command_tx
             .send(AudioCommand::RegisterTemp { path })
@@ -524,14 +588,59 @@ fn audio_thread(
             );
         }
 
-        // Use blocking recv with timeout
-        match rt.block_on(async {
-            tokio::time::timeout(std::time::Duration::from_millis(100), command_rx.recv()).await
-        }) {
-            Ok(Some(cmd)) => {
+        // Event-driven wait: block indefinitely while healthy and idle so
+        // the thread sleeps with zero wakeups; poll only while a sink is
+        // active (completion + responsive controls) or while a throttled
+        // device-recovery retry is pending. Commands themselves wake the
+        // indefinite wait immediately, preserving PlayNow acknowledgment
+        // and stop/skip latency.
+        let wait = recv_wait(
+            sink.is_some(),
+            audio_output.is_none(),
+            STREAM_RETRY_INTERVAL.saturating_sub(last_stream_retry.elapsed()),
+        );
+        /// Receive outcome: timeout and channel-close stay distinct so a
+        /// retry-timeout tick can never be mistaken for manager teardown.
+        enum RecvOutcome {
+            Command(AudioCommand),
+            Timeout,
+            Closed,
+        }
+        let received = rt.block_on(async {
+            match wait {
+                Some(timeout) => match tokio::time::timeout(timeout, command_rx.recv()).await {
+                    Ok(Some(cmd)) => RecvOutcome::Command(cmd),
+                    Ok(None) => RecvOutcome::Closed,
+                    Err(_) => RecvOutcome::Timeout,
+                },
+                None => match command_rx.recv().await {
+                    Some(cmd) => RecvOutcome::Command(cmd),
+                    None => RecvOutcome::Closed,
+                },
+            }
+        });
+        match received {
+            RecvOutcome::Command(cmd) => {
                 match cmd {
-                    AudioCommand::Enqueue { id, path, reply } => {
-                        let admitted = queue.enqueue(AudioItem { id, path }).is_ok();
+                    AudioCommand::Enqueue {
+                        id,
+                        path,
+                        temporary,
+                        reply,
+                    } => {
+                        // Ownership is registered atomically with admission:
+                        // once admitted, the item can be completed, stopped,
+                        // or replaced only through paths that consult the
+                        // registered set, so no interleaving can orphan it.
+                        // A rejected item is never registered; the caller
+                        // deletes its own file.
+                        let admitted = admit_enqueue(
+                            &mut queue,
+                            &mut temp_files,
+                            AudioItem { id, path },
+                            temporary,
+                        )
+                        .is_ok();
                         let _ =
                             reply.send(admitted.then_some(()).ok_or(AudioManagerError::QueueFull));
                         if !admitted {
@@ -553,7 +662,12 @@ fn audio_thread(
                             );
                         }
                     }
-                    AudioCommand::PlayNow { id, path, reply } => {
+                    AudioCommand::PlayNow {
+                        id,
+                        path,
+                        temporary,
+                        reply,
+                    } => {
                         // The replaced current item and every queued item
                         // become unreachable: clean their temp files first.
                         clear_queue_with_cleanup(&mut queue, &mut temp_files);
@@ -562,7 +676,11 @@ fn audio_thread(
                         }
                         sink = None;
 
-                        let item = AudioItem { id, path };
+                        // Register the new temp file before it can be
+                        // completed, stopped, or replaced, so failure and
+                        // success paths below both see consistent ownership.
+                        let item =
+                            admit_play_now(&mut temp_files, AudioItem { id, path }, temporary);
                         let attempt = match ensure_audio_output(
                             &mut audio_output,
                             &selected_device,
@@ -699,7 +817,7 @@ fn audio_thread(
                     }
                 }
             }
-            Ok(None) => {
+            RecvOutcome::Closed => {
                 // Channel closed: managers are gone. Best-effort cleanup of
                 // every remaining temp file before exiting.
                 let mut queue = queue;
@@ -710,8 +828,9 @@ fn audio_thread(
                 }
                 break;
             }
-            Err(_) => {
-                // Timeout, continue loop
+            RecvOutcome::Timeout => {
+                // Poll tick (active sink or pending device retry): loop back
+                // through the completion check and the recovery tick.
             }
         }
     }
@@ -784,12 +903,39 @@ fn pump_queue_when_idle(
 /// How often the idle audio thread retries a missing output device.
 /// Command-driven attempts (enqueue / play-now) always retry immediately;
 /// this only throttles the background tick so a deviceless machine does not
-/// spam one attempt every 100 ms.
+/// spam one attempt per wakeup.
 const STREAM_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+/// Completion/controls poll while a sink is active. Rodio offers no
+/// end-of-playback notification, so the active-only check keeps this cadence;
+/// it never runs while idle (see [`recv_wait`]).
+const ACTIVE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// True when a background output-device retry is due.
 fn stream_retry_due(last_retry: std::time::Instant, now: std::time::Instant) -> bool {
     now.duration_since(last_retry) >= STREAM_RETRY_INTERVAL
+}
+
+/// How long the audio thread waits for the next command.
+///
+/// - A live sink (playing or paused) needs responsive pause/stop/skip and
+///   prompt completion detection: poll on [`ACTIVE_POLL_INTERVAL`].
+/// - A missing output with nothing playing waits only until the next
+///   throttled recovery retry is due — never a fixed hot tick.
+/// - A healthy idle thread (no sink, output present) blocks indefinitely:
+///   the next command itself is the wakeup, so idle CPU/wakeups drop to
+///   zero without harming command latency or PlayNow acknowledgment.
+fn recv_wait(
+    sink_active: bool,
+    output_missing: bool,
+    until_retry: std::time::Duration,
+) -> Option<std::time::Duration> {
+    if sink_active {
+        Some(ACTIVE_POLL_INTERVAL)
+    } else if output_missing {
+        Some(until_retry)
+    } else {
+        None
+    }
 }
 
 /// Open the OS default output stream.
@@ -1021,13 +1167,61 @@ pub struct QueueStatus {
     pub volume: f32,
 }
 
+/// Admit an `Enqueue` item, registering `temporary` ownership atomically
+/// with the bound check. A rejected item is never registered (the caller
+/// deletes its own file); an admitted temporary item is registered before
+/// any completion/stop/replacement path can observe it, so it cannot leak.
+fn admit_enqueue(
+    queue: &mut AudioQueue,
+    temp_files: &mut HashSet<PathBuf>,
+    item: AudioItem,
+    temporary: bool,
+) -> Result<(), AudioManagerError> {
+    queue.enqueue(item.clone())?;
+    if temporary {
+        temp_files.insert(item.path);
+    }
+    Ok(())
+}
+
+/// Register a `PlayNow` item's `temporary` ownership before playback starts.
+/// The caller must have already cleared the previous queue/current state.
+/// Failure paths clean the item via [`cleanup_item_temp`], which now finds
+/// the registration; success paths keep it until the normal lifecycle point.
+fn admit_play_now(
+    temp_files: &mut HashSet<PathBuf>,
+    item: AudioItem,
+    temporary: bool,
+) -> AudioItem {
+    if temporary {
+        temp_files.insert(item.path.clone());
+    }
+    item
+}
+
 /// Attempts to delete a temporary audio file after use.
 /// Tracks the set of temp files so each one is only deleted once.
+///
+/// The registration is removed only when the file is actually gone (or was
+/// already absent). On platforms where an open file cannot be unlinked
+/// (notably Windows, where the playback backend may still hold the file
+/// when the finished check fires), a failed deletion keeps the registration
+/// so a later lifecycle pass or the startup sweep retries instead of
+/// orphaning the file.
 fn cleanup_temp_file(path: &std::path::Path, temp_files: &mut HashSet<PathBuf>) {
-    if temp_files.remove(path)
-        && let Err(e) = std::fs::remove_file(path)
-    {
-        tracing::debug!("Failed to remove temp file '{path:?}': {e}");
+    if !temp_files.contains(path) {
+        return;
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => {
+            temp_files.remove(path);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            temp_files.remove(path);
+        }
+        Err(e) => {
+            tracing::debug!("Failed to remove temp file '{path:?}': {e}");
+        }
     }
 }
 
@@ -1164,6 +1358,33 @@ pub fn prepare_temp_dir(dir: &Path) -> std::io::Result<usize> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn idle_wait_blocks_while_active_and_deviceless_poll() {
+        use std::time::Duration;
+        // Healthy idle thread: block indefinitely — zero wakeups, with the
+        // next command itself as the wakeup.
+        assert_eq!(recv_wait(false, false, Duration::from_secs(10)), None);
+        assert_eq!(recv_wait(false, false, Duration::ZERO), None);
+        // Active sink (playing or paused): poll for completion and controls.
+        assert_eq!(
+            recv_wait(true, false, Duration::from_secs(10)),
+            Some(ACTIVE_POLL_INTERVAL)
+        );
+        assert_eq!(
+            recv_wait(true, true, Duration::from_secs(10)),
+            Some(ACTIVE_POLL_INTERVAL)
+        );
+        // Missing output, nothing playing: wait only until the throttled
+        // retry is due — never a fixed hot tick, never indefinite (which
+        // would stall recovery until the next command).
+        assert_eq!(
+            recv_wait(false, true, Duration::from_secs(7)),
+            Some(Duration::from_secs(7))
+        );
+        assert_eq!(recv_wait(false, true, Duration::ZERO), Some(Duration::ZERO));
+        assert_eq!(ACTIVE_POLL_INTERVAL, Duration::from_millis(100));
+    }
 
     #[test]
     fn stream_retries_are_throttled_to_the_recovery_interval() {
@@ -1552,6 +1773,388 @@ mod tests {
         assert_eq!(
             manager.set_output_device("Nope".to_string()).await,
             Err(AudioManagerError::UnknownDevice)
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // SB-001: atomic temp-file ownership tests.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn atomic_enqueue_registers_temp_on_admission() {
+        let dir = TempDir::new();
+        let temp = dir.file("admitted.wav");
+        let mut temps: HashSet<PathBuf> = HashSet::new();
+        let mut queue = AudioQueue::new();
+
+        admit_enqueue(&mut queue, &mut temps, item("a", temp.clone()), true).unwrap();
+
+        // Registered before any completion/stop/replacement path can run.
+        assert!(temps.contains(&temp));
+        assert_eq!(queue.len(), 1);
+        assert!(temp.exists(), "live queued audio must not be deleted");
+    }
+
+    #[test]
+    fn rejected_enqueue_never_registers_temp() {
+        let dir = TempDir::new();
+        let mut temps: HashSet<PathBuf> = HashSet::new();
+        let mut queue = AudioQueue::with_max_items(1);
+        queue.enqueue(item("a", dir.file("a.wav"))).unwrap();
+
+        let rejected = dir.file("rejected.wav");
+        assert_eq!(
+            admit_enqueue(&mut queue, &mut temps, item("b", rejected.clone()), true),
+            Err(AudioManagerError::QueueFull)
+        );
+        assert!(!temps.contains(&rejected));
+        // Caller deletes its own rejected file; nothing is orphaned.
+        std::fs::remove_file(&rejected).unwrap();
+        assert!(!rejected.exists());
+    }
+
+    #[test]
+    fn caller_owned_files_are_never_registered() {
+        let dir = TempDir::new();
+        let library = dir.file("library.wav");
+        let mut temps: HashSet<PathBuf> = HashSet::new();
+        let mut queue = AudioQueue::new();
+
+        admit_enqueue(&mut queue, &mut temps, item("lib", library.clone()), false).unwrap();
+        assert!(!temps.contains(&library));
+
+        // Stop/replace lifecycle must not delete caller-owned files.
+        clear_queue_with_cleanup(&mut queue, &mut temps);
+        assert!(library.exists(), "caller-owned files must survive");
+        assert!(temps.is_empty());
+    }
+
+    #[test]
+    fn play_now_registers_temp_before_start_attempt() {
+        let dir = TempDir::new();
+        let temp = dir.file("now.wav");
+        let mut temps: HashSet<PathBuf> = HashSet::new();
+
+        // Registration happens before the playback attempt, so both the
+        // failure path (cleanup here) and the success path (later lifecycle
+        // cleanup) observe consistent ownership.
+        let admitted = admit_play_now(&mut temps, item("now", temp.clone()), true);
+        assert!(temps.contains(&temp));
+
+        // Simulated start failure: the item's temp file is released.
+        cleanup_item_temp(&admitted, &mut temps);
+        assert!(!temp.exists());
+        assert!(temps.is_empty());
+
+        // Caller-owned play-now is never registered.
+        let library = dir.file("owned.wav");
+        let owned = admit_play_now(&mut temps, item("o", library.clone()), false);
+        assert!(!temps.contains(&library));
+        cleanup_item_temp(&owned, &mut temps);
+        assert!(library.exists(), "caller-owned files must survive");
+    }
+
+    #[test]
+    fn missing_files_clear_registration_without_orphan() {
+        let dir = TempDir::new();
+        let ghost = dir.path.join("ghost.wav");
+        let mut temps: HashSet<PathBuf> = HashSet::from([ghost.clone()]);
+        cleanup_item_temp(&item("g", ghost.clone()), &mut temps);
+        assert!(temps.is_empty(), "already-gone files must not linger");
+    }
+
+    #[test]
+    fn failed_deletion_keeps_registration_for_retry() {
+        // A directory cannot be unlinked with `remove_file` on either
+        // platform under test, which deterministically exercises the
+        // Windows live-file branch (sharing violation): the registration
+        // must be retained for a later lifecycle pass instead of orphaning
+        // the path.
+        let dir = TempDir::new();
+        let blocked = dir.path.join("blocked.wav");
+        std::fs::create_dir_all(&blocked).unwrap();
+        let mut temps: HashSet<PathBuf> = HashSet::from([blocked.clone()]);
+        cleanup_item_temp(&item("b", blocked.clone()), &mut temps);
+        assert!(
+            temps.contains(&blocked),
+            "failed deletion must retain registration for retry"
+        );
+        assert!(blocked.exists());
+        // A later pass after the handle closes succeeds and deregisters.
+        std::fs::remove_dir(&blocked).unwrap();
+        std::fs::write(&blocked, b"leftover").unwrap();
+        cleanup_item_temp(&item("b", blocked.clone()), &mut temps);
+        assert!(temps.is_empty());
+        assert!(!blocked.exists());
+    }
+
+    /// Deterministic xorshift64 PRNG so the interleaving stress test is
+    /// reproducible without model weights or audio hardware.
+    struct StressRng(u64);
+
+    impl StressRng {
+        fn next(&mut self, bound: u64) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x % bound
+        }
+    }
+
+    #[test]
+    fn randomized_ownership_interleavings_leave_no_orphans() {
+        for seed in 0..1_000u64 {
+            let case_dir = TempDir::new();
+            let mut rng = StressRng(seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1));
+            let mut queue = AudioQueue::with_max_items(3);
+            let mut temps: HashSet<PathBuf> = HashSet::new();
+            // Every admitted temp file: path -> still referenced (queued or
+            // current). Owned files must never be deleted by lifecycle paths.
+            let mut live_temps: HashSet<PathBuf> = HashSet::new();
+            let mut owned: Vec<PathBuf> = Vec::new();
+            let mut counter = 0u32;
+
+            let make_file = |counter: &mut u32| {
+                *counter += 1;
+                let path = case_dir.path.join(format!("t-{seed}-{counter}.wav"));
+                std::fs::write(&path, b"fake audio").unwrap();
+                path
+            };
+
+            for _ in 0..12 {
+                match rng.next(7) {
+                    // Enqueue a server-generated temp file.
+                    0 | 1 => {
+                        let path = make_file(&mut counter);
+                        let temporary = rng.next(2) == 0;
+                        let admitted = admit_enqueue(
+                            &mut queue,
+                            &mut temps,
+                            item(&format!("e-{counter}"), path.clone()),
+                            temporary,
+                        )
+                        .is_ok();
+                        if admitted {
+                            if temporary {
+                                assert!(temps.contains(&path));
+                                live_temps.insert(path.clone());
+                            } else {
+                                owned.push(path.clone());
+                            }
+                            assert!(path.exists(), "live queued audio must not be deleted");
+                        } else {
+                            // Rejected: never registered; caller deletes.
+                            assert!(!temps.contains(&path));
+                            std::fs::remove_file(&path).unwrap();
+                        }
+                    }
+                    // Play-now a server-generated temp file (interrupts).
+                    2 => {
+                        let path = make_file(&mut counter);
+                        let temporary = rng.next(2) == 0;
+                        // Replacement clears previous state first, exactly
+                        // like the audio thread's PlayNow handler.
+                        let dropped_current = queue.take_current();
+                        let dropped_waiting = queue.drain_waiting();
+                        for dropped in dropped_current.into_iter().chain(dropped_waiting) {
+                            cleanup_item_temp(&dropped, &mut temps);
+                            live_temps.remove(&dropped.path);
+                        }
+                        let admitted_item =
+                            admit_play_now(&mut temps, item("now", path.clone()), temporary);
+                        if temporary {
+                            assert!(temps.contains(&path));
+                        }
+                        // Simulated start attempt: temp failures clean up
+                        // via the registration; caller-owned failures leave
+                        // the library file for the caller.
+                        if rng.next(4) == 0 {
+                            cleanup_item_temp(&admitted_item, &mut temps);
+                            if temporary {
+                                live_temps.remove(&path);
+                                // Failed admission: caller deletes its own
+                                // generated file (already cleaned above).
+                                let _ = std::fs::remove_file(&path);
+                            } else {
+                                owned.push(path.clone());
+                            }
+                        } else {
+                            queue.set_current(Some(admitted_item));
+                            if temporary {
+                                live_temps.insert(path.clone());
+                            } else {
+                                owned.push(path.clone());
+                            }
+                            assert!(path.exists(), "live current audio must not be deleted");
+                        }
+                    }
+                    // Stop: clears current + waiting.
+                    3 => {
+                        let dropped_current = queue.take_current();
+                        let dropped_waiting = queue.drain_waiting();
+                        for dropped in dropped_current.into_iter().chain(dropped_waiting) {
+                            cleanup_item_temp(&dropped, &mut temps);
+                            live_temps.remove(&dropped.path);
+                        }
+                        assert!(queue.current().is_none() && queue.is_empty());
+                    }
+                    // Complete the current item (playback finished).
+                    4 => {
+                        if let Some(current) = queue.take_current() {
+                            assert!(
+                                current.path.exists(),
+                                "current file must survive until completion"
+                            );
+                            cleanup_item_temp(&current, &mut temps);
+                            live_temps.remove(&current.path);
+                        }
+                    }
+                    // Decoding failure on the next waiting item.
+                    _ => {
+                        if let Some(broken) = queue.dequeue() {
+                            cleanup_item_temp(&broken, &mut temps);
+                            live_temps.remove(&broken.path);
+                        }
+                    }
+                }
+
+                // Invariant after every step: every live temp is registered
+                // and present; every owned file is present.
+                for live in &live_temps {
+                    assert!(temps.contains(live), "live temp {live:?} lost registration");
+                    assert!(live.exists(), "live temp {live:?} deleted early");
+                }
+                for path in &owned {
+                    assert!(path.exists(), "caller-owned file {path:?} was deleted");
+                }
+            }
+
+            // Drain: everything admitted must resolve to deleted temps
+            // and surviving owned files — zero orphans.
+            if let Some(current) = queue.take_current() {
+                cleanup_item_temp(&current, &mut temps);
+                live_temps.remove(&current.path);
+            }
+            for item in queue.drain_waiting() {
+                cleanup_item_temp(&item, &mut temps);
+                live_temps.remove(&item.path);
+            }
+            assert!(
+                live_temps.is_empty(),
+                "admitted temp files never reached a terminal lifecycle point"
+            );
+            // `temps` may only retain paths for files already gone from
+            // disk (retry-pending live-file deletions); here nothing is
+            // pending, so it must be empty.
+            assert!(temps.is_empty(), "orphaned temp registrations remain");
+            // On-disk check: every surviving file must be caller-owned.
+            let owned_set: HashSet<&PathBuf> = owned.iter().collect();
+            for entry in std::fs::read_dir(&case_dir.path)
+                .expect("case dir must remain readable")
+                .flatten()
+            {
+                let surviving = entry.path();
+                if surviving
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+                {
+                    assert!(
+                        owned_set.contains(&surviving),
+                        "orphaned temp file {surviving:?}"
+                    );
+                }
+            }
+            for path in &owned {
+                assert!(path.exists(), "caller-owned file {path:?} was deleted");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn temp_admission_sends_ownership_flag() {
+        // Server-generated path carries `temporary: true`.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(async move {
+            match rx.recv().await {
+                Some(AudioCommand::Enqueue {
+                    temporary, reply, ..
+                }) => {
+                    assert!(temporary);
+                    let _ = reply.send(Ok(()));
+                }
+                other => panic!("unexpected command: {other:?}"),
+            }
+        });
+        let manager = AudioManager::for_test(tx);
+        assert!(
+            manager
+                .add_to_queue_temp("a".into(), PathBuf::from("gen.wav"))
+                .await
+                .is_ok()
+        );
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(async move {
+            match rx.recv().await {
+                Some(AudioCommand::PlayNow {
+                    temporary, reply, ..
+                }) => {
+                    assert!(temporary);
+                    let _ = reply.send(Ok(()));
+                }
+                other => panic!("unexpected command: {other:?}"),
+            }
+        });
+        let manager = AudioManager::for_test(tx);
+        assert!(
+            manager
+                .play_now_temp("a".into(), PathBuf::from("gen.wav"))
+                .await
+                .is_ok()
+        );
+
+        // Caller-owned path carries `temporary: false` so cleanup never
+        // deletes library files.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(async move {
+            match rx.recv().await {
+                Some(AudioCommand::Enqueue {
+                    temporary, reply, ..
+                }) => {
+                    assert!(!temporary);
+                    let _ = reply.send(Ok(()));
+                }
+                other => panic!("unexpected command: {other:?}"),
+            }
+        });
+        let manager = AudioManager::for_test(tx);
+        assert!(
+            manager
+                .add_to_queue("a".into(), PathBuf::from("lib.wav"))
+                .await
+                .is_ok()
+        );
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(async move {
+            match rx.recv().await {
+                Some(AudioCommand::PlayNow {
+                    temporary, reply, ..
+                }) => {
+                    assert!(!temporary);
+                    let _ = reply.send(Ok(()));
+                }
+                other => panic!("unexpected command: {other:?}"),
+            }
+        });
+        let manager = AudioManager::for_test(tx);
+        assert!(
+            manager
+                .play_now("a".into(), PathBuf::from("lib.wav"))
+                .await
+                .is_ok()
         );
     }
 }
