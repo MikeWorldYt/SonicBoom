@@ -152,8 +152,12 @@ Pocket TTS per-language bundles (`KevinAHM/pocket-tts-onnx`
 
 ## Pocket TTS setup (CPU smoke test)
 
-1. Set `[providers.pocket_tts] enabled = true` and choose one `model_id`
-   from the table below. Hot-reload (or restart) downloads and verifies that
+1. In **Engines**, click **Activate** beside the Pocket language model you want.
+   This selects that model and enables Pocket in one settings update.
+   The model shows **Loading…** during download/load and **Active** when ready.
+   Previously downloaded bundles and saved voices are retained when switching.
+   Alternatively, set `[providers.pocket_tts] enabled = true` and choose one
+   `model_id` from the table below. Hot-reload (or restart) downloads and verifies that
    language's eight pinned files. Complete verified local bundles are reused.
    One bundle is resident at a time; change `model_id` and wait for `ready`
    before generating with another language. The French preview has 24 layers

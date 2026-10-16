@@ -440,5 +440,12 @@
   "setting.providers.pocket_tts.temperature.label": "Temperature",
   "setting.providers.pocket_tts.lsd_steps.label": "LSD Steps",
   "setting.providers.pocket_tts.cpu_threads.label": "CPU Threads",
-  "Upload 3–10 seconds of clear speech. Only use a voice you own or have permission to use. Add the exact transcript for ICL mode; X-vector and audio-prompt modes only need the recording.": "Upload 3–10 seconds of clear speech. Only use a voice you own or have permission to use. Add the exact transcript for ICL mode; X-vector and audio-prompt modes only need the recording."
+  "Upload 3–10 seconds of clear speech. Only use a voice you own or have permission to use. Add the exact transcript for ICL mode; X-vector and audio-prompt modes only need the recording.": "Upload 3–10 seconds of clear speech. Only use a voice you own or have permission to use. Add the exact transcript for ICL mode; X-vector and audio-prompt modes only need the recording.",
+  "Activate": "Activate",
+  "Activate {model}": "Activate {model}",
+  "Selected": "Selected",
+  "Pick a supported Pocket model.": "Pick a supported Pocket model.",
+  "Activate a language model to download it if needed. Pocket uses one active model at a time; switching keeps your voices and downloaded models.": "Activate a language model to download it if needed. Pocket uses one active model at a time; switching keeps your voices and downloaded models.",
+  "Preparing the selected model. This page updates automatically; the first download may take a few minutes.": "Preparing the selected model. This page updates automatically; the first download may take a few minutes.",
+  "Loading…": "Loading…"
 }

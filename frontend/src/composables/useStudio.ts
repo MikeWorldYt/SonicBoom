@@ -2,6 +2,7 @@ import { computed, inject, onMounted, onUnmounted, ref, shallowRef, watch, type 
 import { createHttpClient, ApiError } from '../services/http';
 import { createApi } from '../services/api';
 import { modelLanguages } from '../services/providerLanguages';
+import { activatePocketModel as activatePocketBundle } from '../services/pocketActivation';
 import type { HomeData } from '../types';
 import type { ServerInfo, ProviderStatus, Capabilities, Voice, BuiltinVoice, ConfigSnapshot, ConfigStatus, Schema, Json, JsonObject, AudioDevice } from '../services/contracts';
 import { errorMessage, type Message } from '../i18n';
@@ -84,6 +85,13 @@ export function createStudio(data: HomeData) {
     }
     await Promise.all([refreshConfig(true), refreshProviders()]);
   }
+  async function activatePocketModel(model: string) {
+    const supported = capabilities.value.find(cap => cap.provider_id === 'pocket-tts')?.models || [];
+    await activatePocketBundle(api, model, supported);
+    await Promise.all([refreshConfig(true), refreshProviders()]);
+    if (errors.value.settings) throw Object.assign(new Error(), { localizedMessage: errors.value.settings });
+    if (errors.value.providers) throw Object.assign(new Error(), { localizedMessage: errors.value.providers });
+  }
   const models = computed(() => [
     { id: 'supertonic-3', provider: 'supertonic', cloned: false, languages: [], ready: info.value ? info.value.model.status === 'ready' : data.modelReady },
     ...capabilities.value.filter(cap => cap.requires_reference_audio).flatMap(cap => cap.models.map(id => ({ id, provider: cap.provider_id, cloned: true, languages: modelLanguages(cap, id), ready: providers.value.some(provider => provider.provider_id === cap.provider_id && provider.state === 'ready' && (cap.provider_id !== 'pocket-tts' || provider.active_model === id)) }))),
@@ -101,7 +109,7 @@ export function createStudio(data: HomeData) {
   });
   const timer = setInterval(() => { if (!disposed && !document.hidden) void refresh(); }, 5000);
   onUnmounted(() => { disposed = true; clearInterval(timer); });
-  return { api, token, info, providers, capabilities, diagnostics, builtinVoices, voices, config, status, schema, devices, errors, loading, model, voice, language, text, preview, models, selectedModel, availableVoices, refresh, refreshConfig, refreshProviders, refreshVoices, saveSetting, toggleProvider, selectProfile };
+  return { api, token, info, providers, capabilities, diagnostics, builtinVoices, voices, config, status, schema, devices, errors, loading, model, voice, language, text, preview, models, selectedModel, availableVoices, refresh, refreshConfig, refreshProviders, refreshVoices, saveSetting, toggleProvider, activatePocketModel, selectProfile };
 }
 export type Studio = ReturnType<typeof createStudio>;
 export const studioKey: InjectionKey<Studio> = Symbol('SonicBoom studio');

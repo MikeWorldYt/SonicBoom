@@ -193,3 +193,5 @@ th { color: var(--text-secondary); background: var(--surface-raised); }
 .cfg-group > h2 { font-size: 16px; margin-bottom: 12px; }
 #downloadAudio { display: inline-block; padding-block: 12px; }
 @media (max-width: 640px) { .stepper { flex-direction: column; } .stepper li:not(.current) { display: none; } .voice-options { grid-template-columns: 1fr; } }
+
+.engine-activate { margin-left: auto; padding: 6px 10px; font-size: 12px; }
