@@ -1,0 +1,9 @@
+{
+  "export_revision": "58a6d00cf13d239b6748cb0769f35c580a8f606c",
+  "model": "pocket-tts-en",
+  "text": "Hello world. This is an independent test of sentence segmentation. Every word should appear in the correct order. Please keep the voice stable and read this whole paragraph without repeating any earlier sentence. Thank you for listening to this final independent generation.",
+  "expected_upstream_chunks": [
+    "Hello world. This is an independent test of sentence segmentation. Every word should appear in the correct order.",
+    "Please keep the voice stable and read this whole paragraph without repeating any earlier sentence. Thank you for listening to this final independent generation."
+  ]
+}

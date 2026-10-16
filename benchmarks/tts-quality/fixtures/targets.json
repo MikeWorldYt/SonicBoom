@@ -24,5 +24,6 @@
   "08fdb1ef4d040e6f640ffdb6c4deb69914a40cd0744d6e482a783c5e9658e3ff": "Ciao mondo. Questa è la seconda frase. Leggi ogni parola.",
   "9172e8eec99f144f72eca9a568759580edadb2cfd154857f07e657569493bc44": "Bonjour",
   "03b76d80c90a9e87d70cea8a9f4e5c9adce515302462d95907524d2673ab60d0": "Ceci est un test de génération vocale indépendante.",
-  "84a6cffd10cbc4223201a69425ec08948695b83f0b48af02da4ea5d2e0495216": "Bonjour le monde. Ceci est la deuxième phrase. Lis chaque mot."
+  "84a6cffd10cbc4223201a69425ec08948695b83f0b48af02da4ea5d2e0495216": "Bonjour le monde. Ceci est la deuxième phrase. Lis chaque mot.",
+  "2f2e4943ac95de6edab9ea5dedbc8f841a04abd43903ad8305d64a9d246f69aa": "Hello world. This is an independent test of sentence segmentation. Every word should appear in the correct order. Please keep the voice stable and read this whole paragraph without repeating any earlier sentence. Thank you for listening to this final independent generation."
 }
