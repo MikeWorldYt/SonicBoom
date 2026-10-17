@@ -36,6 +36,7 @@ pub fn map_qwen_gguf_config(
         threads: gguf.threads.max(1),
         max_tokens: gguf.max_tokens.max(1),
         cache_capacity: gguf.cache_entries.max(1),
+        allow_cpu_fallback: gguf.allow_cpu_fallback,
     }
 }
 

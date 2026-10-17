@@ -32,17 +32,42 @@ requires Node.js 22.12+ and npm; deployed binaries need neither.
 git clone https://github.com/nglmercer/SonicBoom.git
 cd SonicBoom
 
-# Build the project (headless server, default)
+# Default build: Supertonic 3 + Pocket TTS + Qwen3-TTS GGUF/ONNX, all on CPU.
+# It needs NO CUDA Toolkit, ROCm or Vulkan SDK.
 cargo build --release
 
-# Or build with GPU acceleration (enable at most ONE of these per platform):
+# Desktop system-tray GUI:
+cargo build --release --features gui
+```
+
+### GPU acceleration (optional, opt-in)
+
+Two independent acceleration stacks exist; enabling one never enables the
+other. A requested GPU backend whose SDK is missing fails the build **early**
+with an actionable message (it never silently builds CPU-only or silently
+selects a different backend).
+
+```bash
+# ONNX Runtime (Supertonic / Pocket TTS) — enable at most ONE per platform:
 cargo build --release --features cuda     # NVIDIA CUDA (Linux/Windows)
 cargo build --release --features rocm     # AMD ROCm (Linux)
 cargo build --release --features coreml   # Apple Silicon CoreML (macOS)
 
-# Or build the desktop system-tray GUI:
-cargo build --release --features gui
+# Qwen3-TTS native llama.cpp backend (separate build features):
+cargo build --release --features qwen-gguf-vulkan   # Vulkan SDK + SPIRV-Headers + glslc
+cargo build --release --features qwen-gguf-cuda     # CUDA Toolkit (nvcc)
+
+# Both llama.cpp backends, only when both SDKs are installed:
+cargo build --release --features qwen-gguf-cuda,qwen-gguf-vulkan
 ```
+
+`cuda`/`rocm`/`coreml` are ONNX Runtime flags and never activate the native
+llama.cpp backend; `qwen-gguf-cuda`/`qwen-gguf-vulkan` are the only flags that
+do. The build script honours CMake's own discovery: set `CUDAToolkit_ROOT`,
+`CUDACXX`, `CUDA_PATH`/`CUDA_HOME`, `VULKAN_SDK`, or `CMAKE_PREFIX_PATH` to
+point at an SDK in a non-standard location. Diagnostics and the
+`SONICBOOM_SKIP_SDK_CHECK=1` escape hatch are documented in
+[docs/providers.md](docs/providers.md#build-time-sdk-validation).
 
 ### Run
 

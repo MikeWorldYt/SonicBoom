@@ -78,6 +78,7 @@ impl Engine {
                     threads: 4,
                     max_tokens: 256,
                     cache_capacity: 2,
+                    allow_cpu_fallback: false,
                 })?))
             }
             _ => bail!("unknown or uncompiled provider {provider}"),

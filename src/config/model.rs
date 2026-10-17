@@ -374,6 +374,11 @@ pub struct Qwen3GgufConfig {
     /// Maximum acoustic code frames per synthesis.
     #[serde(default = "default_qwen_gguf_max_tokens")]
     pub max_tokens: usize,
+    /// Explicit `device = "vulkan"`/`"cuda"` that cannot initialize normally
+    /// fails the load with an actionable error. Set `true` to allow a
+    /// reported fallback to CPU instead; `device = "auto"` always permits it.
+    #[serde(default)]
+    pub allow_cpu_fallback: bool,
 }
 
 /// Native Pocket TTS ONNX provider settings (`[providers.pocket_tts]`).
@@ -694,6 +699,7 @@ impl Default for Qwen3GgufConfig {
             max_concurrent: default_provider_concurrency(),
             cache_entries: default_provider_cache(),
             max_tokens: default_qwen_gguf_max_tokens(),
+            allow_cpu_fallback: false,
         }
     }
 }

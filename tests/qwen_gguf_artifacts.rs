@@ -140,6 +140,7 @@ fn native_worker_reuses_conditioning_and_recovers_after_cancellation() -> anyhow
         threads: 4,
         max_tokens: 256,
         cache_capacity: 2,
+        allow_cpu_fallback: false,
     })?;
     assert_eq!(worker.ready.effective_device, "cpu");
     let first = worker.synthesize(request.clone())?;

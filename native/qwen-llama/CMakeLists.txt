@@ -18,6 +18,19 @@ foreach(flag AVX AVX2 AVX512 FMA F16C BMI2 SSE42)
   set(GGML_${flag} OFF CACHE BOOL "" FORCE)
 endforeach()
 add_subdirectory(../../vendor/llama.cpp llama)
+# The pinned llama.cpp revision discovers the SPIRV-Headers CMake package but
+# never links its imported target, so ggml-vulkan.cpp's `#include <spirv/...>`
+# only resolves when the headers happen to sit in a compiler-default directory.
+# build.rs locates them and passes SONICBOOM_SPIRV_INCLUDE_DIR so the Vulkan
+# backend compiles from a non-standard (e.g. ~/.local) installation too.
+if(TARGET ggml-vulkan)
+  if(TARGET SPIRV-Headers::SPIRV-Headers)
+    target_link_libraries(ggml-vulkan PRIVATE SPIRV-Headers::SPIRV-Headers)
+  endif()
+  if(SONICBOOM_SPIRV_INCLUDE_DIR)
+    target_include_directories(ggml-vulkan PRIVATE "${SONICBOOM_SPIRV_INCLUDE_DIR}")
+  endif()
+endif()
 add_library(sonicboom-qwen-llama STATIC shim.cpp)
 target_link_libraries(sonicboom-qwen-llama PRIVATE llama)
 install(TARGETS sonicboom-qwen-llama ARCHIVE DESTINATION lib)

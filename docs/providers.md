@@ -71,6 +71,39 @@ AMD BC-250 (`gfx1013`) is CPU-only for the acceptance criteria. Do not
 imply CUDA runs on AMD, and do not claim ROCm/MIGraphX support without
 proof. `coreml`/`cuda`/`rocm` stay mutually exclusive.
 
+### Build-time SDK validation
+
+The native wrapper (`native/qwen-llama/build.rs`) prints the effective
+backend selection and validates every requested SDK **before** CMake runs, so
+a missing SDK fails early and actionably instead of deep inside
+`ggml-cuda`/`ggml-vulkan`:
+
+- `qwen-gguf-cuda` requires the CUDA Toolkit (`nvcc`). Discovery mirrors
+  CMake's `FindCUDAToolkit`: `CUDACXX`, `CUDAToolkit_ROOT`,
+  `CUDA_PATH`/`CUDA_HOME`, `/usr/local/cuda/bin`, `/opt/cuda/bin`, the
+  Windows default toolkit path, then `PATH`.
+- `qwen-gguf-vulkan` requires `glslc`, the Vulkan loader/headers, and
+  SPIRV-Headers. The pinned llama.cpp revision finds the SPIRV-Headers
+  *config* package but never links its include directory, so the build script
+  locates a directory holding `spirv/unified1/spirv.hpp`,
+  `spirv-headers/spirv.hpp` or `spirv.hpp` (`$SONICBOOM_SPIRV_INCLUDE_DIR`,
+  `$VULKAN_SDK/include`, `~/.local[/spirv-headers]/include`, a
+  `CMAKE_PREFIX_PATH` prefix, `/usr/include`, `/usr/local/include`,
+  `/opt/include`) and wires it into the `ggml-vulkan` target. Set
+  `SONICBOOM_SPIRV_INCLUDE_DIR` when the headers live somewhere non-standard.
+- `qwen-gguf-cuda,qwen-gguf-vulkan` together are allowed only when **both**
+  SDKs validate; otherwise the build stops naming the missing one.
+
+Each failure names the required tool, the discovery variables, and a recovery
+command (install path, `export CUDAToolkit_ROOT=…`/`VULKAN_SDK=…`/
+`SONICBOOM_SPIRV_INCLUDE_DIR=…`, or the CPU-only build). `CMAKE_PREFIX_PATH`
+and every discovery variable are registered with `cargo:rerun-if-env-changed`,
+so changing them reconfigures deterministically. `SONICBOOM_SKIP_SDK_CHECK=1`
+bypasses the pre-flight scan for unusual toolchains where CMake can still
+discover the SDK. A `cargo:warning` line such as
+`native GGML backend selection: CPU + Vulkan (ggml-vulkan)` states the
+effective selection without reading CMake output.
+
 ## Language support (explicit, no silent substitution)
 
 - Qwen3-TTS 1.7B Base (GGUF/ONNX): `en`, `de`, `es`, `zh`, `ja`, `fr`,
@@ -224,6 +257,7 @@ threads = 4
 max_concurrent = 1
 cache_entries = 16
 max_tokens = 512         # acoustic frames per synthesis (1-1024)
+allow_cpu_fallback = false  # explicit vulkan/cuda failure falls back to CPU when true
 
 [providers.pocket_tts]
 enabled = false
@@ -259,6 +293,7 @@ threads = 4              # 1-256
 max_concurrent = 1
 cache_entries = 16
 max_tokens = 512         # acoustic frames per synthesis (1-1024)
+allow_cpu_fallback = false  # explicit device failure -> reported CPU fallback when true
 ```
 
 CPU status: **measured** — 41 frames / 3.28 s audio, EOS reached, finite
@@ -324,7 +359,12 @@ Qwen GGUF `device=auto` selects Vulkan/CUDA only when the matching
 `qwen-gguf-vulkan`/`qwen-gguf-cuda` build feature is compiled and the
 backend initializes; otherwise it reports CPU with the fallback reason.
 Explicit `vulkan`/`cuda` fails with an actionable error if build/runtime
-support is unavailable. `cpu` remains supported on AMD BC-250. ROCm
+support is unavailable, **unless** `allow_cpu_fallback = true` is set, in
+which case the failure is reported and synthesis runs on CPU. The
+requested device is the config value; the effective device (with any
+fallback reason) is exposed as `effective_device`/detail in
+`/api/providers/qwen3-gguf/status` and is never the requested value unless
+it actually initialized. `cpu` remains supported on AMD BC-250. ROCm
 acceleration is not implemented or advertised.
 
 Provider concurrency settings must be 1. Sampling, frame-limit and cache-only

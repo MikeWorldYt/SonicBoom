@@ -11,6 +11,10 @@ after(() => server.close());
 const { default: EngineCard } = await server.ssrLoadModule('/src/components/studio/EngineCard.vue');
 const { studioKey } = await server.ssrLoadModule('/src/composables/useStudio.ts');
 const { setLocale } = await server.ssrLoadModule('/src/i18n/index.ts');
+// Locale is auto-detected from `navigator.language`; force English so these
+// assertions are deterministic on non-English hosts (the Spanish case below
+// switches explicitly and restores English).
+setLocale('en');
 const models = ['pocket-tts-en', 'pocket-tts-es', 'pocket-tts-pt', 'pocket-tts-de', 'pocket-tts-it', 'pocket-tts-fr-24l'];
 const capabilities = { provider_id: 'pocket-tts', models, languages: ['en','es','pt','de','it','fr'] };
 async function render(provider, selected = 'pocket-tts-en') {

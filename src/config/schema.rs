@@ -596,6 +596,21 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
         secret: false,
         allowed_values_source: None,
     });
+    add(SettingSchema {
+        path: "providers.qwen3_gguf.allow_cpu_fallback".to_string(),
+        description:
+            "Allow an explicit device=vulkan/cuda that cannot initialize to fall back to CPU \
+             with a reported reason (device=auto always may)"
+                .to_string(),
+        type_name: "boolean",
+        apply: ApplyStrategy::Hot,
+        min: None,
+        max: None,
+        allowed_values: None,
+        nullable: false,
+        secret: false,
+        allowed_values_source: None,
+    });
     for (path, desc) in [
         (
             "providers.qwen3_gguf.model_dir",

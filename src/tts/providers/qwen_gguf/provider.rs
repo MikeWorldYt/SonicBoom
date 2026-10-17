@@ -52,6 +52,9 @@ pub struct QwenGgufConfig {
     pub threads: usize,
     pub max_tokens: usize,
     pub cache_capacity: usize,
+    /// Permit a CPU fallback when an explicit `device` cannot initialize.
+    /// `Device::Auto` always permits it; explicit devices only when set.
+    pub allow_cpu_fallback: bool,
 }
 
 impl Default for QwenGgufConfig {
@@ -64,6 +67,7 @@ impl Default for QwenGgufConfig {
             threads: 4,
             max_tokens: 512,
             cache_capacity: 16,
+            allow_cpu_fallback: false,
         }
     }
 }
@@ -565,6 +569,7 @@ impl QwenGgufProvider {
             threads: config.threads,
             max_tokens: config.max_tokens,
             cache_capacity: config.cache_capacity,
+            allow_cpu_fallback: config.allow_cpu_fallback,
         })
         .map_err(|error| ProviderError::inference_failed(format!("{error:#}")))?;
         let ready = worker.ready.clone();

@@ -37,6 +37,50 @@ pub struct Settings {
     pub threads: usize,
     pub max_tokens: usize,
     pub cache_capacity: usize,
+    /// Permit a CPU fallback when an explicit `device` fails to initialize.
+    pub allow_cpu_fallback: bool,
+}
+
+/// Ordered native device ids to attempt and whether a CPU fallback is
+/// permitted when an earlier candidate fails.
+///
+/// `Auto` prefers each compiled GPU backend, then CPU, and always permits the
+/// fallback (a reason is reported when a GPU was attempted first). An explicit
+/// device selects exactly that backend and only falls back to CPU when the
+/// operator opts in via `allow_cpu_fallback`; otherwise the failure is
+/// surfaced instead of silently masking a broken GPU backend.
+fn device_plan(
+    requested: Device,
+    allow_cpu_fallback: bool,
+    vulkan: bool,
+    cuda: bool,
+) -> (Vec<i32>, bool) {
+    match requested {
+        Device::Cpu => (vec![0], false),
+        Device::Vulkan if allow_cpu_fallback => (vec![1, 0], true),
+        Device::Cuda if allow_cpu_fallback => (vec![2, 0], true),
+        Device::Vulkan => (vec![1], false),
+        Device::Cuda => (vec![2], false),
+        Device::Auto => {
+            let mut candidates = Vec::with_capacity(3);
+            if vulkan {
+                candidates.push(1);
+            }
+            if cuda {
+                candidates.push(2);
+            }
+            candidates.push(0);
+            (candidates, true)
+        }
+    }
+}
+
+fn device_name(id: i32) -> &'static str {
+    match id {
+        1 => "vulkan",
+        2 => "cuda",
+        _ => "cpu",
+    }
 }
 #[derive(Debug, Clone)]
 pub struct Ready {
@@ -177,13 +221,6 @@ impl State {
         let _load = crate::tts::providers::worker::model_load_guard();
         crate::tts::providers::assets::verify_local_files(&settings.dir, &models::manifest())?;
         let started = Instant::now();
-        let candidate = match settings.device {
-            Device::Auto if cfg!(feature = "qwen-gguf-vulkan") => 1,
-            Device::Auto if cfg!(feature = "qwen-gguf-cuda") => 2,
-            Device::Auto | Device::Cpu => 0,
-            Device::Vulkan => 1,
-            Device::Cuda => 2,
-        };
         let load = |device| -> Result<Runtime> {
             let mut runtime =
                 Runtime::load(&settings.dir, device, settings.gpu_layers, settings.threads)?;
@@ -199,17 +236,56 @@ impl State {
             runtime.reset()?;
             Ok(runtime)
         };
-        let (runtime, device, fallback_reason) = match load(candidate) {
-            Ok(runtime) => (runtime, candidate, None),
-            Err(error) if candidate != 0 => (
-                load(0)?,
-                0,
-                Some(format!(
-                    "GPU initialization failed; CPU selected before synthesis: {error}"
-                )),
-            ),
-            Err(error) => return Err(error),
-        };
+        // Try each permitted device in order. An explicit device that fails
+        // without `allow_cpu_fallback` returns an actionable error instead of
+        // quietly switching to CPU.
+        let (candidates, allow_cpu_fallback) = device_plan(
+            settings.device,
+            settings.allow_cpu_fallback,
+            cfg!(feature = "qwen-gguf-vulkan"),
+            cfg!(feature = "qwen-gguf-cuda"),
+        );
+        let mut last_gpu_error: Option<String> = None;
+        let mut selected: Option<(Runtime, i32, Option<String>)> = None;
+        for candidate in candidates {
+            match load(candidate) {
+                Ok(runtime) => {
+                    // Report a fallback only when a GPU was attempted first.
+                    let fallback_reason = (candidate == 0)
+                        .then(|| last_gpu_error.take())
+                        .flatten()
+                        .map(|error| {
+                            format!(
+                                "GPU initialization failed; CPU selected before synthesis: {error}"
+                            )
+                        });
+                    selected = Some((runtime, candidate, fallback_reason));
+                    break;
+                }
+                Err(error) => {
+                    let text = format!("{error:#}");
+                    if candidate == 0 {
+                        // CPU is the last resort: its failure is terminal.
+                        return Err(error);
+                    }
+                    if !allow_cpu_fallback {
+                        return Err(anyhow!(
+                            "requested device `{}` could not be initialized: {text}; \
+                             set providers.qwen3_gguf.allow_cpu_fallback = true to run on \
+                             CPU instead, or use device = \"auto\"",
+                            device_name(candidate)
+                        ));
+                    }
+                    last_gpu_error = Some(text);
+                }
+            }
+        }
+        let (runtime, device, fallback_reason) = selected.ok_or_else(|| {
+            anyhow!(
+                "no usable native device could be initialized: {}",
+                last_gpu_error.unwrap_or_else(|| "unknown native failure".into())
+            )
+        })?;
         let codec = Codec::load(&settings.dir)?;
         let assets = Embeddings::load(&settings.dir)?;
         let tokenizer = TextTokenizer::load(&settings.dir)?;
@@ -339,5 +415,65 @@ impl State {
             audio: PcmAudio::mono(samples, 24_000),
             metrics,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_prefers_compiled_gpus_then_cpu_and_may_fall_back() {
+        // Only Vulkan compiled: try Vulkan, then CPU, fallback permitted.
+        assert_eq!(
+            device_plan(Device::Auto, false, true, false),
+            (vec![1, 0], true)
+        );
+        // Both compiled: deterministic priority Vulkan -> CUDA -> CPU.
+        assert_eq!(
+            device_plan(Device::Auto, false, true, true),
+            (vec![1, 2, 0], true)
+        );
+        // Only CUDA compiled.
+        assert_eq!(
+            device_plan(Device::Auto, false, false, true),
+            (vec![2, 0], true)
+        );
+        // No GPU compiled: CPU only, still no GPU reason to report.
+        assert_eq!(
+            device_plan(Device::Auto, false, false, false),
+            (vec![0], true)
+        );
+    }
+
+    #[test]
+    fn explicit_devices_select_exactly_one_backend_unless_opted_in() {
+        // CPU is exact and never falls back.
+        assert_eq!(device_plan(Device::Cpu, true, true, true), (vec![0], false));
+        // Explicit GPU: no CPU fallback by default...
+        assert_eq!(
+            device_plan(Device::Vulkan, false, true, false),
+            (vec![1], false)
+        );
+        assert_eq!(
+            device_plan(Device::Cuda, false, false, true),
+            (vec![2], false)
+        );
+        // ...only when allow_cpu_fallback is set.
+        assert_eq!(
+            device_plan(Device::Vulkan, true, true, false),
+            (vec![1, 0], true)
+        );
+        assert_eq!(
+            device_plan(Device::Cuda, true, false, true),
+            (vec![2, 0], true)
+        );
+    }
+
+    #[test]
+    fn device_names_match_the_native_shim_ids() {
+        assert_eq!(device_name(0), "cpu");
+        assert_eq!(device_name(1), "vulkan");
+        assert_eq!(device_name(2), "cuda");
     }
 }

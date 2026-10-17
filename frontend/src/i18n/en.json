@@ -371,6 +371,7 @@
   "setting.paths.logs.label": "Logs",
   "setting.paths.temp_audio.label": "Temp Audio",
   "setting.paths.token_store.label": "Token Store",
+  "setting.providers.qwen3_gguf.allow_cpu_fallback.label": "Allow CPU Fallback",
   "setting.providers.qwen3_gguf.cache_entries.label": "Cache Entries",
   "setting.providers.qwen3_gguf.device.label": "Device",
   "setting.providers.qwen3_gguf.enabled.label": "Enabled",

@@ -371,6 +371,7 @@
   "setting.paths.logs.label": "Carpeta de registros",
   "setting.paths.temp_audio.label": "Audio temporal",
   "setting.paths.token_store.label": "Archivo de tokens",
+  "setting.providers.qwen3_gguf.allow_cpu_fallback.label": "Permitir reserva en CPU",
   "setting.providers.qwen3_gguf.cache_entries.label": "Entradas en caché",
   "setting.providers.qwen3_gguf.device.label": "Dispositivo de inferencia",
   "setting.providers.qwen3_gguf.enabled.label": "Activado",
