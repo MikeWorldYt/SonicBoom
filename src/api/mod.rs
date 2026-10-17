@@ -10,6 +10,7 @@ pub mod providers;
 #[cfg(feature = "playback")]
 pub mod queue;
 pub mod rate_limit;
+pub mod sampling;
 pub mod tts;
 pub mod voices;
 

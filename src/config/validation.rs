@@ -334,6 +334,26 @@ fn validate_providers(config: &AppConfig) -> Result<(), String> {
     if gguf.gpu_layers < -1 {
         return Err("providers.qwen3_gguf.gpu_layers must be -1 (all) or >= 0".to_string());
     }
+    if let Some(params) = &gguf.sampling.talker {
+        params.validate("providers.qwen3_gguf.sampling.talker")?;
+    }
+    if let Some(params) = &gguf.sampling.predictor {
+        params.validate("providers.qwen3_gguf.sampling.predictor")?;
+    }
+    if !["off", "report", "retry", "experimental_trim"].contains(&gguf.quality.policy.as_str()) {
+        return Err(
+            "providers.qwen3_gguf.quality.policy must be one of: off, report, retry, \
+             experimental_trim"
+                .to_string(),
+        );
+    }
+    if gguf.quality.max_retries > sonicboom::tts::quality::MAX_RETRIES_CEILING {
+        return Err(format!(
+            "providers.qwen3_gguf.quality.max_retries must be 0 or {} (unbounded regeneration is \
+             rejected)",
+            sonicboom::tts::quality::MAX_RETRIES_CEILING
+        ));
+    }
     if gguf.model_dir.as_os_str().is_empty() {
         return Err("providers.qwen3_gguf.model_dir must not be empty".to_string());
     }

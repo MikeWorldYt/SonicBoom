@@ -37,6 +37,16 @@ pub fn map_qwen_gguf_config(
         max_tokens: gguf.max_tokens.max(1),
         cache_capacity: gguf.cache_entries.max(1),
         allow_cpu_fallback: gguf.allow_cpu_fallback,
+        sampling: gguf.sampling.clone(),
+        quality: {
+            use sonicboom::tts::quality::{DetectionMode, QualityPolicy};
+            let mode = if gguf.quality.enabled {
+                DetectionMode::parse(&gguf.quality.policy).unwrap_or(DetectionMode::Report)
+            } else {
+                DetectionMode::Off
+            };
+            QualityPolicy::new(mode, gguf.quality.max_retries)
+        },
     }
 }
 

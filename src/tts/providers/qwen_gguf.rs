@@ -12,5 +12,6 @@ pub mod metrics;
 pub mod models;
 pub mod provider;
 pub mod runtime;
+pub mod sampling;
 pub mod tokenizer;
 pub mod worker;

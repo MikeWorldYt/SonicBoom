@@ -1,4 +1,5 @@
 //! Cooperative execution control shared by HTTP admission and native workers.
+use crate::tts::quality::QualityReport;
 use serde::Serialize;
 use std::{
     cell::RefCell,
@@ -29,6 +30,9 @@ pub struct Progress {
     pub audio_secs: Option<f64>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub stage_secs: std::collections::BTreeMap<String, f64>,
+    /// Deterministic quality report for the produced audio, when detection ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<QualityReport>,
 }
 
 #[derive(Debug)]
@@ -56,8 +60,16 @@ impl InferenceControl {
                 audio_secs: None,
                 updated_at: chrono::Utc::now(),
                 stage_secs: std::collections::BTreeMap::new(),
+                quality: None,
             }),
         })
+    }
+    /// Publish the deterministic quality report for the produced audio.
+    pub fn set_quality(&self, report: QualityReport) {
+        self.progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .quality = Some(report);
     }
     pub fn set_audio_duration(&self, seconds: f64) {
         if seconds.is_finite() && seconds > 0.0 {

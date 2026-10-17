@@ -2,6 +2,8 @@ import type { HttpClient } from './http';
 import { jsonBody } from './http';
 import type { ServerInfo, ProvidersResponse, BuiltinVoice, Voice, ConfigSnapshot, ConfigStatus, Schema, SettingSchema, JsonObject, AudioDevice, Job, CloneInput, SetupStatus, SetupInput, SetupResult } from './contracts';
 const id = encodeURIComponent;
+/** Optional Qwen3-TTS sampling/quality query parameters. Empty values are omitted. */
+export type SamplingQuery = Record<string, string | number | undefined | null>;
 export function createApi(http: HttpClient) {
   return {
     info: () => http.json<ServerInfo>('/api/info'),
@@ -25,8 +27,11 @@ export function createApi(http: HttpClient) {
     audioDevices: async () => (await http.json<{ devices: AudioDevice[] }>('/api/audio/devices')).devices,
     audioOutput: () => http.json<{ device: string; available: boolean }>('/api/audio/output'),
     testAudio: (text: string) => http.response('/api/tts/play', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text }),
-    createJob: (text: string, language: string, voice: string, cloned: boolean, signal?: AbortSignal) => {
+    createJob: (text: string, language: string, voice: string, cloned: boolean, sampling?: SamplingQuery, signal?: AbortSignal) => {
       const params = new URLSearchParams({ lang: language, format: 'wav', [cloned ? 'profile' : 'voice']: voice });
+      if (sampling) for (const [key, value] of Object.entries(sampling)) {
+        if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
+      }
       return http.json<{ id: string }>(`/api/tts/jobs?${params}`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text, signal });
     },
     job: (job: string, signal?: AbortSignal) => http.json<Job>(`/api/tts/jobs/${id(job)}`, { signal }),

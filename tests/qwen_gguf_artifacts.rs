@@ -104,8 +104,9 @@ fn native_worker_reuses_conditioning_and_recovers_after_cancellation() -> anyhow
         control::{self, InferenceControl},
         providers::{
             qwen_gguf::worker::{Device, Settings, Worker},
-            types::{CloneMode, ProviderRequest, ReferenceAudio},
+            types::{CloneMode, ProviderRequest, ReferenceAudio, SamplingRequest},
         },
+        quality::QualityPolicy,
     };
     use std::time::Duration;
     let dir = model_dir();
@@ -141,6 +142,8 @@ fn native_worker_reuses_conditioning_and_recovers_after_cancellation() -> anyhow
         max_tokens: 256,
         cache_capacity: 2,
         allow_cpu_fallback: false,
+        sampling: SamplingRequest::default(),
+        quality: QualityPolicy::default(),
     })?;
     assert_eq!(worker.ready.effective_device, "cpu");
     let first = worker.synthesize(request.clone())?;

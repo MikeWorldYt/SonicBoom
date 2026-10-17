@@ -4,7 +4,11 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use sonicboom::tts::{
     audio::{AudioFormat, encode_audio},
-    providers::{PcmAudio, ProviderRequest, TtsProvider, types::ReferenceAudio},
+    providers::{
+        PcmAudio, ProviderRequest, TtsProvider,
+        types::{ReferenceAudio, SamplingPreset, SamplingRequest},
+    },
+    quality::{DetectionMode, QualityPolicy},
 };
 use std::{
     fs::{self, OpenOptions},
@@ -71,14 +75,29 @@ impl Engine {
             #[cfg(feature = "qwen-gguf")]
             "qwen" => {
                 use sonicboom::tts::providers::qwen_gguf::worker::{Device, Settings, Worker};
+                // Device selection is explicit so CPU/Vulkan comparison runs
+                // never silently share a backend.
+                let device = match std::env::var("AUDIT_DEVICE")
+                    .unwrap_or_else(|_| "cpu".into())
+                    .trim()
+                    .to_ascii_lowercase()
+                    .as_str()
+                {
+                    "cpu" => Device::Cpu,
+                    "vulkan" => Device::Vulkan,
+                    "cuda" => Device::Cuda,
+                    other => bail!("AUDIT_DEVICE must be cpu, vulkan or cuda (got {other})"),
+                };
                 Ok(Self::Qwen(Worker::spawn(Settings {
                     dir: dir.into(),
-                    device: Device::Cpu,
+                    device,
                     gpu_layers: 0,
                     threads: 4,
                     max_tokens: 256,
                     cache_capacity: 2,
                     allow_cpu_fallback: false,
+                    sampling: SamplingRequest::default(),
+                    quality: QualityPolicy::default(),
                 })?))
             }
             _ => bail!("unknown or uncompiled provider {provider}"),
@@ -116,7 +135,7 @@ fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
     if args.len() < 6 || args.iter().any(|arg| arg == "--help") {
         println!(
-            "tts-quality-audit PROVIDER MODEL LANGUAGE MODEL_DIR NEW_OUTPUT_DIR [AUTHORIZED_REFERENCE_WAV]\nProviders: mock, pocket, qwen (feature required). Reference positional argument explicitly certifies authorized diagnostic use. Qwen requires exact QWEN_REFERENCE_TRANSCRIPT. No outputs overwritten. CPU, default seed 42 (AUDIT_SEED overrides), default sampling. Writes hashed inputs only."
+            "tts-quality-audit PROVIDER MODEL LANGUAGE MODEL_DIR NEW_OUTPUT_DIR [AUTHORIZED_REFERENCE_WAV]\nProviders: mock, pocket, qwen (feature required). Reference positional argument explicitly certifies authorized diagnostic use. Qwen requires exact QWEN_REFERENCE_TRANSCRIPT. No outputs overwritten. Default seed 42. Writes hashed inputs only.\nEnv: AUDIT_SEED, AUDIT_SAMPLING_PRESET (balanced|stable|expressive|custom), AUDIT_QUALITY (off|report|retry|experimental_trim), AUDIT_DEVICE (cpu|vulkan|cuda), AUDIT_ASR_JSON (offline ASR transcripts array for echo detection), AUDIT_TEXTS_JSON, AUDIT_ALT_REFERENCE_WAV, AUDIT_ALT_REFERENCE_TRANSCRIPT."
         );
         return Ok(());
     }
@@ -157,6 +176,30 @@ fn main() -> Result<()> {
                 .context("set exact QWEN_REFERENCE_TRANSCRIPT")?,
         );
     }
+    // Optional sampling preset for the whole run (default: pinned balanced).
+    if let Ok(raw) = std::env::var("AUDIT_SAMPLING_PRESET") {
+        let preset = SamplingPreset::parse(raw.trim())
+            .with_context(|| format!("AUDIT_SAMPLING_PRESET '{raw}' is not a known preset"))?;
+        request.sampling = Some(SamplingRequest {
+            preset: Some(preset),
+            ..Default::default()
+        });
+    }
+    // Deterministic quality pass for every row; default `report` so the
+    // manifest always carries numerical audio-health evidence.
+    let quality_mode = match std::env::var("AUDIT_QUALITY") {
+        Ok(raw) => DetectionMode::parse(raw.trim())
+            .with_context(|| format!("AUDIT_QUALITY '{raw}' is not a known mode"))?,
+        Err(_) => DetectionMode::Report,
+    };
+    request.quality = Some(quality_mode);
+    // Optional offline ASR transcripts (one per text) enable echo detection.
+    // The audio path never runs ASR; this is benchmark-only.
+    let asr: Option<Vec<String>> = match std::env::var("AUDIT_ASR_JSON") {
+        Ok(raw) => Some(serde_json::from_str(&raw).context("AUDIT_ASR_JSON must be an array")?),
+        Err(_) => None,
+    };
+    let device_label = std::env::var("AUDIT_DEVICE").unwrap_or_else(|_| "cpu".into());
     fs::create_dir(&out).context("output directory must be fresh; create parent beforehand")?;
     let mut manifest = OpenOptions::new()
         .write(true)
@@ -261,7 +304,27 @@ fn main() -> Result<()> {
             .sum::<f64>()
             / n)
             .sqrt();
-        let row = json!({"request_id":uuid::Uuid::new_v4().to_string(),"job_id":null,"boundary":"direct-provider","provider":provider,"model":model,"revision":revision,"inference_binary_sha256":executable_hash,"ort_build":ort::info(),"git_sha":String::from_utf8_lossy(&git.stdout).trim(),"effective_device":"cpu","language":language,"voice":request.voice,"reference_hash":effective_reference_hash,"text_hash":hash(text.as_bytes()),"seed":request.seed,"reference_preprocessing":sonicboom::tts::audio::REFERENCE_RESAMPLER_VERSION,"mode":request.clone_mode.map(|m|m.as_str()),"pocket_steps":std::env::var("AUDIT_POCKET_STEPS").unwrap_or_else(|_|"1".into()),"pocket_temperature":std::env::var("AUDIT_POCKET_TEMPERATURE").unwrap_or_else(|_|"0.7".into()),"chunk_index":null,"sample_count":audio.samples.len(),"sample_rate":audio.sample_rate,"wav_hash":wav_hash,"output":name,"elapsed_secs":elapsed,"duration_secs":audio.duration_secs(),"rtf":elapsed/audio.duration_secs(),"peak":audio.samples.iter().fold(0f32,|a,b|a.max(b.abs())),"rms":rms,"dc_offset":audio.samples.iter().map(|s| *s as f64).sum::<f64>()/n,"clipping_fraction":audio.samples.iter().filter(|s|s.abs()>=1.0).count() as f64/n,"same_as_first_test":if *text=="test" {Some(test_hash.as_ref()==Some(&wav_hash))}else{None},"metrics":metrics,"content_review":"NOT RUN"});
+        // Deterministic quality pass (audio health + optional ASR echo) so the
+        // manifest always carries numerical evidence alongside the WAV.
+        let asr_row = asr
+            .as_ref()
+            .and_then(|rows| rows.get(i))
+            .map(String::as_str);
+        let report = sonicboom::tts::quality::evaluate(
+            &audio.samples,
+            audio.sample_rate,
+            request.reference_transcript.as_deref().unwrap_or(""),
+            text,
+            asr_row,
+            quality_mode,
+        );
+        let sampling_preset = request
+            .sampling
+            .as_ref()
+            .and_then(|s| s.preset)
+            .map(|p| p.as_str())
+            .unwrap_or("balanced");
+        let row = json!({"request_id":uuid::Uuid::new_v4().to_string(),"job_id":null,"boundary":"direct-provider","provider":provider,"model":model,"revision":revision,"inference_binary_sha256":executable_hash,"ort_build":ort::info(),"git_sha":String::from_utf8_lossy(&git.stdout).trim(),"effective_device":device_label,"language":language,"voice":request.voice,"reference_hash":effective_reference_hash,"text_hash":hash(text.as_bytes()),"seed":request.seed,"sampling_preset":sampling_preset,"reference_preprocessing":sonicboom::tts::audio::REFERENCE_RESAMPLER_VERSION,"mode":request.clone_mode.map(|m|m.as_str()),"pocket_steps":std::env::var("AUDIT_POCKET_STEPS").unwrap_or_else(|_|"1".into()),"pocket_temperature":std::env::var("AUDIT_POCKET_TEMPERATURE").unwrap_or_else(|_|"0.7".into()),"chunk_index":null,"sample_count":audio.samples.len(),"sample_rate":audio.sample_rate,"wav_hash":wav_hash,"output":name,"elapsed_secs":elapsed,"duration_secs":audio.duration_secs(),"rtf":elapsed/audio.duration_secs(),"peak":audio.samples.iter().fold(0f32,|a,b|a.max(b.abs())),"rms":rms,"dc_offset":audio.samples.iter().map(|s| *s as f64).sum::<f64>()/n,"clipping_fraction":audio.samples.iter().filter(|s|s.abs()>=1.0).count() as f64/n,"same_as_first_test":if *text=="test" {Some(test_hash.as_ref()==Some(&wav_hash))}else{None},"quality":report,"asr_available":asr_row.is_some(),"metrics":metrics,"content_review":"NOT RUN"});
         writeln!(manifest, "{row}")?;
         manifest.flush()?;
         index.push_str(&format!(

@@ -13,11 +13,20 @@ const step = ref(0);
 const provider = ref(''); const model = ref(''); const language = ref('en'); const mode = ref('icl');
 const fileInput = ref<HTMLInputElement | null>(null);
 const referenceWarnings = ref<string[]>([]);
-function referenceWarning(code: string) {
+const referenceDefects = ref<string[]>([]);
+const referenceGuidance = ref<string[]>([]);
+function referenceMessage(code: string) {
   const messages: Record<string, string> = {
     reference_nearly_silent: 'The reference recording is nearly silent. Choose a clearer recording.',
     reference_heavily_clipped: 'The reference recording has heavy clipping. Try recording at a lower input level.',
     reference_large_dc_offset: 'The reference recording has a large DC offset. Check the recording source.',
+    reference_non_finite_samples: 'The reference recording contains invalid (non-finite) samples and must be replaced.',
+    reference_unusually_quiet: 'The reference recording is unusually quiet. Increase the recording level.',
+    reference_ends_during_speech: 'The recording appears to end during speech. A little trailing silence may help cloning.',
+    reference_possible_background_noise: 'The reference may contain background noise. A quieter recording is recommended.',
+    reference_short_for_cloning: 'A 5-10 second recording usually clones better than this short clip.',
+    reference_leading_silence: 'The recording starts with a long silence.',
+    reference_trailing_silence: 'The recording ends with a long silence.',
   };
   return t(messages[code] || code);
 }
@@ -35,7 +44,7 @@ watch(cap, value => {
   if (!value?.clone_modes.includes(mode.value)) mode.value = value?.clone_modes[0] || 'icl';
 }, { immediate: true });
 watch(needsTranscript, value => { if (!value) transcript.value = ''; });
-function selectFile(event: Event) { referenceWarnings.value = []; file.value = (event.target as HTMLInputElement).files?.[0] || null; }
+function selectFile(event: Event) { referenceWarnings.value = []; referenceDefects.value = []; referenceGuidance.value = []; file.value = (event.target as HTMLInputElement).files?.[0] || null; }
 async function validateRecording() {
   if (!file.value) throw uiError('Choose a WAV reference recording.');
   if (!file.value.size) throw uiError('The selected file is empty.');
@@ -57,8 +66,12 @@ async function save() {
     if (!consent.value.trim()) throw uiError('Consent basis is required (e.g. owner).');
     await validateRecording();
     referenceWarnings.value = [];
+    referenceDefects.value = [];
+    referenceGuidance.value = [];
     const profile = await studio.api.createVoice({ name: name.value.trim(), provider: provider.value, model: model.value, language: language.value, mode: mode.value, consent_basis: consent.value.trim(), ...(needsTranscript.value ? { transcript: transcript.value.trim() } : {}) }, file.value!);
     referenceWarnings.value = profile.warnings || [];
+    referenceDefects.value = profile.defects || [];
+    referenceGuidance.value = profile.guidance || [];
     await studio.refreshVoices();
     studio.selectProfile(profile);
     step.value = 0; name.value = ''; consent.value = ''; transcript.value = ''; file.value = null; if (fileInput.value) fileInput.value.value = '';
@@ -87,6 +100,6 @@ async function save() {
         <div class="form-group"><label for="cloneConsent">{{ t('Consent basis') }}</label><input id="cloneConsent" v-model="consent" :placeholder="t('I own this voice or have permission')" autocomplete="off"></div>
       </fieldset>
       <div class="toolbar"><button v-if="step > 0" type="button" :disabled="pending" @click="step--; feedback = null">{{ t('Back') }}</button><button v-if="step < 2" class="primary" :disabled="pending || !cap">{{ t('Continue') }}</button><button v-else id="cloneSubmit" class="primary" :disabled="pending">{{ t(pending ? 'Cloning…' : 'Clone voice') }}</button><button v-if="step === 0 && !engineReady" type="button" class="btn-inline" @click="emit('engines')">{{ t('Manage engines') }}</button></div>
-    </form><FeedbackNotice :feedback="feedback"/><p v-for="warning in referenceWarnings" :key="warning" role="status" class="help-note">{{ referenceWarning(warning) }}</p>
+    </form><FeedbackNotice :feedback="feedback"/><p v-for="defect in referenceDefects" :key="'defect-' + defect" role="alert" class="feedback error">{{ referenceMessage(defect) }}</p><p v-for="warning in referenceWarnings" :key="'warn-' + warning" role="status" class="help-note">{{ referenceMessage(warning) }}</p><p v-for="note in referenceGuidance" :key="'note-' + note" role="status" class="muted">{{ referenceMessage(note) }}</p>
   </section>
 </template>

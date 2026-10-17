@@ -9,7 +9,7 @@ use anyhow::{Result, anyhow, ensure};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::collections::VecDeque;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Sampling {
     pub temperature: f32,
     pub top_k: usize,

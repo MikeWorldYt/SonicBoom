@@ -120,19 +120,37 @@ fn decode_wav_bytes(bytes: &[u8]) -> Result<(Vec<f32>, u32), AppError> {
 }
 
 /// Non-destructive health readout of the mono mix before conditioning.
-/// These conservative warnings never reject or modify an otherwise valid clip.
+///
+/// Returns `(measurements, warnings, defects, guidance)`:
+/// * `defects` are confirmed numerical faults (never silent: they always
+///   surface, but still do not reject or modify the clip),
+/// * `warnings` are conservative heuristics that must not reject a valid clip,
+/// * `guidance` is advisory (e.g. the 5-10 s recording recommendation) and never
+///   a model restriction.
 fn reference_health(
     pcm: &[f32],
     rate: u32,
     source_channels: u16,
-) -> (serde_json::Value, Vec<&'static str>) {
-    let n = pcm.len().max(1) as f64;
-    let peak = pcm.iter().fold(0f32, |a, b| a.max(b.abs()));
-    let rms = (pcm.iter().map(|s| (*s as f64).powi(2)).sum::<f64>() / n).sqrt();
-    let dc = pcm.iter().map(|s| *s as f64).sum::<f64>() / n;
-    let clipping = pcm.iter().filter(|s| s.abs() >= 0.999).count() as f64 / n;
-    let low_amplitude = pcm.iter().filter(|s| s.abs() < 1e-4).count() as f64 / n;
+) -> (
+    serde_json::Value,
+    Vec<&'static str>,
+    Vec<&'static str>,
+    Vec<&'static str>,
+) {
+    let mut defects = Vec::new();
     let mut warnings = Vec::new();
+    let mut guidance = Vec::new();
+    // Single O(n) measurement pass shared with the generation-quality module.
+    let health = sonicboom::tts::quality::audio_health::analyze(pcm, rate);
+    let duration_secs = pcm.len() as f64 / rate.max(1) as f64;
+    let peak = health.peak;
+    let rms = health.rms;
+    let dc = health.dc_offset;
+    let clipping = health.clipping_fraction;
+    let low_amplitude = health.near_silent_fraction;
+    if health.non_finite_samples > 0 {
+        defects.push("reference_non_finite_samples");
+    }
     if rms < 1e-4 {
         warnings.push("reference_nearly_silent");
     }
@@ -142,12 +160,74 @@ fn reference_health(
     if dc.abs() > 0.1 {
         warnings.push("reference_large_dc_offset");
     }
+    if (1e-4..0.01).contains(&rms) {
+        warnings.push("reference_unusually_quiet");
+    }
+    // Frame-level (20 ms) energy profile: leading/trailing silence, dynamic
+    // range, and the noise floor. Purely heuristic — a pure tone, a DC block,
+    // or a constant-amplitude clip has no dynamic range and is never mistaken
+    // for truncated speech or noisy speech.
+    let frame = (rate as usize / 50).max(1);
+    let energies: Vec<f64> = pcm
+        .chunks(frame)
+        .map(|window| {
+            (window.iter().map(|s| (*s as f64).powi(2)).sum::<f64>() / window.len().max(1) as f64)
+                .sqrt()
+        })
+        .collect();
+    let silence_level = (peak as f64 * 0.01).max(1e-4);
+    let (leading_secs, trailing_secs, speech_like, floor) = if energies.len() > 4 {
+        let quiet = |value: f64| value < silence_level;
+        let leading = energies.iter().take_while(|e| quiet(**e)).count();
+        let trailing = energies.iter().rev().take_while(|e| quiet(**e)).count();
+        let mut sorted = energies.clone();
+        sorted.sort_by(f64::total_cmp);
+        let floor = sorted[sorted.len() / 10];
+        let loud = sorted[sorted.len() * 9 / 10];
+        // Real pauses between speech produce a wide dynamic range; a steady
+        // tone or a clipped square wave does not.
+        let speech_like = loud > floor * 3.0 + 1e-6;
+        let secs = |frames: usize| frames as f64 * frame as f64 / f64::from(rate.max(1));
+        (secs(leading), secs(trailing), speech_like, floor)
+    } else {
+        (0.0, 0.0, false, 0.0)
+    };
+    if rms >= 1e-4 {
+        if leading_secs > 1.0 {
+            guidance.push("reference_leading_silence");
+        }
+        if trailing_secs > 1.0 {
+            guidance.push("reference_trailing_silence");
+        }
+    }
+    if speech_like {
+        // The recording likely stops mid-speech: loud energy up to the final
+        // sample with no natural trailing silence.
+        if trailing_secs < 0.05 && energies.last().is_some_and(|e| e >= &silence_level) {
+            warnings.push("reference_ends_during_speech");
+        }
+        // Noise floor: the quietest decile of the clip is far above digital
+        // silence, suggesting background contamination.
+        if floor > 0.005 && floor > peak as f64 * 0.02 {
+            warnings.push("reference_possible_background_noise");
+        }
+    }
+    if duration_secs < 3.0 {
+        guidance.push("reference_short_for_cloning");
+    }
     (
         serde_json::json!({"analysis":"mono_mix_before_resampling", "sample_count":pcm.len(),
         "source_channels":source_channels,"source_sample_rate":rate,
-        "duration_secs":pcm.len() as f64 / rate.max(1) as f64,"peak":peak,"rms":rms,
-        "dc_offset":dc,"clipping_fraction":clipping,"low_amplitude_fraction":low_amplitude}),
+        "duration_secs":duration_secs,"peak":peak,"rms":rms,
+        "dc_offset":dc,"clipping_fraction":clipping,"low_amplitude_fraction":low_amplitude,
+        "non_finite_samples":health.non_finite_samples,
+        "max_discontinuity":health.max_discontinuity,
+        "impulsive_samples":health.impulsive_samples,
+        "leading_silence_secs":leading_secs,"trailing_silence_secs":trailing_secs,
+        "frame_count":energies.len()}),
         warnings,
+        defects,
+        guidance,
     )
 }
 
@@ -593,7 +673,7 @@ async fn post_clones_inner(
     }
     let preparation_lease = super::jobs::preparation_lease();
     let reference_lease = super::jobs::reference_lease();
-    let (pcm, rate, health, warnings) = tokio::task::spawn_blocking(move || {
+    let (pcm, rate, health, warnings, defects, guidance) = tokio::task::spawn_blocking(move || {
         let _preparation_lease = preparation_lease;
         let _reference_lease = reference_lease;
         let (pcm, rate) = decode_wav_bytes(&body)?;
@@ -601,8 +681,8 @@ async fn post_clones_inner(
             .map_err(|_| AppError::BadRequest("reference WAV header is invalid".into()))?
             .spec()
             .channels;
-        let (health, warnings) = reference_health(&pcm, rate, channels);
-        Ok::<_, AppError>((pcm, rate, health, warnings))
+        let (health, warnings, defects, guidance) = reference_health(&pcm, rate, channels);
+        Ok::<_, AppError>((pcm, rate, health, warnings, defects, guidance))
     })
     .await
     .map_err(|e| AppError::internal(e.to_string()))??;
@@ -648,6 +728,8 @@ async fn post_clones_inner(
         serde_json::to_value(&profile).map_err(|e| AppError::internal(e.to_string()))?;
     response["reference_health"] = health;
     response["warnings"] = serde_json::json!(warnings);
+    response["defects"] = serde_json::json!(defects);
+    response["guidance"] = serde_json::json!(guidance);
     let body = serde_json::to_string(&response).map_err(|e| AppError::internal(e.to_string()))?;
     Ok((
         StatusCode::CREATED,
@@ -777,12 +859,53 @@ pub async fn delete_voice(
     ))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 pub struct PreviewQuery {
     #[serde(default)]
     pub format: Option<String>,
     #[serde(default)]
     pub language: Option<String>,
+    #[serde(default)]
+    pub sampling_preset: Option<String>,
+    #[serde(default)]
+    pub seed: Option<String>,
+    #[serde(default)]
+    pub quality: Option<String>,
+    #[serde(default)]
+    pub talker_temperature: Option<f32>,
+    #[serde(default)]
+    pub talker_top_k: Option<usize>,
+    #[serde(default)]
+    pub talker_top_p: Option<f32>,
+    #[serde(default)]
+    pub talker_repetition_penalty: Option<f32>,
+    #[serde(default)]
+    pub predictor_temperature: Option<f32>,
+    #[serde(default)]
+    pub predictor_top_k: Option<usize>,
+    #[serde(default)]
+    pub predictor_top_p: Option<f32>,
+    #[serde(default)]
+    pub predictor_repetition_penalty: Option<f32>,
+}
+
+impl PreviewQuery {
+    /// Collect the optional sampling/quality overrides (unparsed).
+    pub(crate) fn sampling_input(&self) -> super::sampling::SamplingInput {
+        super::sampling::SamplingInput {
+            preset: self.sampling_preset.clone(),
+            seed: self.seed.clone(),
+            quality: self.quality.clone(),
+            talker_temperature: self.talker_temperature,
+            talker_top_k: self.talker_top_k,
+            talker_top_p: self.talker_top_p,
+            talker_repetition_penalty: self.talker_repetition_penalty,
+            predictor_temperature: self.predictor_temperature,
+            predictor_top_k: self.predictor_top_k,
+            predictor_top_p: self.predictor_top_p,
+            predictor_repetition_penalty: self.predictor_repetition_penalty,
+        }
+    }
 }
 
 /// `POST /api/voices/{id}/preview`: synthesize `text/plain` with the
@@ -842,7 +965,7 @@ async fn post_preview_inner(
             "voice profile belongs to an incompatible model revision; create a new profile".into(),
         ));
     }
-    let language = query.language.unwrap_or(profile.language.clone());
+    let language = query.language.clone().unwrap_or(profile.language.clone());
     let mode = parse_clone_mode(&profile.clone_mode)?;
     let format = query
         .format
@@ -856,6 +979,8 @@ async fn post_preview_inner(
     request.clone_mode = Some(mode);
     request.reference_transcript = profile.transcript.clone();
     request.reference_audio = Some(reference);
+    // Optional per-request sampling/quality overrides (validated strictly).
+    let (sampling, quality) = query.sampling_input().into_parts()?;
     let registry = build_registry_for_state(&state).await;
     let provider = registry
         .resolve_model(&profile.model)
@@ -870,6 +995,16 @@ async fn post_preview_inner(
             provider.id()
         )));
     }
+    // Sampling and quality modes are Qwen3-TTS-only: reject them explicitly
+    // for other providers rather than silently ignoring a requested setting.
+    if (sampling.is_some() || quality.is_some()) && provider.id() != "qwen3-gguf" {
+        return Err(AppError::BadRequest(format!(
+            "sampling and quality options are not supported by provider '{}' (only qwen3-gguf)",
+            provider.id()
+        )));
+    }
+    request.sampling = sampling;
+    request.quality = quality;
     let audio = synthesize_provider_bounded(&state, provider, request)
         .await
         .map_err(provider_error_to_app)?;
@@ -891,11 +1026,19 @@ mod tests {
             .map(|i| 0.1 * (i as f32 * std::f32::consts::TAU * 440.0 / 24000.0).sin())
             .collect();
         let copy = clean.clone();
-        let (health, warnings) = reference_health(&clean, 24000, 2);
-        assert!(warnings.is_empty());
+        let (health, warnings, defects, guidance) = reference_health(&clean, 24000, 2);
+        assert!(
+            warnings.is_empty(),
+            "clean clip must not warn: {warnings:?}"
+        );
+        assert!(defects.is_empty());
+        assert!(
+            guidance.contains(&"reference_short_for_cloning"),
+            "1 s is below guidance"
+        );
         assert_eq!(health["source_channels"], 2);
         assert_eq!(health["duration_secs"], 1.0);
-        assert_eq!(clean, copy);
+        assert_eq!(clean, copy, "audio must never be modified");
         assert!(health.get("pcm").is_none() && health.get("transcript").is_none());
         assert!(
             reference_health(&vec![0.0; 24000], 24000, 1)
@@ -914,6 +1057,61 @@ mod tests {
             reference_health(&vec![0.2; 24000], 24000, 1)
                 .1
                 .contains(&"reference_large_dc_offset")
+        );
+        // Unusually quiet but non-silent audio is a warning, not a rejection.
+        let quiet: Vec<f32> = (0..24000)
+            .map(|i| 0.005 * (i as f32 * std::f32::consts::TAU * 300.0 / 24000.0).sin())
+            .collect();
+        assert!(
+            reference_health(&quiet, 24000, 1)
+                .1
+                .contains(&"reference_unusually_quiet")
+        );
+        // Confirmed numerical defect: non-finite samples are reported as a
+        // defect, never silently dropped.
+        let mut non_finite = clean.clone();
+        non_finite[5] = f32::NAN;
+        assert!(
+            reference_health(&non_finite, 24000, 1)
+                .2
+                .contains(&"reference_non_finite_samples")
+        );
+    }
+
+    /// Speech-like bursts separated by silence: the profile needed before the
+    /// truncation/noise heuristics may fire (a pure tone never matches).
+    fn speech_like(silence_level: f32) -> Vec<f32> {
+        let mut samples = Vec::new();
+        for block in 0..6 {
+            for i in 0..2400 {
+                samples.push(0.3 * (i as f32 * 300.0 * std::f32::consts::TAU / 24000.0).sin());
+            }
+            if block != 5 {
+                for i in 0..2400 {
+                    samples.push(
+                        silence_level * (i as f32 * 5000.0 * std::f32::consts::TAU / 24000.0).sin(),
+                    );
+                }
+            }
+        }
+        samples
+    }
+
+    #[test]
+    fn reference_health_detects_truncated_speech_and_background_noise() {
+        // Ends loudly with no trailing silence → likely truncated mid-speech.
+        let truncated = speech_like(0.0);
+        assert!(
+            reference_health(&truncated, 24000, 1)
+                .1
+                .contains(&"reference_ends_during_speech")
+        );
+        // Same structure with a raised noise floor → background contamination.
+        let noisy = speech_like(0.02);
+        assert!(
+            reference_health(&noisy, 24000, 1)
+                .1
+                .contains(&"reference_possible_background_noise")
         );
     }
 

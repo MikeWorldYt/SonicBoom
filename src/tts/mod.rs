@@ -6,6 +6,7 @@ pub mod download;
 pub mod inference;
 pub mod model;
 pub mod providers;
+pub mod quality;
 #[cfg(feature = "playback")]
 pub mod queue;
 pub mod text;

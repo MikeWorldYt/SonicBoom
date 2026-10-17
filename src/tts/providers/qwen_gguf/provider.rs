@@ -20,10 +20,11 @@ use super::super::assets;
 use super::super::error::ProviderError;
 use super::super::types::{
     CloneMode, DevicePreference, PcmAudio, ProviderCapabilities, ProviderRequest, ProviderStatus,
-    ProviderStatusState,
+    ProviderStatusState, SamplingRequest,
 };
 use super::models;
 use super::worker::{Device, Settings, Worker};
+use crate::tts::quality::QualityPolicy;
 
 /// Stable provider identifier for the native GGUF/ONNX backend.
 pub const QWEN_GGUF_PROVIDER_ID: &str = "qwen3-gguf";
@@ -55,6 +56,10 @@ pub struct QwenGgufConfig {
     /// Permit a CPU fallback when an explicit `device` cannot initialize.
     /// `Device::Auto` always permits it; explicit devices only when set.
     pub allow_cpu_fallback: bool,
+    /// Default sampling (the `balanced` preset is the pinned upstream default).
+    pub sampling: SamplingRequest,
+    /// Quality detection/regeneration policy (default: detection off).
+    pub quality: QualityPolicy,
 }
 
 impl Default for QwenGgufConfig {
@@ -68,6 +73,8 @@ impl Default for QwenGgufConfig {
             max_tokens: 512,
             cache_capacity: 16,
             allow_cpu_fallback: false,
+            sampling: SamplingRequest::default(),
+            quality: QualityPolicy::default(),
         }
     }
 }
@@ -434,6 +441,11 @@ impl super::super::TtsProvider for QwenGgufProvider {
                 "qwen3-gguf icl mode requires the exact reference transcript",
             ));
         }
+        // Fail fast on invalid sampling (NaN/Inf, out-of-range, bad seed)
+        // so callers get an explicit 400 rather than an inference failure.
+        if let Err(detail) = super::sampling::resolve(request.sampling.as_ref(), request.seed) {
+            return Err(ProviderError::invalid_voice(detail));
+        }
         // Reference audio travels with the request: concurrent voices can
         // never observe each other's data through a shared mutable slot.
         // Validated here so callers fail fast; the worker revalidates the
@@ -570,6 +582,8 @@ impl QwenGgufProvider {
             max_tokens: config.max_tokens,
             cache_capacity: config.cache_capacity,
             allow_cpu_fallback: config.allow_cpu_fallback,
+            sampling: config.sampling.clone(),
+            quality: config.quality,
         })
         .map_err(|error| ProviderError::inference_failed(format!("{error:#}")))?;
         let ready = worker.ready.clone();

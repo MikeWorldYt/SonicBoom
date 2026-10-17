@@ -186,3 +186,21 @@ worker prompt cache did not use its access promotion. Supertonic already had
 a versioned manager; optional providers needed corresponding safeguards.
 Qwen already stopped on EOS or a maximum frame count; it was not an infinite
 loop. Real-model tests remain opt-in to keep ordinary CI independent of weights.
+
+## Quality detection cost and ownership (2026-10-17)
+
+Deterministic quality detection (`src/tts/quality/`) runs on the owning worker
+thread, after decode, before the response is published. It is two O(n) passes
+over the already-resident PCM buffer (health measurements plus a first-difference
+scan for impulses and chunk seams) and adds no allocation of PCM. Reference-echo
+detection is text-only in the request path and makes no claim without an offline
+ASR transcript; ASR is a benchmark/offline dependency and is never run during
+generation. Detection is off by default (`[providers.qwen3_gguf.quality]
+enabled=false`), so the default latency profile is unchanged.
+
+The report travels through `InferenceControl::set_quality` into `JobStatus.quality`
+— the same per-request control object that already carries seed, device and stage
+progress. No audio is copied across the boundary, no detector state leaks between
+requests, and a bounded (≤1) regeneration attempt reuses the cached conditioning
+so it does not re-run speaker/codec preparation. Checks complete before audio is
+queued for playback; a cancelled or deadline-exceeded request is never retried.

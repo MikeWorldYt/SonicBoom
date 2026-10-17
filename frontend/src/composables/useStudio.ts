@@ -20,6 +20,56 @@ export const STUDIO_SLOW_EVERY = 6;
 export function slowRefreshDue(tick: number): boolean {
   return tick % STUDIO_SLOW_EVERY === 0;
 }
+
+/** Qwen3-TTS advanced generation settings (all optional, string-backed). */
+export interface SamplingState {
+  preset: string;
+  seed: string;
+  quality: string;
+  talkerTemperature: string;
+  talkerTopK: string;
+  talkerTopP: string;
+  talkerRepetitionPenalty: string;
+  predictorTemperature: string;
+  predictorTopK: string;
+  predictorTopP: string;
+  predictorRepetitionPenalty: string;
+}
+export const DEFAULT_SAMPLING: SamplingState = {
+  preset: 'balanced', seed: '', quality: '',
+  talkerTemperature: '', talkerTopK: '', talkerTopP: '', talkerRepetitionPenalty: '',
+  predictorTemperature: '', predictorTopK: '', predictorTopP: '', predictorRepetitionPenalty: '',
+};
+const samplingStorageKey = 'sonicboom.sampling';
+function loadSampling(): SamplingState {
+  try {
+    const saved = localStorage.getItem(samplingStorageKey);
+    if (saved) return { ...DEFAULT_SAMPLING, ...(JSON.parse(saved) as Partial<SamplingState>) };
+  } catch { /* Storage can be unavailable in restricted contexts. */ }
+  return { ...DEFAULT_SAMPLING };
+}
+function persistSampling(sampling: SamplingState) {
+  try { localStorage.setItem(samplingStorageKey, JSON.stringify(sampling)); } catch { /* session-only */ }
+}
+/** Maps the UI state to API query parameters, omitting empty values. */
+export function samplingQuery(sampling: SamplingState): Record<string, string> {
+  const pairs: [string, string][] = [
+    ['sampling_preset', sampling.preset],
+    ['seed', sampling.seed],
+    ['quality', sampling.quality],
+    ['talker_temperature', sampling.talkerTemperature],
+    ['talker_top_k', sampling.talkerTopK],
+    ['talker_top_p', sampling.talkerTopP],
+    ['talker_repetition_penalty', sampling.talkerRepetitionPenalty],
+    ['predictor_temperature', sampling.predictorTemperature],
+    ['predictor_top_k', sampling.predictorTopK],
+    ['predictor_top_p', sampling.predictorTopP],
+    ['predictor_repetition_penalty', sampling.predictorRepetitionPenalty],
+  ];
+  const query: Record<string, string> = {};
+  for (const [key, value] of pairs) { const trimmed = value.trim(); if (trimmed) query[key] = trimmed; }
+  return query;
+}
 export function createStudio(data: HomeData, overrides?: { api?: Api }) {
   const token = ref('');
   const info = shallowRef<ServerInfo | null>(null);
@@ -39,6 +89,10 @@ export function createStudio(data: HomeData, overrides?: { api?: Api }) {
   const language = ref('en');
   const text = ref('');
   const preview = ref(0);
+  const sampling = ref<SamplingState>(loadSampling());
+  watch(sampling, value => persistSampling({ ...value }), { deep: true });
+  const samplingParams = computed(() => samplingQuery(sampling.value));
+  function resetSampling() { sampling.value = { ...DEFAULT_SAMPLING }; }
   const api = overrides?.api ?? createApi(createHttpClient(() => token.value, () => info.value?.auth.required ?? true));
   let disposed = false;
   let refreshing = false;
@@ -156,7 +210,7 @@ export function createStudio(data: HomeData, overrides?: { api?: Api }) {
     void refresh(slowRefreshDue(tick));
   }, STUDIO_FAST_MS);
   onUnmounted(dispose);
-  return { api, token, info, providers, capabilities, diagnostics, builtinVoices, voices, config, status, schema, devices, errors, loading, model, voice, language, text, preview, models, selectedModel, availableVoices, refresh, refreshConfig, refreshProviders, refreshVoices, saveSetting, toggleProvider, activatePocketModel, selectProfile, dispose };
+  return { api, token, info, providers, capabilities, diagnostics, builtinVoices, voices, config, status, schema, devices, errors, loading, model, voice, language, text, preview, sampling, samplingParams, resetSampling, models, selectedModel, availableVoices, refresh, refreshConfig, refreshProviders, refreshVoices, saveSetting, toggleProvider, activatePocketModel, selectProfile, dispose };
 }
 export type Studio = ReturnType<typeof createStudio>;
 export const studioKey: InjectionKey<Studio> = Symbol('SonicBoom studio');

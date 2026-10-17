@@ -190,3 +190,46 @@ those setup failures. Interrupted exploratory runs are labeled in
 
 Test commands and exact observed summaries are in [verification.json](verification.json).
 Commits are local; no PR or deployment was created.
+
+## Quality detection and configurable sampling (2026-10-17)
+
+**Implemented and unit/integration tested** (no real-model run in this
+environment; see NOT RUN below):
+
+- Deterministic audio-health measurement (`peak`, `rms`, `dc_offset`,
+  `clipping_fraction`, `near_silent_fraction`, `max_discontinuity`,
+  `impulsive_samples`, `chunk_boundary_peaks`, `non_finite_samples`).
+- Layered reference-echo detector: text-only candidate isolation plus
+  ASR-confirmed detection when an offline transcript is supplied. No claim
+  without ASR; `confidence` remains `null` (uncalibrated).
+- Configurable sampling with `balanced`/`stable`/`expressive`/`custom`
+  presets, validated parameters, and `u64` seeds carried as decimal strings.
+- Reference-health `defects`/`warnings`/`guidance` split (truncation,
+  background-noise, quiet, silence and duration heuristics).
+- Bounded (≤1) reproducible regeneration on confident failure.
+
+**Measured:** `cargo test` — 458 passed / 0 failed / 10 ignored (real-model
+artifact tests); `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt
+--all -- --check` clean; frontend `npm run typecheck`, `npm test` (21) and
+`npm run build` pass. The audit runner gained `AUDIT_SAMPLING_PRESET`,
+`AUDIT_QUALITY`, `AUDIT_DEVICE` and `AUDIT_ASR_JSON`, and each manifest row now
+carries `quality` (audio-health + optional echo) and `sampling_preset`.
+
+**NOT RUN (blocked):**
+
+- **CPU vs Vulkan real-model comparison.** The Vulkan feature compiles and the
+  runner can select `AUDIT_DEVICE=vulkan`, but no Vulkan-capable run was
+  executed here; there is no CPU/Vulkan PCM-equivalence evidence in this report.
+- **Reference-echo reproduction on real audio.** Confirmation requires a
+  verified reference WAV/transcript plus an offline ASR transcript
+  (`AUDIT_ASR_JSON`); none was available, so only synthetic fixtures prove the
+  classifier.
+- **X-vector-only cloning.** Still disabled: converted speaker-only contracts
+  and comparative intelligibility/similarity/leakage are unvalidated.
+- **Higher-precision components, Qwen3-TTS 0.6B Base and CustomVoice.** Not
+  introduced; no integrity-verified, audibly validated bundles were added.
+
+No numerical percentage improvements are claimed. Reference echo and noise are
+not reported as "fixed": the deterministic path detects and reports them, and
+`retry` regenerates once, but upstream model behavior is unchanged and no audio
+is trimmed, filtered, gated or normalized to hide a defect.

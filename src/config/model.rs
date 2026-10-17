@@ -11,6 +11,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use sonicboom::tts::providers::types::SamplingRequest;
+
 // ---------------------------------------------------------------------------
 // Public constants (referenced across the binary)
 // ---------------------------------------------------------------------------
@@ -379,6 +381,41 @@ pub struct Qwen3GgufConfig {
     /// reported fallback to CPU instead; `device = "auto"` always permits it.
     #[serde(default)]
     pub allow_cpu_fallback: bool,
+    /// Default sampling for Qwen3-TTS (`[providers.qwen3_gguf.sampling]`).
+    /// Omitted means the pinned upstream `balanced` behavior. Per-request
+    /// overrides take precedence over this default.
+    #[serde(default)]
+    pub sampling: SamplingRequest,
+    /// Quality detection/regeneration policy (`[providers.qwen3_gguf.quality]`).
+    #[serde(default)]
+    pub quality: QwenQualitySection,
+}
+
+/// Qwen3-TTS quality detection configuration
+/// (`[providers.qwen3_gguf.quality]`). Disabled by default: detection adds
+/// deterministic CPU work but no regeneration unless `policy = "retry"`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QwenQualitySection {
+    /// Enable detection/reporting (default `false`).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Handling mode: `off`, `report`, `retry`, or `experimental_trim`.
+    #[serde(default = "default_qwen_quality_policy")]
+    pub policy: String,
+    /// Automatic regeneration attempts (hard ceiling of 1).
+    #[serde(default = "default_qwen_quality_retries")]
+    pub max_retries: usize,
+}
+
+impl Default for QwenQualitySection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            policy: default_qwen_quality_policy(),
+            max_retries: default_qwen_quality_retries(),
+        }
+    }
 }
 
 /// Native Pocket TTS ONNX provider settings (`[providers.pocket_tts]`).
@@ -652,6 +689,12 @@ fn default_qwen_gguf_threads() -> usize {
 fn default_qwen_gguf_max_tokens() -> usize {
     512
 }
+fn default_qwen_quality_policy() -> String {
+    "report".to_string()
+}
+fn default_qwen_quality_retries() -> usize {
+    1
+}
 fn default_pocket_model_dir() -> PathBuf {
     PathBuf::from("./models/pocket-tts")
 }
@@ -700,6 +743,8 @@ impl Default for Qwen3GgufConfig {
             cache_entries: default_provider_cache(),
             max_tokens: default_qwen_gguf_max_tokens(),
             allow_cpu_fallback: false,
+            sampling: SamplingRequest::default(),
+            quality: QwenQualitySection::default(),
         }
     }
 }

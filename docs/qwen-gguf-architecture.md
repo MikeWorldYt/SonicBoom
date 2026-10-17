@@ -214,3 +214,56 @@ request) and reproduces first PCM afterward. The final same-seed warm/cold and
 A/B/A/B synthetic-reference run completed; see
 `benchmarks/tts-quality/REPORT.md` and its WAV index. These outcomes do not turn
 ASR hypotheses or finite PCM into a listening-quality acceptance result.
+
+## Quality detection and configurable sampling (2026-10-17)
+
+This change adds evidence-producing diagnostics and per-request tuning around the
+unchanged ICL generation contract. It does not alter the prompt builder, the
+codec decode geometry, or the sampler's selection math.
+
+**`src/tts/quality/`** (always compiled, no new runtime dependencies):
+
+- `audio_health.rs` measures finite samples, peak, RMS, DC offset, clipping,
+  near-silence, adjacent-sample discontinuities (impulses) and decoder
+  chunk-seam candidates. It is measurement-only: no trimming, filtering,
+  normalization, gating or compression is ever applied.
+- `reference_echo.rs` is a layered detector for reference-transcript
+  continuation (upstream issue #341): it normalizes the reference and target to
+  word sequences, isolates reference suffixes absent from the target opening,
+  and — **only when an offline ASR transcript is supplied** — confirms whether
+  the generated speech begins with that suffix. Without ASR it makes no claim
+  (`detected=false`, `asr_required=true`); `confidence` stays `null` until
+  calibrated. It never guesses from PCM alone, never searches mid-utterance and
+  requires ≥2 matched words, so a single shared word is not reported as echo.
+- `policy.rs` defines `off` / `report` / `retry` / `experimental_trim`. Retries
+  are clamped to a hard ceiling of one. `experimental_trim` stays inert (downgraded
+  to `report`): the detector produces no word timestamps, and nothing trims a
+  fixed duration or removes target words.
+- `report.rs` assembles a serializable `QualityReport`.
+
+The worker (`worker.rs`) runs the deterministic pass after decode and publishes
+it through `InferenceControl::set_quality`, so it reaches `JobStatus.quality` and
+the UI diagnostics. One bounded, reproducible regeneration attempt runs only for
+a confident failure (structural error or confirmed echo), with a derived seed;
+a worse candidate is discarded and failed candidate audio is never published.
+The default policy is `off`, so existing behavior is unchanged unless enabled.
+
+**Sampling** (`providers::types::SamplingRequest`, resolved by
+`qwen_gguf::sampling`): `balanced` reproduces the pinned upstream defaults
+exactly (talker 0.9/50/1.0/1.05, predictor 0.9/50/1.0/1.0). `stable` (0.7/40/0.9/1.10)
+and `expressive` (1.0/60/0.98/1.03) are experimental; `custom` takes explicit
+parameters. Validation rejects NaN/Inf, out-of-range values and invalid seeds
+before inference; explicit parameters imply `custom`. Seeds are `u64`, carried
+as decimal strings so browsers do not lose precision, and each attempt keeps
+separate talker/predictor RNG streams with no cross-request leakage.
+
+Per-request overrides arrive as optional query parameters on
+`/api/tts/jobs`, `/api/voices/{id}/preview` and the OpenAI path, and are rejected
+with `400` for non-Qwen providers rather than silently ignored. Safe defaults
+keep every existing client and voice profile working.
+
+**Not claimed:** automatic audio trimming, noise gating, or reference-echo
+"fixes". Reference echo remains an upstream model behavior; SonicBoom can detect
+it (with offline ASR), report it, or regenerate once — it never rewrites valid
+speech to hide it. X-vector cloning stays disabled (unvalidated), and no
+higher-precision or 0.6B/CustomVoice artifact has been introduced.

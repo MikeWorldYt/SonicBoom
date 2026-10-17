@@ -121,6 +121,124 @@ pub struct ReferenceAudio {
     pub sample_rate: u32,
 }
 
+/// Sampling preset. Provider-interpreted; only Qwen3-TTS currently consumes
+/// it, so adding it to [`ProviderRequest`] never changes Pocket or Supertonic
+/// behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SamplingPreset {
+    /// Pinned upstream defaults — compatibility baseline.
+    #[default]
+    Balanced,
+    /// Experimental: lower variance, stronger repetition control.
+    Stable,
+    /// Experimental: greater acoustic variation.
+    Expressive,
+    /// Explicit advanced parameters.
+    Custom,
+}
+
+impl SamplingPreset {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "balanced" | "default" => Some(Self::Balanced),
+            "stable" => Some(Self::Stable),
+            "expressive" => Some(Self::Expressive),
+            "custom" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Balanced => "balanced",
+            Self::Stable => "stable",
+            Self::Expressive => "expressive",
+            Self::Custom => "custom",
+        }
+    }
+}
+
+/// Per-sampler parameters (talker or predictor).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SamplingParams {
+    pub temperature: f32,
+    pub top_k: usize,
+    pub top_p: f32,
+    pub repetition_penalty: f32,
+}
+
+impl SamplingParams {
+    pub const fn new(temperature: f32, top_k: usize, top_p: f32, repetition_penalty: f32) -> Self {
+        Self {
+            temperature,
+            top_k,
+            top_p,
+            repetition_penalty,
+        }
+    }
+
+    /// Validate against the bounds every sampler enforces.
+    pub fn validate(&self, label: &str) -> Result<(), String> {
+        if !self.temperature.is_finite() || !(0.0..=5.0).contains(&self.temperature) {
+            return Err(format!(
+                "{label} temperature must be finite and within 0.0..=5.0"
+            ));
+        }
+        if self.top_k > 2048 {
+            return Err(format!("{label} top_k must be within 0..=2048"));
+        }
+        if !self.top_p.is_finite() || self.top_p <= 0.0 || self.top_p > 1.0 {
+            return Err(format!("{label} top_p must be finite and within 0.0..=1.0"));
+        }
+        if !self.repetition_penalty.is_finite() || !(1.0..=4.0).contains(&self.repetition_penalty) {
+            return Err(format!(
+                "{label} repetition_penalty must be finite and within 1.0..=4.0"
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Optional per-request sampling override. Carries no provider identity, so an
+/// unaware provider simply ignores it (the field defaults to `None`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct SamplingRequest {
+    /// Named preset; omitted means `balanced`.
+    pub preset: Option<SamplingPreset>,
+    /// Explicit talker overrides (imply `custom`).
+    pub talker: Option<SamplingParams>,
+    /// Explicit predictor overrides (imply `custom`).
+    pub predictor: Option<SamplingParams>,
+    /// Optional fixed seed; accepted as a number or a decimal string so all
+    /// `u64` bits survive JavaScript integer precision.
+    #[serde(default, deserialize_with = "deserialize_optional_u64")]
+    pub seed: Option<u64>,
+}
+
+fn deserialize_optional_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Seed {
+        Number(u64),
+        String(String),
+    }
+    match Option::<Seed>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(Seed::Number(value)) => Ok(Some(value)),
+        Some(Seed::String(raw)) => raw
+            .trim()
+            .parse::<u64>()
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
+}
+
 /// Extensible per-request synthesis input.
 ///
 /// `voice` is either a built-in style name (Supertonic `F1`–`F5`/`M1`–`M5`,
@@ -141,6 +259,12 @@ pub struct ProviderRequest {
     pub reference_audio: Option<ReferenceAudio>,
     /// Reserved for documented generation options (seed, sampling, ...).
     pub seed: Option<u64>,
+    /// Optional provider-interpreted sampling override. `None` preserves the
+    /// existing behavior for every provider.
+    pub sampling: Option<SamplingRequest>,
+    /// Optional per-request quality-detection override. `None` uses the
+    /// provider's configured policy.
+    pub quality: Option<crate::tts::quality::DetectionMode>,
 }
 
 impl ProviderRequest {
@@ -160,6 +284,8 @@ impl ProviderRequest {
             reference_transcript: None,
             reference_audio: None,
             seed: None,
+            sampling: None,
+            quality: None,
         }
     }
 }

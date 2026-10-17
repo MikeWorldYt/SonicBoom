@@ -8,6 +8,10 @@ fn runner() -> std::process::Command {
         "AUDIT_ALT_REFERENCE_TRANSCRIPT",
         "AUDIT_POCKET_STEPS",
         "AUDIT_POCKET_TEMPERATURE",
+        "AUDIT_SAMPLING_PRESET",
+        "AUDIT_QUALITY",
+        "AUDIT_DEVICE",
+        "AUDIT_ASR_JSON",
     ] {
         command.env_remove(key);
     }

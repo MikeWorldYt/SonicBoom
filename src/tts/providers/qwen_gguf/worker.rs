@@ -8,11 +8,13 @@ use super::{
     metrics::Metrics,
     models::{self, Embeddings},
     runtime::Runtime,
+    sampling,
     tokenizer::TextTokenizer,
 };
 use crate::tts::{
     control::InferenceControl,
-    providers::types::{CloneMode, PcmAudio, ProviderRequest},
+    providers::types::{CloneMode, PcmAudio, ProviderRequest, SamplingRequest},
+    quality::{self, QualityPolicy},
 };
 use anyhow::{Context, Result, anyhow, ensure};
 use std::{
@@ -39,6 +41,10 @@ pub struct Settings {
     pub cache_capacity: usize,
     /// Permit a CPU fallback when an explicit `device` fails to initialize.
     pub allow_cpu_fallback: bool,
+    /// Default sampling used when a request carries no override.
+    pub sampling: SamplingRequest,
+    /// Quality detection/regeneration policy.
+    pub quality: QualityPolicy,
 }
 
 /// Ordered native device ids to attempt and whether a CPU fallback is
@@ -371,50 +377,172 @@ impl State {
             )
         };
         metrics.conditioning_secs = started.elapsed().as_secs_f64();
+        // Sampling: an explicit per-request override wins; otherwise the
+        // configured default (the pinned `balanced` preset).
+        let sampling_request = request.sampling.as_ref().unwrap_or(&self.settings.sampling);
+        let resolved = sampling::resolve(Some(sampling_request), request.seed)
+            .map_err(|detail| anyhow!("invalid sampling: {detail}"))?;
+        metrics.sampling_preset = resolved.preset.to_string();
+        metrics.seed = resolved.seed;
+        if let Some(control) = crate::tts::control::current() {
+            control.set_seed(resolved.seed);
+        }
+        // Quality policy: a per-request mode overrides the configured mode,
+        // but retries stay bounded by the shared hard ceiling.
+        let policy = match request.quality {
+            Some(mode) => QualityPolicy::new(mode, quality::MAX_RETRIES_CEILING),
+            None => self.settings.quality,
+        };
+        let mode = policy.mode;
+        let mut current = self.run_attempt(
+            &conditioning,
+            &request.text,
+            &request.language,
+            transcript,
+            reseed(&resolved.talker, resolved.seed),
+            reseed(&resolved.predictor, resolved.predictor.seed),
+            mode,
+        )?;
+        metrics.prompt_secs += current.prompt_secs;
+        metrics.generation_secs += current.generation_secs;
+        metrics.decode_secs += current.decode_secs;
+        metrics.frames = current.frames;
+        metrics.reached_eos = true;
+        // Bounded, reproducible regeneration: at most one extra attempt, with a
+        // derived seed, only for a confident failure. Invalid requests and
+        // structural errors never reach here (they already returned).
+        let mut retries = 0usize;
+        while policy.allows_retry(retries, current.report.is_confident_failure()) {
+            check_cancelled()?;
+            retries += 1;
+            let retry_seed = resolved
+                .seed
+                .wrapping_add((retries as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let attempt = self.run_attempt(
+                &conditioning,
+                &request.text,
+                &request.language,
+                transcript,
+                reseed(&resolved.talker, retry_seed),
+                reseed(&resolved.predictor, retry_seed.wrapping_add(1)),
+                mode,
+            );
+            match attempt {
+                Ok(candidate) => {
+                    metrics.prompt_secs += candidate.prompt_secs;
+                    metrics.generation_secs += candidate.generation_secs;
+                    metrics.decode_secs += candidate.decode_secs;
+                    // Adopt the retry only when it is not worse: prefer a
+                    // non-confident result, else the attempt with fewer
+                    // findings. Failed candidate audio is never published when
+                    // the first attempt is better.
+                    let better = if candidate.report.is_confident_failure()
+                        == current.report.is_confident_failure()
+                    {
+                        candidate.report.issues.len() <= current.report.issues.len()
+                    } else {
+                        !candidate.report.is_confident_failure()
+                    };
+                    if better {
+                        metrics.frames = candidate.frames;
+                        current = candidate;
+                    }
+                }
+                Err(error) => {
+                    // A cancelled/deadline-exceeded retry aborts the request;
+                    // any other retry failure keeps the first valid result.
+                    if error.to_string().contains("cancel") {
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        let mut report = current.report;
+        report.retries = retries;
+        metrics.audio_secs = current.samples.len() as f64 / 24_000.0;
+        if let Some(control) = crate::tts::control::current() {
+            control.set_quality(report);
+        }
+        Ok(Synthesis {
+            audio: PcmAudio::mono(current.samples, 24_000),
+            metrics,
+        })
+    }
+
+    /// One generation + decode attempt with the deterministic quality pass.
+    /// Requires EOS (a reached-limit result is withheld, matching the legacy
+    /// contract) and never leaks state between attempts: `generate` resets the
+    /// talker and clears the predictor at its start.
+    #[allow(clippy::too_many_arguments)]
+    fn run_attempt(
+        &mut self,
+        conditioning: &Reference,
+        text: &str,
+        language: &str,
+        transcript: &str,
+        talker: Sampling,
+        predictor: Sampling,
+        mode: quality::DetectionMode,
+    ) -> Result<Attempt> {
         let started = Instant::now();
         let prompt = conditioning::prompt(
             &self.tokenizer,
             &mut self.assets,
-            &conditioning,
-            &request.text,
-            &request.language,
+            conditioning,
+            text,
+            language,
         )?;
-        metrics.prompt_secs = started.elapsed().as_secs_f64();
-        let seed = request.seed.unwrap_or_else(rand::random);
-        if let Some(control) = crate::tts::control::current() {
-            control.set_seed(seed);
-        }
+        let prompt_secs = started.elapsed().as_secs_f64();
         let started = Instant::now();
         let generated = generation::generate(
             &mut self.runtime,
             &mut self.assets,
             prompt,
             self.settings.max_tokens,
-            Sampling {
-                seed,
-                ..Default::default()
-            },
-            Sampling {
-                seed: seed.wrapping_add(1),
-                repetition_penalty: 1.0,
-                ..Default::default()
-            },
+            talker,
+            predictor,
         )?;
-        metrics.generation_secs = started.elapsed().as_secs_f64();
-        metrics.frames = generated.codes.len();
-        metrics.reached_eos = generated.reached_eos;
+        let generation_secs = started.elapsed().as_secs_f64();
         ensure!(
             generated.reached_eos,
             "generation_limit: talker reached max_tokens without EOS; audio withheld"
         );
         let started = Instant::now();
         let samples = self.codec.decode(&generated.codes)?;
-        metrics.decode_secs = started.elapsed().as_secs_f64();
-        metrics.audio_secs = samples.len() as f64 / 24_000.0;
-        Ok(Synthesis {
-            audio: PcmAudio::mono(samples, 24_000),
-            metrics,
+        let decode_secs = started.elapsed().as_secs_f64();
+        // Deterministic in-path detection: no ASR model runs here, so echo is
+        // not claimed (asr_required=true); audio health is fully measured.
+        let report = quality::evaluate(&samples, 24_000, transcript, text, None, mode);
+        Ok(Attempt {
+            samples,
+            report,
+            prompt_secs,
+            generation_secs,
+            decode_secs,
+            frames: generated.codes.len(),
         })
+    }
+}
+
+/// One generation+decode attempt and its deterministic quality report.
+struct Attempt {
+    samples: Vec<f32>,
+    report: quality::QualityReport,
+    prompt_secs: f64,
+    generation_secs: f64,
+    decode_secs: f64,
+    frames: usize,
+}
+
+/// Copy `base`'s sampling parameters with a different seed, leaving `base`
+/// reusable for a bounded retry.
+fn reseed(base: &Sampling, seed: u64) -> Sampling {
+    Sampling {
+        temperature: base.temperature,
+        top_k: base.top_k,
+        top_p: base.top_p,
+        repetition_penalty: base.repetition_penalty,
+        seed,
     }
 }
 

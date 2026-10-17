@@ -11,6 +11,10 @@ pub struct Metrics {
     pub reached_eos: bool,
     pub reference_cache_hit: bool,
     pub audio_secs: f64,
+    /// Effective sampling preset name for diagnostics.
+    pub sampling_preset: String,
+    /// Effective seed used for the returned audio.
+    pub seed: u64,
 }
 impl Metrics {
     pub fn rtf(&self) -> Option<f64> {

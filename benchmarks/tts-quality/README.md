@@ -137,3 +137,24 @@ set it explicitly. Null Pocket frame/cache/EOS/chunk fields mean those metrics
 were not exposed by the provider return type, not fabricated values. Full detailed
 per-chunk trace plumbing remains an open audit enhancement; the independent
 exporter comparison records actual latent frame counts and complete decoder data.
+
+### Runner knobs for quality and sampling
+
+The `tts-quality-audit` binary accepts additional environment overrides. Each
+row now carries a `quality` object (audio-health measurements, plus echo analysis
+when ASR is supplied) and the effective `sampling_preset`:
+
+- `AUDIT_SAMPLING_PRESET=balanced|stable|expressive|custom` — select a Qwen
+  sampling preset for the whole run (default `balanced`, the pinned baseline).
+- `AUDIT_QUALITY=off|report|retry|experimental_trim` — quality pass mode
+  (default `report`; the runner records evidence, it never performs trimming).
+- `AUDIT_DEVICE=cpu|vulkan|cuda` — explicit native device for the Qwen worker.
+  CPU/Vulkan comparisons require separate runs into separate fresh output
+  directories; never overwrite an earlier run.
+- `AUDIT_ASR_JSON='["transcript 1", ...]'` — one offline ASR transcript per
+  text, aligned by index, enabling reference-echo confirmation. This is
+  benchmark-only; the production request path never runs ASR.
+
+`AUDIT_ALT_REFERENCE_WAV` / `AUDIT_ALT_REFERENCE_TRANSCRIPT` still drive the
+A/B/A/B reference alternation for boundary experiments. The runner writes hashed
+inputs only and never logs raw reference audio or transcript text.

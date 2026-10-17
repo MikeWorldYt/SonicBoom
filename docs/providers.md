@@ -167,6 +167,35 @@ reached, finite PCM, conditioning cache hit on repeat, bit-identical
 output for the same seed/reference. See
 `benchmarks/results/2026-10-15-qwen-gguf/`.
 
+### Qwen3-TTS sampling and quality settings
+
+Additive configuration (existing files keep loading unchanged):
+
+```toml
+[providers.qwen3_gguf.sampling]
+preset = "balanced"        # balanced | stable | expressive | custom
+
+[providers.qwen3_gguf.quality]
+enabled = false            # detection is off by default
+policy = "report"          # off | report | retry | experimental_trim
+max_retries = 1            # hard ceiling of 1; bounded regeneration only
+```
+
+`balanced` reproduces the pinned upstream defaults exactly, so under identical
+artifacts, seed and device the output is unchanged. `stable` and `expressive`
+are experimental; `custom` takes explicit `[providers.qwen3_gguf.sampling.talker]`
+/ `.predictor` parameters (`temperature`, `top_k`, `top_p`, `repetition_penalty`).
+
+Per-request overrides are optional query parameters on `/api/tts/jobs`,
+`/api/voices/{id}/preview` and the OpenAI path: `sampling_preset`, `seed`
+(a decimal string so all 64 bits survive JavaScript), `quality`,
+`talker_temperature`, `talker_top_k`, `talker_top_p`, `talker_repetition_penalty`,
+and the `predictor_*` equivalents. Invalid values are a `400`; specifying
+sampling/quality for a non-Qwen provider is rejected explicitly rather than
+silently ignored. Detection semantics, the offline-ASR requirement for echo
+confirmation, and remaining limitations are documented in
+`docs/qwen-gguf-architecture.md`.
+
 ## Pinned download manifests
 
 Qwen3-TTS 1.7B GGUF/ONNX (`Emerald7664/Qwen3-TTS-ONNX`

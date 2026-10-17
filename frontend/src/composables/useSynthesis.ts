@@ -2,28 +2,70 @@ import { computed, getCurrentScope, onScopeDispose, ref, shallowRef } from 'vue'
 import { ApiError } from '../services/http';
 import { monitorJob } from '../services/jobs';
 import { t, msg, uiError, errorMessage, type Message } from '../i18n';
-import type { Job } from '../services/contracts';
+import type { Job, QualityReport } from '../services/contracts';
 import type { Studio } from './useStudio';
 export type GenerationInput = Readonly<{ text: string; model: string; voice: string; language: string; cloned: boolean }>;
 type ActiveGeneration = Readonly<{ jobId: string; input: GenerationInput; requestEpoch: number }>;
+/** One completed generation, retained for side-by-side comparison. */
+export interface GenerationResult {
+  jobId: string;
+  url: string;
+  filename: string;
+  durationSecs: number;
+  preset: string;
+  seed?: string;
+  quality?: QualityReport;
+  model: string;
+  voice: string;
+}
+/** How many alternatives are kept before the oldest URL is released. */
+export const MAX_RESULTS = 4;
 export function useSynthesis(studio: Studio) {
   const pending = ref(false);
   const cancelling = ref(false);
   const active = shallowRef<ActiveGeneration | null>(null);
   const jobId = computed(() => active.value?.jobId ?? null);
   const snapshot = shallowRef<Job | null>(null);
+  const results = shallowRef<GenerationResult[]>([]);
   const audioUrl = ref('');
   const audioFilename = ref('');
   const error = shallowRef<Message | null>(null);
   const complete = ref(false);
+  let lastInput: GenerationInput | null = null;
   let control: AbortController | null = null;
   let disposed = false;
   let epoch = 0;
   const canGenerate = computed(() => studio.selectedModel.value.ready && !!studio.voice.value);
+  /** Sampling overrides apply only to the Qwen3-TTS provider. */
+  const samplingFor = (model: string) => studio.selectedModel.value.provider === 'qwen3-gguf' && studio.selectedModel.value.id === model ? studio.samplingParams.value : undefined;
+  function release(result: GenerationResult) { URL.revokeObjectURL(result.url); }
   function clearAudio() {
-    if (audioUrl.value) URL.revokeObjectURL(audioUrl.value);
+    for (const result of results.value) release(result);
+    results.value = [];
     audioUrl.value = '';
     audioFilename.value = '';
+  }
+  // Detach the current-player pointer without discarding the comparison list:
+  // a new attempt must never present stale audio as its own result.
+  function resetCurrent() {
+    audioUrl.value = '';
+    audioFilename.value = '';
+  }
+  function publish(result: GenerationResult) {
+    const next = [result, ...results.value].slice(0, MAX_RESULTS);
+    results.value = next;
+    audioUrl.value = result.url;
+    audioFilename.value = result.filename;
+  }
+  function removeResult(index: number) {
+    const target = results.value[index];
+    if (!target) return;
+    release(target);
+    const next = results.value.filter((_, i) => i !== index);
+    results.value = next;
+    // Never leave the player pointing at a released object URL.
+    audioUrl.value = next[0]?.url ?? '';
+    audioFilename.value = next[0]?.filename ?? '';
   }
   async function monitor(generation: ActiveGeneration, signal: AbortSignal) {
     const current = () => !disposed && generation.requestEpoch === epoch;
@@ -38,9 +80,17 @@ export function useSynthesis(studio: Studio) {
       }
       const audio = await studio.api.jobAudio(generation.jobId, signal);
       if (!current()) return;
-      clearAudio();
-      audioFilename.value = `sonicboom-${generation.jobId}.wav`;
-      audioUrl.value = URL.createObjectURL(audio);
+      publish({
+        jobId: generation.jobId,
+        url: URL.createObjectURL(audio),
+        filename: `sonicboom-${generation.jobId}.wav`,
+        durationSecs: result.audio_secs ?? 0,
+        preset: studio.sampling.value.preset,
+        seed: result.context?.seed,
+        quality: result.quality,
+        model: generation.input.model,
+        voice: generation.input.voice,
+      });
       active.value = null;
       complete.value = true;
     } catch (failure) {
@@ -51,15 +101,10 @@ export function useSynthesis(studio: Studio) {
       if (current()) { pending.value = false; cancelling.value = false; }
     }
   }
-  async function generate(preview = false) {
+  async function run(input: GenerationInput) {
     if (disposed || pending.value) return;
     // An unresolved job is resumed only by the explicit resume action.
     if (active.value) { error.value = msg('Use Resume monitoring or Cancel generation.'); return; }
-    const input: GenerationInput = Object.freeze({
-      text: preview ? t('Hi there. This is a voice preview.') : studio.text.value.trim(),
-      model: studio.selectedModel.value.id, voice: studio.voice.value,
-      language: studio.language.value, cloned: studio.selectedModel.value.cloned,
-    });
     if (!input.text) { error.value = msg('Please enter some text.'); return; }
     if (studio.info.value?.auth.required && !studio.token.value.trim()) { error.value = msg('Please enter your API token.'); return; }
     if (!canGenerate.value) { error.value = msg('Create a voice profile for this model first.'); return; }
@@ -67,12 +112,12 @@ export function useSynthesis(studio: Studio) {
     error.value = null;
     snapshot.value = null;
     complete.value = false;
-    clearAudio();
+    resetCurrent();
     pending.value = true;
     control = new AbortController();
     const signal = control.signal;
     try {
-      const job = await studio.api.createJob(input.text, input.language, input.voice, input.cloned, signal);
+      const job = await studio.api.createJob(input.text, input.language, input.voice, input.cloned, samplingFor(input.model), signal);
       if (disposed || requestEpoch !== epoch) return;
       const generation = Object.freeze({ jobId: job.id, input, requestEpoch });
       active.value = generation;
@@ -80,6 +125,20 @@ export function useSynthesis(studio: Studio) {
     } catch (failure) {
       if (!disposed && requestEpoch === epoch) { error.value = errorMessage(failure); pending.value = false; }
     }
+  }
+  async function generate(preview = false) {
+    const input: GenerationInput = Object.freeze({
+      text: preview ? t('Hi there. This is a voice preview.') : studio.text.value.trim(),
+      model: studio.selectedModel.value.id, voice: studio.voice.value,
+      language: studio.language.value, cloned: studio.selectedModel.value.cloned,
+    });
+    lastInput = input;
+    await run(input);
+  }
+  /** Re-run the most recent request; the earlier result stays for comparison. */
+  async function regenerate() {
+    if (!lastInput) return;
+    await run(lastInput);
   }
   async function resume() {
     if (disposed || pending.value || !active.value) return;
@@ -103,5 +162,5 @@ export function useSynthesis(studio: Studio) {
   }
   function dispose() { disposed = true; ++epoch; control?.abort(); clearAudio(); }
   if (getCurrentScope()) onScopeDispose(dispose);
-  return { pending, cancelling, jobId, active, snapshot, audioUrl, audioFilename, error, complete, canGenerate, generate, resume, cancel, dispose };
+  return { pending, cancelling, jobId, active, snapshot, results, audioUrl, audioFilename, error, complete, canGenerate, generate, regenerate, removeResult, resume, cancel, dispose };
 }

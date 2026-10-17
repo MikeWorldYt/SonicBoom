@@ -16,6 +16,8 @@ function fixture() {
     text: ref('hola'), voice: ref('A'), language: ref('es'), token: ref(''),
     selectedModel: shallowRef({ id: 'pocket-es', ready: true, cloned: true }),
     info: ref(null),
+    sampling: ref({ preset: 'balanced' }),
+    samplingParams: ref({}),
     api: {
       createJob: async (...args: unknown[]) => { inputs.push(args.slice(0, 4)); return { id: `job-${inputs.length}` }; },
       job: async (id: string) => ({ id, stage }),
