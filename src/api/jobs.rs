@@ -94,11 +94,37 @@ pub struct JobStatus {
     pub rtf: Option<f64>,
     pub error: Option<String>,
     pub stage_secs: std::collections::BTreeMap<String, f64>,
+    /// Playback disposition when the job requested `playback=enqueue`. Absent
+    /// for synthesis-only jobs, so the legacy contract is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub playback: Option<PlaybackStatus>,
 }
 impl JobStatus {
     fn terminal(&self) -> bool {
         matches!(self.stage.as_str(), "completed" | "failed" | "cancelled")
     }
+}
+
+/// Playback outcome for a completed synthesis job.
+///
+/// Deliberately separate from `stage`: `completed` still means "synthesis
+/// finished and the audio is downloadable", never "audible playback
+/// finished". The device backend cannot acknowledge completion, so the only
+/// honest terminal states are [`queued`](Self::state) / [`started`]:
+///
+/// - `queued` — admitted to the server playback queue; completion unverified.
+/// - `started` — `play_now` accepted the interruption and began playback;
+///   completion unverified.
+/// - `failed` — admission was refused; [`error`](Self::error) is sanitized.
+/// - `skipped` — synthesis was cancelled or failed, so nothing was enqueued.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlaybackStatus {
+    pub state: String,
+    pub play_now: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 /// Per-job completed-audio cap enforced when buffering the response body.
 pub const MAX_JOB_AUDIO_BYTES: usize = 16 * 1024 * 1024;
@@ -117,9 +143,28 @@ struct Job {
     /// drops the store's handle without touching in-flight responses.
     audio: Option<(String, Bytes)>,
 }
+/// Hard cap on remembered idempotency keys. Bounds memory independently of
+/// the job store: the oldest record is evicted first.
+const MAX_IDEMPOTENCY_ENTRIES: usize = 1024;
+
+/// One remembered idempotency key: the request fingerprint it was first
+/// submitted with and the job it produced. Records expire on the same clock
+/// as job retention, so a retry can never outlive its job by much.
+#[derive(Debug)]
+struct IdempotencyEntry {
+    fingerprint: String,
+    job_id: String,
+    recorded: Instant,
+    retention: Duration,
+}
+
 #[derive(Debug, Default)]
 pub struct JobStore {
     entries: Mutex<HashMap<String, Job>>,
+    /// Principal-scoped idempotency keys. Keyed by `owner\x1f<key>` so two
+    /// tenants can never observe or collide with each other's keys. Never
+    /// nested inside the `entries` lock, so the lock order stays acyclic.
+    idempotency: Mutex<HashMap<String, IdempotencyEntry>>,
     /// Incrementally maintained sum of resident `audio` payload bytes.
     /// Every mutation happens while the `entries` lock is held, so relaxed
     /// accesses under that lock are exact and completion no longer scans
@@ -181,6 +226,41 @@ impl JobStore {
         job.audio = Some((kind, bytes));
         true
     }
+    /// Drop idempotency records past their retention window. Callers must hold
+    /// the `idempotency` lock.
+    fn reap_idempotency_locked(&self, idem: &mut HashMap<String, IdempotencyEntry>) {
+        idem.retain(|_, entry| entry.recorded.elapsed() < entry.retention);
+    }
+
+    /// Remember one admitted idempotency key, evicting the oldest record when
+    /// the store is full so the map can never grow without bound.
+    fn remember_idempotency_locked(
+        &self,
+        idem: &mut HashMap<String, IdempotencyEntry>,
+        key: String,
+        fingerprint: String,
+        job_id: String,
+        retention: Duration,
+    ) {
+        if idem.len() >= MAX_IDEMPOTENCY_ENTRIES
+            && let Some(oldest) = idem
+                .iter()
+                .min_by_key(|(_, entry)| entry.recorded)
+                .map(|(key, _)| key.clone())
+        {
+            idem.remove(&oldest);
+        }
+        idem.insert(
+            key,
+            IdempotencyEntry {
+                fingerprint,
+                job_id,
+                recorded: Instant::now(),
+                retention,
+            },
+        );
+    }
+
     fn snapshot(&self, id: &str, owner: &str) -> Result<JobStatus, AppError> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let j = entries
@@ -224,15 +304,191 @@ pub struct JobQuery {
     pub format: Option<String>,
     /// An owned cloning profile; omitted selects regular Supertonic synthesis.
     pub profile: Option<String>,
+    /// Provider routing for synthesis, gated exactly like the synchronous
+    /// `/api/tts/play` surface: provider selection needs the `playback` feature.
+    #[cfg(feature = "playback")]
+    pub provider: Option<String>,
+    /// Ordered playback: `enqueue` admits the completed audio to the server
+    /// playback queue; omitted, empty or `none` keeps the legacy synthesis-only
+    /// contract. Any other value is rejected with `400`.
+    pub playback: Option<String>,
+    /// Interrupt current audio and play as soon as the audio is queued. Only
+    /// valid together with `playback=enqueue`.
+    pub play_now: Option<bool>,
 }
 
 pub async fn create(
     token: AuthenticatedToken,
     State(state): State<AppState>,
     Query(query): Query<JobQuery>,
+    headers: axum::http::HeaderMap,
     body: String,
-) -> Result<impl IntoResponse, AppError> {
-    create_with_executor(token, State(state), Query(query), body, execute_request).await
+) -> Result<Response, AppError> {
+    create_with_executor(
+        token,
+        State(state),
+        Query(query),
+        idempotency_key(&headers),
+        body,
+        execute_request,
+    )
+    .await
+}
+
+/// Extracts a usable `Idempotency-Key` header. A missing, empty, over-long or
+/// non-ASCII-printable value is treated as absent: a malformed header degrades
+/// to the legacy non-idempotent behavior instead of failing the request.
+fn idempotency_key(headers: &axum::http::HeaderMap) -> Option<String> {
+    const MAX_IDEMPOTENCY_KEY_LEN: usize = 200;
+    let raw = headers.get("idempotency-key")?.to_str().ok()?;
+    let key = raw.trim();
+    if key.is_empty() || key.len() > MAX_IDEMPOTENCY_KEY_LEN {
+        return None;
+    }
+    if !key.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return None;
+    }
+    Some(key.to_owned())
+}
+
+/// Effective synthesis provider id, for fingerprinting only.
+#[cfg(feature = "playback")]
+fn job_provider(query: &JobQuery) -> &str {
+    query.provider.as_deref().unwrap_or("")
+}
+#[cfg(not(feature = "playback"))]
+fn job_provider(_query: &JobQuery) -> &str {
+    ""
+}
+
+/// Stable fingerprint of everything that changes a job's request. Two
+/// submissions with the same idempotency key must fingerprint identically,
+/// otherwise the key is being reused for a different request. The spoken text
+/// is hashed, never stored, so diagnostics carry no user content.
+fn request_fingerprint(query: &JobQuery, body: &str, playback: &PlaybackRequest) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(body.as_bytes());
+    format!(
+        "{}|{}|{}|{}|{}|{}|{}|{}",
+        job_provider(query),
+        query.profile.as_deref().unwrap_or(""),
+        query.voice.as_deref().unwrap_or(""),
+        query.lang.as_deref().unwrap_or(""),
+        query.format.as_deref().unwrap_or(""),
+        if playback.requested {
+            "enqueue"
+        } else {
+            "none"
+        },
+        playback.play_now,
+        hex::encode(hasher.finalize()),
+    )
+}
+
+/// Validated playback request derived from the job query.
+#[derive(Debug, Clone, Copy)]
+struct PlaybackRequest {
+    requested: bool,
+    play_now: bool,
+}
+
+impl PlaybackRequest {
+    fn parse(query: &JobQuery) -> Result<Self, AppError> {
+        let requested = match query.playback.as_deref().map(str::trim) {
+            None | Some("") | Some("none") => false,
+            Some("enqueue") => true,
+            Some(other) => {
+                return Err(AppError::BadRequest(format!(
+                    "unknown playback mode `{other}`; expected `enqueue` or `none`"
+                )));
+            }
+        };
+        let play_now = query.play_now.unwrap_or(false);
+        if play_now && !requested {
+            return Err(AppError::BadRequest(
+                "play_now requires playback=enqueue".into(),
+            ));
+        }
+        if requested {
+            #[cfg(not(feature = "playback"))]
+            return Err(AppError::ServiceUnavailable(
+                "audio playback is not enabled in this build".into(),
+            ));
+        }
+        Ok(Self {
+            requested,
+            play_now,
+        })
+    }
+}
+
+/// Client-safe text for a playback admission failure. Internal details stay
+/// server-side, matching how job synthesis errors are reported.
+#[cfg(feature = "playback")]
+fn playback_error_text(error: &AppError) -> String {
+    match error {
+        AppError::Internal(_) => "playback failed; consult server logs".into(),
+        other => other.to_string(),
+    }
+}
+
+/// Why a requested playback never reached the queue. Never carries payload.
+#[cfg(feature = "playback")]
+fn playback_skip_reason(stage: &str) -> String {
+    match stage {
+        "cancelled" => "synthesis cancelled".into(),
+        "failed" => "synthesis failed".into(),
+        other => format!("synthesis did not complete ({other})"),
+    }
+}
+
+/// Resolves an idempotency key to its original job. Acquires the idempotency
+/// lock only, so it can run before admission is reserved.
+fn lookup_idempotent(
+    store: &JobStore,
+    scoped_key: Option<&String>,
+    fingerprint: &str,
+    owner: &str,
+) -> Result<Option<JobStatus>, AppError> {
+    let Some(key) = scoped_key else {
+        return Ok(None);
+    };
+    let mut idem = store.idempotency.lock().unwrap_or_else(|e| e.into_inner());
+    store.reap_idempotency_locked(&mut idem);
+    lookup_idempotent_locked(store, &mut idem, Some(key), fingerprint, owner)
+}
+
+/// Shared lookup used by both the fast path and the atomic admission check.
+/// Callers must hold the `idempotency` lock and have reaped it. A key reused
+/// for a different request is a `409` conflict; a remembered job that has
+/// already been reaped is forgotten and reported as absent.
+fn lookup_idempotent_locked(
+    store: &JobStore,
+    idem: &mut HashMap<String, IdempotencyEntry>,
+    scoped_key: Option<&String>,
+    fingerprint: &str,
+    owner: &str,
+) -> Result<Option<JobStatus>, AppError> {
+    let Some(key) = scoped_key else {
+        return Ok(None);
+    };
+    let Some(entry) = idem.get(key) else {
+        return Ok(None);
+    };
+    if entry.fingerprint != fingerprint {
+        return Err(AppError::Conflict(
+            "idempotency key reused with a different request".into(),
+        ));
+    }
+    let job_id = entry.job_id.clone();
+    match store.snapshot(&job_id, owner) {
+        Ok(status) => Ok(Some(status)),
+        Err(_) => {
+            idem.remove(key);
+            Ok(None)
+        }
+    }
 }
 
 async fn execute_request(
@@ -259,8 +515,11 @@ async fn execute_request(
             token,
             State(state),
             Query(super::tts::TtsQuery {
+                // Synthesis stays playback-free here: the job admits playback
+                // itself once, after generation, under its own idempotency and
+                // cancellation checks.
                 #[cfg(feature = "playback")]
-                provider: None,
+                provider: query.provider.clone(),
                 voice: query.voice,
                 lang: query.lang,
                 format: query.format,
@@ -279,9 +538,10 @@ async fn create_with_executor<F, Fut>(
     token: AuthenticatedToken,
     State(state): State<AppState>,
     Query(query): Query<JobQuery>,
+    idem_key: Option<String>,
     body: String,
     execute: F,
-) -> Result<impl IntoResponse, AppError>
+) -> Result<Response, AppError>
 where
     F: FnOnce(AuthenticatedToken, AppState, JobQuery, String) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<Response, AppError>> + Send + 'static,
@@ -293,11 +553,27 @@ where
             "text is empty or exceeds configured length".into(),
         ));
     }
+    // Playback is validated before admission so an unsupported mode never
+    // creates (and then abandons) a job.
+    let playback = PlaybackRequest::parse(&query)?;
+    let owner = token.rate_limit_key();
+    let fingerprint = request_fingerprint(&query, &body, &playback);
+    let scoped_key = idem_key.map(|key| format!("{owner}\u{1f}{key}"));
+    let retention = Duration::from_secs(config.inference.job_retention_secs);
+    let store = state.inference_gate.jobs.clone();
+
+    // Fast path: an already-admitted retry returns the original job without
+    // reserving admission, so idempotency still holds while the gate is
+    // saturated. Repeat submissions never launch a second synthesis or
+    // playback; a key reused for a different request is a conflict.
+    if let Some(status) = lookup_idempotent(&store, scoped_key.as_ref(), &fingerprint, &owner)? {
+        return Ok((StatusCode::OK, Json(status)).into_response());
+    }
+
     let admission = state
         .inference_gate
         .reserve()
         .map_err(|_| AppError::TooManyRequests("Inference admission is full".into()))?;
-    let retention = Duration::from_secs(config.inference.job_retention_secs);
     let control = InferenceControl::new(Duration::from_secs(
         config.inference.generation_deadline_secs,
     ));
@@ -317,9 +593,18 @@ where
         rtf: None,
         error: None,
         stage_secs: std::collections::BTreeMap::new(),
+        playback: None,
     };
-    let store = state.inference_gate.jobs.clone();
     {
+        // Re-check under the idempotency lock and insert atomically: two
+        // concurrent identical submissions cannot both admit a job.
+        let mut idem = store.idempotency.lock().unwrap_or_else(|e| e.into_inner());
+        store.reap_idempotency_locked(&mut idem);
+        if let Some(existing) =
+            lookup_idempotent_locked(&store, &mut idem, scoped_key.as_ref(), &fingerprint, &owner)?
+        {
+            return Ok((StatusCode::OK, Json(existing)).into_response());
+        }
         let mut entries = store.entries.lock().unwrap_or_else(|e| e.into_inner());
         store.reap_locked(&mut entries);
         if entries.len() >= config.inference.max_retained_jobs
@@ -336,7 +621,7 @@ where
         entries.insert(
             id.clone(),
             Job {
-                owner: token.rate_limit_key(),
+                owner: owner.clone(),
                 control: control.clone(),
                 status: status.clone(),
                 finished: None,
@@ -344,9 +629,20 @@ where
                 audio: None,
             },
         );
+        if let Some(key) = scoped_key.clone() {
+            store.remember_idempotency_locked(
+                &mut idem,
+                key,
+                fingerprint.clone(),
+                id.clone(),
+                retention,
+            );
+        }
     }
     tokio::spawn(async move {
         let job_id = id.clone();
+        #[cfg(feature = "playback")]
+        let playback_state = state.clone();
         let execution = tokio::spawn(ADMISSION.scope(
             std::cell::RefCell::new(Some(admission)),
             ACTIVE.scope(control.clone(), async move {
@@ -366,6 +662,11 @@ where
             }),
         ))
         .await;
+        // Audio handle for a playback job that just completed; admitted after
+        // the terminal state is published so a job that reported failure never
+        // plays. `None` under the synthesis-only feature set.
+        #[cfg(feature = "playback")]
+        let mut pending_playback: Option<Bytes> = None;
         {
             let mut entries = store.entries.lock().unwrap_or_else(|e| e.into_inner());
             // Snapshot first (short borrow), then resolve the terminal state:
@@ -437,13 +738,67 @@ where
             if let Some(j) = entries.get_mut(&job_id) {
                 j.status.updated_at = chrono::Utc::now();
                 j.finished = Some(Instant::now());
+                // Publish the playback intent before admitting it so a fast
+                // poller sees `pending` rather than a misleading `null`. A job
+                // that did not complete is reported `skipped`, never enqueued.
+                #[cfg(feature = "playback")]
+                if playback.requested {
+                    let completed = j.status.stage == "completed";
+                    j.status.playback = Some(PlaybackStatus {
+                        state: if completed { "pending" } else { "skipped" }.into(),
+                        play_now: playback.play_now,
+                        queue_id: None,
+                        error: if completed {
+                            None
+                        } else {
+                            Some(playback_skip_reason(&j.status.stage))
+                        },
+                    });
+                    if completed {
+                        pending_playback = j.audio.as_ref().map(|(_, bytes)| bytes.clone());
+                    }
+                }
+            }
+        }
+        // Playback admission runs exactly once, outside the store lock, only
+        // for a job that produced retained audio. A failure here is recorded on
+        // the job; it never rewrites the synthesis result. The temp file is
+        // owned by the audio thread on success and deleted on rejection.
+        #[cfg(feature = "playback")]
+        if let Some(bytes) = pending_playback {
+            let resolved =
+                match super::tts::enqueue_encoded_wav(&playback_state, &bytes, playback.play_now)
+                    .await
+                {
+                    Ok(outcome) => PlaybackStatus {
+                        state: if outcome.played_now {
+                            "started"
+                        } else {
+                            "queued"
+                        }
+                        .into(),
+                        play_now: playback.play_now,
+                        queue_id: Some(outcome.id),
+                        error: None,
+                    },
+                    Err(error) => PlaybackStatus {
+                        state: "failed".into(),
+                        play_now: playback.play_now,
+                        queue_id: None,
+                        error: Some(playback_error_text(&error)),
+                    },
+                };
+            let mut entries = store.entries.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(j) = entries.get_mut(&job_id) {
+                j.status.playback = Some(resolved);
+                j.status.updated_at = chrono::Utc::now();
             }
         }
         tokio::time::sleep(retention).await;
         let mut entries = store.entries.lock().unwrap_or_else(|e| e.into_inner());
         store.reap_locked(&mut entries);
     });
-    Ok((StatusCode::ACCEPTED, Json(status)))
+    Ok((StatusCode::ACCEPTED, Json(status)).into_response())
 }
 
 pub async fn status(
@@ -570,12 +925,14 @@ mod tests {
         token: AuthenticatedToken,
         state: State<AppState>,
         query: Query<JobQuery>,
+        headers: axum::http::HeaderMap,
         body: String,
-    ) -> Result<impl IntoResponse, AppError> {
+    ) -> Result<Response, AppError> {
         create_with_executor(
             token,
             state,
             query,
+            idempotency_key(&headers),
             body,
             |_token, state, query, body| async move {
                 state
@@ -723,6 +1080,10 @@ mod tests {
                     profile: profile.map(str::to_string),
                     voice: voice.map(str::to_string),
                     format: Some("wav".into()),
+                    #[cfg(feature = "playback")]
+                    provider: None,
+                    playback: None,
+                    play_now: None,
                 },
             );
             let response = send("GET", format!("/jobs/{id}/audio"), owner, "").await;
@@ -881,6 +1242,7 @@ mod tests {
                     rtf: None,
                     error: Some("test failure".into()),
                     stage_secs: Default::default(),
+                    playback: None,
                 },
                 finished: Some(Instant::now()),
                 retention: Duration::ZERO,
@@ -917,6 +1279,7 @@ mod tests {
                 rtf: None,
                 error: None,
                 stage_secs: Default::default(),
+                playback: None,
             },
             finished: None,
             retention,
@@ -1075,5 +1438,286 @@ mod tests {
             Bytes::from(vec![0u8; 1]),
         ));
         assert_eq!(store.retained_locked(), MAX_RETAINED_AUDIO_BYTES);
+    }
+
+    // --- Idempotency and playback-aware job admission ---------------------
+
+    /// App over the deterministic mock executor with **no** audio device, so
+    /// playback admission fails honestly without hardware.
+    async fn idempotency_app() -> (axum::Router, AppState, String) {
+        use crate::auth::store::TokenStore;
+        use axum::routing::{get, post};
+        let path =
+            std::env::temp_dir().join(format!("sonicboom-job-idem-{}.json", uuid::Uuid::new_v4()));
+        let tokens = Arc::new(TokenStore::load(path.to_str().unwrap()).await.unwrap());
+        let (_, token) = tokens.create(None).await.unwrap();
+        let state =
+            crate::api::tests::test_state(crate::api::tests::test_config(), tokens, Arc::new(None));
+        let app = axum::Router::new()
+            .route("/jobs", post(mock_create))
+            .route("/jobs/{id}", get(status))
+            .route("/jobs/{id}/audio", get(audio))
+            .route("/jobs/{id}/cancel", post(cancel))
+            .with_state(state.clone());
+        let _ = std::fs::remove_file(&path);
+        (app, state, token)
+    }
+
+    async fn send_job(
+        app: &axum::Router,
+        method: &str,
+        uri: &str,
+        token: &str,
+        idem: Option<&str>,
+        body: &str,
+    ) -> Response {
+        use tower::ServiceExt;
+        let mut builder: axum::http::request::Builder = axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "text/plain");
+        if let Some(key) = idem {
+            builder = builder.header("idempotency-key", key);
+        }
+        let request = builder.body(Body::from(body.to_string())).unwrap();
+        app.clone().oneshot(request).await.unwrap()
+    }
+
+    async fn json_body(response: Response) -> serde_json::Value {
+        serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    /// Polls until the synthesis terminal state is published and any requested
+    /// playback has left `pending`, so assertions never race the background
+    /// task.
+    async fn wait_settled(app: &axum::Router, token: &str, id: &str) -> serde_json::Value {
+        for _ in 0..400 {
+            let value =
+                json_body(send_job(app, "GET", &format!("/jobs/{id}"), token, None, "").await)
+                    .await;
+            let terminal = matches!(
+                value["stage"].as_str(),
+                Some("completed" | "failed" | "cancelled")
+            );
+            let playback_settled = value
+                .get("playback")
+                .and_then(|playback| playback.get("state"))
+                .and_then(|state| state.as_str())
+                .is_none_or(|state| state != "pending");
+            if terminal && playback_settled {
+                return value;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("job {id} never settled");
+    }
+
+    fn job_count(state: &AppState) -> usize {
+        state.inference_gate.jobs.entries.lock().unwrap().len()
+    }
+
+    #[tokio::test]
+    async fn idempotent_retry_reuses_the_job_and_never_synthesizes_twice() {
+        let (app, state, token) = idempotency_app().await;
+        let uri = "/jobs?lang=es&voice=M1&format=wav";
+        let first = send_job(&app, "POST", uri, &token, Some("key-1"), "hola").await;
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+        let first_id = json_body(first).await["id"].as_str().unwrap().to_string();
+        wait_settled(&app, &token, &first_id).await;
+
+        let retry = send_job(&app, "POST", uri, &token, Some("key-1"), "hola").await;
+        assert_eq!(
+            retry.status(),
+            StatusCode::OK,
+            "a retry is answered, not re-created"
+        );
+        assert_eq!(json_body(retry).await["id"].as_str().unwrap(), first_id);
+        assert_eq!(job_count(&state), 1, "no second job was admitted");
+    }
+
+    #[tokio::test]
+    async fn idempotency_key_reuse_with_a_different_request_conflicts() {
+        let (app, state, token) = idempotency_app().await;
+        let uri = "/jobs?lang=es&voice=M1&format=wav";
+        let first = send_job(&app, "POST", uri, &token, Some("key-2"), "hola").await;
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+        let first_id = json_body(first).await["id"].as_str().unwrap().to_string();
+        wait_settled(&app, &token, &first_id).await;
+
+        // Same key, different text: rejected, never a second synthesis.
+        let changed_text = send_job(&app, "POST", uri, &token, Some("key-2"), "mundo").await;
+        assert_eq!(changed_text.status(), StatusCode::CONFLICT);
+        // Same key, different voice: also a conflict.
+        let changed_voice = send_job(
+            &app,
+            "POST",
+            "/jobs?lang=es&voice=F1&format=wav",
+            &token,
+            Some("key-2"),
+            "hola",
+        )
+        .await;
+        assert_eq!(changed_voice.status(), StatusCode::CONFLICT);
+        // Same key, different playback semantics. Where playback is compiled in
+        // this is a conflict; a synthesis-only build rejects the mode as
+        // unsupported before the key is even considered.
+        let changed_playback = send_job(
+            &app,
+            "POST",
+            "/jobs?lang=es&voice=M1&format=wav&playback=enqueue",
+            &token,
+            Some("key-2"),
+            "hola",
+        )
+        .await;
+        #[cfg(feature = "playback")]
+        assert_eq!(changed_playback.status(), StatusCode::CONFLICT);
+        #[cfg(not(feature = "playback"))]
+        assert_eq!(changed_playback.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(job_count(&state), 1);
+    }
+
+    #[tokio::test]
+    async fn idempotency_keys_are_scoped_per_principal() {
+        use crate::auth::store::TokenStore;
+        use axum::routing::{get, post};
+        let path =
+            std::env::temp_dir().join(format!("sonicboom-job-scope-{}.json", uuid::Uuid::new_v4()));
+        let tokens = Arc::new(TokenStore::load(path.to_str().unwrap()).await.unwrap());
+        let (_, alice) = tokens.create(None).await.unwrap();
+        let (_, bob) = tokens.create(None).await.unwrap();
+        let state =
+            crate::api::tests::test_state(crate::api::tests::test_config(), tokens, Arc::new(None));
+        let app = axum::Router::new()
+            .route("/jobs", post(mock_create))
+            .route("/jobs/{id}", get(status))
+            .with_state(state.clone());
+        let uri = "/jobs?lang=es&voice=M1&format=wav";
+        // The same key string from two tenants yields two independent jobs.
+        let a = json_body(send_job(&app, "POST", uri, &alice, Some("shared"), "hola").await).await
+            ["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let b =
+            json_body(send_job(&app, "POST", uri, &bob, Some("shared"), "hola").await).await["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+        assert_ne!(a, b, "keys never leak across principals");
+        // Neither tenant can read the other's job.
+        let foreign = send_job(&app, "GET", &format!("/jobs/{a}"), &bob, None, "").await;
+        assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn playback_modes_are_validated_before_a_job_exists() {
+        let (app, state, token) = idempotency_app().await;
+        let unknown = send_job(&app, "POST", "/jobs?playback=loud", &token, None, "hola").await;
+        assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
+        let play_now_only =
+            send_job(&app, "POST", "/jobs?play_now=true", &token, None, "hola").await;
+        assert_eq!(play_now_only.status(), StatusCode::BAD_REQUEST);
+        let empty = send_job(&app, "POST", "/jobs?playback=", &token, None, "hola").await;
+        assert_eq!(
+            empty.status(),
+            StatusCode::ACCEPTED,
+            "an empty value means synthesis-only"
+        );
+        assert_eq!(job_count(&state), 1, "rejected modes never create jobs");
+    }
+
+    #[tokio::test]
+    async fn synthesis_only_jobs_omit_the_playback_block() {
+        let (app, _state, token) = idempotency_app().await;
+        let created = send_job(
+            &app,
+            "POST",
+            "/jobs?lang=es&voice=M1&format=wav",
+            &token,
+            None,
+            "hola",
+        )
+        .await;
+        let id = json_body(created).await["id"].as_str().unwrap().to_string();
+        let status = wait_settled(&app, &token, &id).await;
+        assert_eq!(status["stage"], "completed");
+        assert!(
+            status.get("playback").is_none(),
+            "the legacy contract carries no playback block"
+        );
+    }
+
+    #[cfg(feature = "playback")]
+    #[tokio::test]
+    async fn playback_failure_never_fails_synthesis_or_withholds_audio() {
+        let (app, _state, token) = idempotency_app().await;
+        let created = send_job(
+            &app,
+            "POST",
+            "/jobs?lang=es&voice=M1&format=wav&playback=enqueue",
+            &token,
+            None,
+            "hola",
+        )
+        .await;
+        assert_eq!(created.status(), StatusCode::ACCEPTED);
+        let id = json_body(created).await["id"].as_str().unwrap().to_string();
+        let status = wait_settled(&app, &token, &id).await;
+        assert_eq!(status["stage"], "completed", "synthesis still succeeds");
+        assert_eq!(
+            status["playback"]["state"], "failed",
+            "no device must be reported honestly, never as heard"
+        );
+        assert_eq!(status["playback"]["play_now"], false);
+        assert!(
+            status["playback"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("Audio playback")
+        );
+        // Retained audio is still downloadable: a playback failure is not a
+        // synthesis failure.
+        let audio = send_job(&app, "GET", &format!("/jobs/{id}/audio"), &token, None, "").await;
+        assert_eq!(audio.status(), StatusCode::OK);
+    }
+
+    #[cfg(feature = "playback")]
+    #[tokio::test]
+    async fn cancelled_playback_job_is_reported_skipped_not_enqueued() {
+        let (app, _state, token) = idempotency_app().await;
+        // "wait" blocks inside the mock until the control is stopped.
+        let created = send_job(
+            &app,
+            "POST",
+            "/jobs?lang=es&voice=M1&format=wav&playback=enqueue",
+            &token,
+            None,
+            "wait",
+        )
+        .await;
+        let id = json_body(created).await["id"].as_str().unwrap().to_string();
+        let cancelled = send_job(
+            &app,
+            "POST",
+            &format!("/jobs/{id}/cancel"),
+            &token,
+            None,
+            "",
+        )
+        .await;
+        assert_eq!(cancelled.status(), StatusCode::OK);
+        let status = wait_settled(&app, &token, &id).await;
+        assert_eq!(status["stage"], "cancelled");
+        assert_eq!(
+            status["playback"]["state"], "skipped",
+            "a cancelled job is never enqueued for playback"
+        );
     }
 }

@@ -19,10 +19,18 @@ no-store`; completed audio additionally uses `private, no-store`.
 | --- | --- |
 | `POST /api/tts/jobs?voice=F1&lang=en&format=wav` | `text/plain`; regular Supertonic synthesis; returns `202` with job ID/status |
 | `POST /api/tts/jobs?profile={owned-profile-id}&lang=en&format=wav` | `text/plain`; uses the authorized profile's provider, model, mode and reference |
+| `POST /api/tts/jobs?...&provider={id}` | Routes synthesis to that engine (`supertonic`, `pocket-tts`, `qwen3-gguf`), like `/api/tts/play` |
+| `POST /api/tts/jobs?...&playback=enqueue[&play_now=true]` | Also admits the completed audio to the server playback queue; `play_now` interrupts current audio |
+| `POST /api/tts/jobs` + `Idempotency-Key: <key>` header | A repeat returns the original job (`200`); reuse for a different request is `409` |
 | `GET /api/tts/jobs/{id}` | Current status, timestamps, measured frame count, elapsed time, stage durations and actual execution context |
 | `GET /api/tts/jobs/{id}/events` | SSE `progress` snapshots; each connection receives current state, including terminal state |
 | `POST /api/tts/jobs/{id}/cancel` | Idempotent `200`; acknowledges cancellation, without claiming computation already stopped |
 | `GET /api/tts/jobs/{id}/audio` | Completed audio only; `503` while unavailable or after failure/cancellation |
+
+`playback` accepts `enqueue` or `none`; omitted or empty means `none`, and any
+other value is `400`. `play_now=true` without `playback=enqueue` is also `400`.
+The mode is validated before admission, so an unsupported request never creates
+a job.
 
 The format defaults to Opus as on synchronous routes. Cloning requires a stored,
 owned profile; arbitrary server-side recording filenames are not accepted.
@@ -32,8 +40,9 @@ also has a process-wide bound (16 concurrent reference operations), with permits
 retained by blocking preparation and inference if the HTTP future disappears.
 
 Errors: `400` invalid text/options/reference, `401` missing/invalid credentials,
-`404` unknown/foreign/expired job or voice, `413` excessive upload/output,
-`429` rate/admission/retention/preparation capacity, `503` model unavailable,
+`404` unknown/foreign/expired job or voice, `409` idempotency key reused for a
+different request, `413` excessive upload/output, `429`
+rate/admission/retention/preparation capacity, `503` model unavailable,
 busy profile storage or max-frame termination, and sanitized `500` for other
 inference failures. Accepted requests can subsequently fail; a `202` is not an
 audio-success response. Inspect terminal status before fetching audio.
@@ -45,6 +54,40 @@ curl -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: text/plain' \
   'http://127.0.0.1:17842/api/tts/jobs?voice=F1&format=wav'
 # Use the returned ID for status/events/cancel/audio, with the same credential.
 ```
+
+## Playback and idempotency
+
+A job is synthesis-first: it returns `202` and a job ID as soon as admission is
+reserved, before any expensive inference. Requesting `playback=enqueue` makes
+the job admit its completed audio to the same server playback queue that
+`/api/tts/play` uses, exactly once, after the terminal synthesis state is
+published — so a job that reported `failed` or `cancelled` is never played.
+
+Playback is reported in a `playback` block, kept separate from `stage`. `stage`
+only ever describes synthesis, so `completed` continues to mean "synthesis
+finished and the audio is downloadable", never "audible playback finished":
+
+| `playback.state` | Meaning |
+| --- | --- |
+| `pending` | Synthesis completed; playback admission is in progress |
+| `queued` | Admitted to the server playback queue; completion unverified |
+| `started` | `play_now` began playback; completion unverified |
+| `failed` | Admission was refused; `playback.error` is sanitized |
+| `skipped` | Synthesis was cancelled or failed; nothing was enqueued |
+
+The device backend cannot acknowledge audible completion, so no state claims
+the audio was heard. Synthesis-only jobs omit the block entirely. A playback
+failure never rewrites the synthesis result and never withholds the retained
+audio, which stays downloadable.
+
+`Idempotency-Key` makes submission safe to retry. The key is scoped to the
+authenticated principal and fingerprinted over provider, profile, voice,
+language, format, playback mode and a hash of the spoken text (the text itself
+is never stored). A repeat returns the original job with `200` instead of
+launching a second synthesis or playback; reusing the key for a different
+request is `409`. Lookup, admission and insert share one critical section, so
+two concurrent identical submissions cannot both admit a job. Remembered keys
+are bounded and expire with the job retention window.
 
 ## Lifecycle and deadlines
 

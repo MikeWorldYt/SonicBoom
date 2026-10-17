@@ -364,12 +364,30 @@ async fn post_tts_and_play_inner(
     enqueue_generated_wav(&state, audio_bytes, play_now).await
 }
 
+/// Outcome of admitting already-encoded audio into the server playback queue.
 #[cfg(feature = "playback")]
-async fn enqueue_generated_wav(
+#[derive(Debug, Clone)]
+pub(crate) struct EnqueueOutcome {
+    /// Server playback-queue id. Also the temp-file stem, so a client can
+    /// correlate the accepted speech with the playback queue entry.
+    pub id: String,
+    /// True when playback was started immediately rather than queued. The
+    /// device backend cannot confirm audible completion, so callers must not
+    /// report either outcome as "heard".
+    pub played_now: bool,
+}
+
+/// Writes `audio_bytes` to a private temp WAV and admits it to the playback
+/// queue (immediately when `play_now`). Shared by the synchronous play path
+/// and async jobs so both enforce identical cancellation, ownership and
+/// cleanup rules. Never retries: a rejected admission deletes the temp file
+/// rather than leaving an orphan, and a cancelled control withholds playback.
+#[cfg(feature = "playback")]
+pub(crate) async fn enqueue_encoded_wav(
     state: &crate::AppState,
-    audio_bytes: Vec<u8>,
+    audio_bytes: &[u8],
     play_now: bool,
-) -> Result<Response, AppError> {
+) -> Result<EnqueueOutcome, AppError> {
     let config = state.config.get().await;
     let audio_manager = playback_manager(state)?;
     // WAV is shared by every provider for rodio compatibility.
@@ -386,7 +404,7 @@ async fn enqueue_generated_wav(
     let filename = format!("{id}.wav");
     let path = temp_dir.join(&filename);
 
-    crate::tts::queue::write_temp_wav(&path, &audio_bytes)
+    crate::tts::queue::write_temp_wav(&path, audio_bytes)
         .await
         .map_err(|e| AppError::internal(format!("temp audio write failed: {e}")))?;
 
@@ -453,12 +471,26 @@ async fn enqueue_generated_wav(
         return Err(error);
     }
 
+    Ok(EnqueueOutcome {
+        id,
+        played_now: play_now,
+    })
+}
+
+/// Synchronous `/api/tts/play` response wrapper over [`enqueue_encoded_wav`].
+#[cfg(feature = "playback")]
+async fn enqueue_generated_wav(
+    state: &crate::AppState,
+    audio_bytes: Vec<u8>,
+    play_now: bool,
+) -> Result<Response, AppError> {
+    let outcome = enqueue_encoded_wav(state, &audio_bytes, play_now).await?;
     Ok((
         StatusCode::OK,
         Json(serde_json::json!({
             "success": true,
-            "message": if play_now { "Playing immediately" } else { "Added to queue" },
-            "id": id
+            "message": if outcome.played_now { "Playing immediately" } else { "Added to queue" },
+            "id": outcome.id
         })),
     )
         .into_response())

@@ -17,6 +17,10 @@ pub enum AppError {
     BadRequest(String),
     #[error("not found: {0}")]
     NotFound(String),
+    /// The request conflicts with existing state. For synthesis jobs this is
+    /// an idempotency key reused with a different request fingerprint.
+    #[error("conflict: {0}")]
+    Conflict(String),
     #[error("unsupported media type: {0}")]
     UnsupportedMediaType(String),
     #[error("payload too large: {0}")]
@@ -59,6 +63,7 @@ impl IntoResponse for AppError {
         let (status, error_code, message) = match &self {
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg.clone()),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found", msg.clone()),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, "conflict", msg.clone()),
             AppError::UnsupportedMediaType(msg) => (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 "unsupported_media_type",
