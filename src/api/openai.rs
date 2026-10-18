@@ -23,14 +23,8 @@ use crate::{
 /// the local Supertonic 3 model; cloning models route to their native
 /// provider. Unknown identifiers are rejected with `400` instead of
 /// silently using another model.
-pub const SUPPORTED_OPENAI_MODELS: &[&str] = &[
-    "tts-1",
-    "tts-1-hd",
-    "supertonic-3",
-    "qwen3-tts-1.7b-base",
-    "pocket-tts-en",
-    "pocket-tts-es",
-];
+pub use sonicboom::tts::providers::catalog::SUPPORTED_OPENAI_MODELS;
+use sonicboom::tts::providers::catalog::{ModelProvider, model_provider};
 
 /// Whether `model` selects a voice-cloning provider (voice must be an
 /// authorized profile ID) rather than Supertonic built-in voices.
@@ -45,20 +39,25 @@ pub const RETIRED_GPT_SOVITS_MODELS: &[&str] = &[
 ];
 
 pub fn is_cloning_model(model: &str) -> bool {
-    sonicboom::tts::providers::pocket_tts::POCKET_TTS_MODELS.contains(&model)
-        || is_gguf_model(model)
+    matches!(
+        model_provider(model),
+        Some(ModelProvider::QwenGguf | ModelProvider::PocketTts)
+    )
 }
 
-/// The 1.7B identifier routes to the GGUF backend only in builds that
-/// compile it in; other builds list it but cannot synthesize it.
-#[cfg(feature = "qwen-gguf")]
-fn is_gguf_model(model: &str) -> bool {
-    sonicboom::tts::providers::qwen_gguf::provider::QWEN_GGUF_MODELS.contains(&model)
-}
-
-#[cfg(not(feature = "qwen-gguf"))]
-fn is_gguf_model(_model: &str) -> bool {
-    false
+/// Recognized identifiers remain stable across feature combinations. Check
+/// compiled availability before profiles or synthesis; runtime enablement and
+/// installed model readiness are checked by the owning provider afterward.
+fn require_compiled_provider(model: &str) -> Result<(), AppError> {
+    if let Some(provider) = model_provider(model)
+        && !provider.compiled()
+    {
+        return Err(AppError::ServiceUnavailable(format!(
+            "provider '{}' for model '{model}' is not compiled into this binary",
+            provider.id()
+        )));
+    }
+    Ok(())
 }
 
 /// OpenAI-compatible TTS request body
@@ -284,6 +283,7 @@ async fn post_speech_inner(
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON in request body: {e}")))?;
 
     validate_model(&request.model)?;
+    require_compiled_provider(&request.model)?;
     validate_speed(request.speed)?;
     let format = audio::AudioFormat::parse(&request.response_format)
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
@@ -369,20 +369,17 @@ async fn post_speech_inner(
 ///
 /// Public metadata endpoint: exposes only non-sensitive model identifiers
 /// (see docs). Authentication is intentionally not required. Built from
-/// registry metadata rather than a fixed array: legacy aliases plus the
-/// installed-cloning models are always listed with their provider owner.
+/// stable identity metadata: recognized IDs are listed even when a backend
+/// is not compiled or ready. This endpoint is not a readiness guarantee.
+/// Synthesis returns 503 for feature-disabled providers.
 pub async fn get_models() -> impl IntoResponse {
     let data: Vec<serde_json::Value> = SUPPORTED_OPENAI_MODELS
         .iter()
         .map(|id| {
-            let owned_by = if is_cloning_model(id) {
-                if is_gguf_model(id) {
-                    "local:qwen3-gguf"
-                } else {
-                    "local:pocket-tts"
-                }
-            } else {
-                "local"
+            let owned_by = match model_provider(id) {
+                Some(ModelProvider::QwenGguf) => "local:qwen3-gguf",
+                Some(ModelProvider::PocketTts) => "local:pocket-tts",
+                _ => "local",
             };
             serde_json::json!({
                 "id": id,
@@ -464,6 +461,47 @@ mod tests {
         // The removed 0.6B Candle model is neither listed nor cloning.
         assert!(validate_model("qwen3-tts-0.6b-base").is_err());
         assert!(!is_cloning_model("qwen3-tts-0.6b-base"));
+    }
+
+    #[tokio::test]
+    async fn model_ownership_and_feature_disabled_errors() {
+        for (model, provider) in [
+            ("tts-1", ModelProvider::Supertonic),
+            ("qwen3-tts-1.7b-base", ModelProvider::QwenGguf),
+            ("pocket-tts-en", ModelProvider::PocketTts),
+            ("pocket-tts-es", ModelProvider::PocketTts),
+        ] {
+            assert_eq!(model_provider(model), Some(provider));
+            let result = require_compiled_provider(model);
+            if provider.compiled() {
+                assert!(result.is_ok());
+            } else {
+                let response = result.unwrap_err().into_response();
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let body = String::from_utf8(body.to_vec()).unwrap();
+                assert!(body.contains(provider.id()));
+                assert!(body.contains("not compiled"));
+            }
+        }
+        assert_eq!(model_provider("unknown"), None);
+        for model in RETIRED_GPT_SOVITS_MODELS {
+            assert_eq!(model_provider(model), None);
+        }
+        let response = get_models().await.into_response();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let qwen = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["id"] == "qwen3-tts-1.7b-base")
+            .unwrap();
+        assert_eq!(qwen["owned_by"], "local:qwen3-gguf");
     }
 
     #[test]

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -21,6 +22,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify pinned native sources and manifests
+        shell: bash
+        run: python3 scripts/ci/preflight.py
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
@@ -113,6 +123,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify pinned native sources and manifests
+        shell: bash
+        run: python3 scripts/ci/preflight.py
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
@@ -148,6 +167,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify pinned native sources and manifests
+        shell: bash
+        run: python3 scripts/ci/preflight.py
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
@@ -171,6 +199,9 @@ jobs:
       - name: Build release (headless server)
         run: cargo build --release --locked --no-default-features --features server
 
+      - name: Clippy (headless server)
+        run: cargo clippy --locked --no-default-features --features server --all-targets -- -D warnings
+
       - name: Test (headless server)
         run: cargo test --locked --no-default-features --features server
 
@@ -187,8 +218,21 @@ jobs:
             args: --no-default-features --features tiktools-plugin
           - features: qwen-gguf
             args: --no-default-features --features qwen-gguf
+          - features: server,pocket-tts
+            args: --no-default-features --features server,pocket-tts
+          - features: server,qwen-gguf,pocket-tts
+            args: --no-default-features --features server,qwen-gguf,pocket-tts
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify pinned native sources and manifests
+        shell: bash
+        run: python3 scripts/ci/preflight.py
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
@@ -200,6 +244,12 @@ jobs:
 
       - name: Check ${{ matrix.features }}
         run: cargo check --locked ${{ matrix.args }} --all-targets
+      - name: Test server provider feature combinations
+        if: contains(matrix.features, 'server')
+        run: cargo test --locked ${{ matrix.args }}
+      - name: Clippy server provider feature combinations
+        if: contains(matrix.features, 'server')
+        run: cargo clippy --locked ${{ matrix.args }} --all-targets -- -D warnings
 
   # Native GGUF/ONNX backend (opt-in feature, CPU llama.cpp build).
   # Real-model and Vulkan hardware tests stay ignored/opt-in: this job
@@ -209,6 +259,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify pinned native sources and manifests
+        shell: bash
+        run: python3 scripts/ci/preflight.py
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -235,6 +294,25 @@ jobs:
       - name: Unit tests (qwen-gguf, offline)
         run: cargo test --locked --no-default-features --features qwen-gguf --lib
 
+  vulkan:
+    name: Native Vulkan backend (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify pinned native sources and manifests
+        run: python3 scripts/ci/preflight.py
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Install Vulkan SDK build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libvulkan-dev glslc spirv-headers
+      - name: Compile and test explicit Vulkan backend (no GPU inference)
+        run: cargo test --locked --no-default-features --features qwen-gguf-vulkan --lib
+
   # The desktop tray on Linux is pure-Rust StatusNotifierItem (ksni): no GTK
   # system libraries are needed. Never reintroduce a GTK build dependency.
   build-gui:
@@ -255,16 +333,21 @@ jobs:
             asset: sonicboom-windows-x86_64.zip
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify pinned native sources and manifests
+        shell: bash
+        run: python3 scripts/ci/preflight.py
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install packaging Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.12'
       - name: Test archive and checksum guards
         run: python -m unittest discover -s scripts/release -p "test_*.py"
       - name: Install Rust toolchain
@@ -326,6 +409,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify pinned native sources and manifests
+        shell: bash
+        run: python3 scripts/ci/preflight.py
 
       - name: Build default (headless CPU) image
         run: docker build -t sonicboom:test .
@@ -344,21 +436,23 @@ jobs:
           docker run --rm --entrypoint /bin/sh sonicboom:cpu -c \
             'ldd /app/sonicboom | grep "not found" && exit 1 || echo "OK: ldd clean"'
 
-      - name: Verify CPU runtime starts
-        run: |
-          docker run -d --name sonicboom-ci -p 127.0.0.1:17842:17842 \
-            -e SONICBOOM_ADMIN_PW=ci-local-testing-password-123 \
-            sonicboom:cpu
-          sleep 8
-          curl -fsS http://127.0.0.1:17842/health
-          docker stop sonicboom-ci
-          docker rm sonicboom-ci
+      - name: Verify CPU health and graceful shutdown (model-free)
+        run: python3 scripts/ci/container_smoke.py sonicboom:cpu
 
   docker-playback:
     name: Docker playback build
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify pinned native sources and manifests
+        shell: bash
+        run: python3 scripts/ci/preflight.py
 
       - name: Build playback image
         run: docker build --target runtime-playback -t sonicboom:playback .
@@ -373,11 +467,23 @@ jobs:
           docker run --rm --entrypoint /bin/sh sonicboom:playback -c \
             'ldconfig -p | grep -q libasound || exit 1; echo "OK: ALSA present"'
 
+      - name: Verify playback health and graceful shutdown (model-free)
+        run: python3 scripts/ci/container_smoke.py sonicboom:playback
+
   docker-cuda:
     name: Docker CUDA structural check
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify pinned native sources and manifests
+        shell: bash
+        run: python3 scripts/ci/preflight.py
 
       - name: Build CUDA image
         run: docker build --target runtime-cuda -t sonicboom:cuda .
@@ -390,15 +496,27 @@ jobs:
           docker run --rm --entrypoint /bin/sh sonicboom:cuda -c \
             'test -f /app/ort-lib/libonnxruntime_providers_shared.so && test -f /app/ort-lib/libonnxruntime_providers_cuda.so && echo "OK: providers staged"'
           docker run --rm --entrypoint /bin/sh sonicboom:cuda -c \
-            'ldd /app/sonicboom | grep "not found" && exit 1 || echo "OK: ldd clean"'
+            'ldd /app/sonicboom | grep "not found" | grep -vE "^[[:space:]]*libcuda\.so\.1 => not found$" && exit 1 || echo "OK: ldd clean"'
           docker run --rm --entrypoint /bin/sh sonicboom:cuda -c \
-            'for p in /app/ort-lib/*.so; do ldd "$p" | grep -q "not found" && { echo "unresolved deps in $p"; exit 1; }; done; echo "OK: providers resolve"'
+            'for p in /app/ort-lib/*.so; do ldd "$p" | grep "not found" | grep -vE "^[[:space:]]*libcuda\.so\.1 => not found$" && { echo "unresolved deps in $p"; exit 1; }; done; echo "OK: providers resolve"'
 
   dockerfile-lint:
     name: Dockerfile structure checks
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify pinned native sources and manifests
+        shell: bash
+        run: python3 scripts/ci/preflight.py
+
+      - name: Test preflight regressions
+        run: python3 -m unittest discover -s scripts/ci
 
       - name: Validate Dockerfile security structure
         run: |
@@ -430,7 +548,7 @@ jobs:
           grep -q 'libonnxruntime_providers_shared\.so' Dockerfile
           grep -q 'libonnxruntime_providers_cuda\.so' Dockerfile
           # Every runtime stage must fail on unresolved dynamic libraries.
-          test "$(grep -c "grep -q 'not found'" Dockerfile)" -ge 3
+          test "$(grep -c "grep.*'not found'" Dockerfile)" -ge 3
           # The final stage must be the headless CPU runtime so a plain
           # `docker build .` never produces a CUDA image by accident.
           test "$(grep '^FROM .* AS ' Dockerfile | tail -1 | awk '{print $NF}')" = "runtime"
@@ -460,6 +578,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify pinned native sources and manifests
+        shell: bash
+        run: python3 scripts/ci/preflight.py
 
       - name: No credential stores committed
         run: |

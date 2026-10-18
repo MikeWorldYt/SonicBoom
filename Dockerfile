@@ -54,7 +54,10 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 ENV ORT_STRATEGY=download
 
 COPY Cargo.toml Cargo.lock ./
+COPY examples ./examples
+COPY native ./native
 COPY vendor ./vendor
+RUN test -f vendor/llama.cpp/include/llama.h
 
 # Warm the registry/git caches (does not hide build failures).
 RUN cargo fetch --locked
@@ -68,7 +71,7 @@ COPY models.sha256.json ./models.sha256.json
 
 # Cloning backends ride along so every engine works out of the box.
 # Providers stay disabled by default: only Supertonic weights download.
-RUN cargo build --release --locked --no-default-features --features server,qwen,pocket-tts
+RUN cargo build --release --locked --no-default-features --features server,qwen-gguf,pocket-tts
 
 # Stage the ONNX Runtime shared library (if dynamically linked) at a known
 # path for the runtime image. Fail the build if it is needed but missing.
@@ -89,57 +92,17 @@ RUN set -eu; \
 #
 # Ubuntu 24.04, matching the runtime: no newer-glibc-than-runtime risk.
 # ============================================================================
-FROM ubuntu:24.04@sha256:69cecf4bbf72d2d44a9eef1b71fb98c7fb973d78af11399deccef19beb008ad9 AS builder-playback
-
-WORKDIR /build
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    curl \
-    ca-certificates \
-    libopus-dev \
-    libasound2-dev \
-    pkg-config \
-    libssl-dev \
-    cmake \
-    libclang-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --profile minimal --default-toolchain 1.89.0
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-ENV ORT_STRATEGY=download
-
-COPY Cargo.toml Cargo.lock ./
-COPY vendor ./vendor
-
-RUN cargo fetch --locked
-
-COPY src ./src
-COPY build.rs ./build.rs
-COPY frontend/index.html ./frontend/index.html
-COPY --from=frontend /frontend/dist ./frontend/dist
-ENV SONICBOOM_FRONTEND_PREBUILT=1
-COPY models.sha256.json ./models.sha256.json
-
-RUN cargo build --release --locked
-
-RUN set -eu; \
-    mkdir -p /build/ort-dist; \
-    if ldd /build/target/release/SonicBoom | grep -q libonnxruntime; then \
-      matches="$(find /build/target/release/build /root/.cargo /usr/local/cargo -type f -name 'libonnxruntime.so*' 2>/dev/null | sort)"; \
-      count="$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l)"; \
-      if [ "$count" -ne 1 ]; then echo "ERROR: expected exactly one ONNX Runtime library, found $count" >&2; printf '%s\n' "$matches" >&2; exit 1; fi; \
-      echo "Staging $matches"; \
-      cp "$matches" /build/ort-dist/; \
-    else \
-      echo "Binary does not dynamically link libonnxruntime; nothing to stage"; \
-    fi
+# Reuse CPU native objects, locked downloads, embedded frontend and ORT staging.
+# Playback changes no inference-provider features or ORT distribution.
+FROM builder AS builder-playback
+RUN apt-get update && apt-get install -y --no-install-recommends libasound2-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN cargo build --release --locked --no-default-features --features server,playback,qwen-gguf,pocket-tts
 
 # ============================================================================
 # Builder: CUDA-enabled headless server
 # ============================================================================
-FROM nvidia/cuda:12.9.2-devel-ubuntu24.04@sha256:16656a1ef115bca9e1f820c6349876f1486d2b3c9a0e615773799fe402960dc5 AS builder-cuda
+FROM nvidia/cuda:13.0.2-devel-ubuntu24.04@sha256:5dc1bca23d05bd37b011be68ec470c03b403a5da07ec3a86e41af9470e9d0cc6 AS builder-cuda
 
 WORKDIR /build
 
@@ -159,9 +122,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 ENV ORT_STRATEGY=download
+# ort-sys rc.13 ships CUDA 13 binaries only (build/download/dist.tsv).
+ENV ORT_CUDA_VERSION=13
 
 COPY Cargo.toml Cargo.lock ./
+COPY examples ./examples
+COPY native ./native
 COPY vendor ./vendor
+RUN test -f vendor/llama.cpp/include/llama.h
 
 RUN cargo fetch --locked
 
@@ -173,8 +141,10 @@ ENV SONICBOOM_FRONTEND_PREBUILT=1
 COPY models.sha256.json ./models.sha256.json
 
 # The `cuda` feature enables the ONNX Runtime CUDA execution provider.
-# Cloning backends ride along (CPU) so every engine works out of the box.
-RUN cargo build --release --locked --no-default-features --features server,cuda,qwen,pocket-tts
+# Native GGML CUDA is selected separately from ONNX Runtime CUDA.
+# GGML_NATIVE=OFF selects the pinned portable architecture set without a GPU.
+ENV CARGO_BUILD_JOBS=2
+RUN cargo build --release --locked --no-default-features --features server,cuda,qwen-gguf-cuda,pocket-tts
 
 RUN set -eu; \
     mkdir -p /build/ort-dist; \
@@ -202,7 +172,7 @@ RUN set -e; \
 # Runtime: CUDA-enabled headless server
 # docker build --target runtime-cuda -t sonicboom:cuda .
 # ============================================================================
-FROM nvidia/cuda:12.9.2-cudnn-runtime-ubuntu24.04@sha256:070f8f2672df1b05b84c0409a5fd1d54ddfd646e5b9d8dee7878131271b563fc AS runtime-cuda
+FROM nvidia/cuda:13.0.2-cudnn-runtime-ubuntu24.04@sha256:14d94b039cb94bbd5da559f303b46bc4b0d5d6c24ab1a9d7b186e566ed3400dc AS runtime-cuda
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libopus0 \
@@ -217,7 +187,10 @@ WORKDIR /app
 
 COPY --from=builder-cuda /build/target/release/SonicBoom /app/sonicboom
 COPY --from=builder-cuda /build/ort-dist/ /app/ort-lib/
+ENV LD_LIBRARY_PATH=/app/ort-lib:/app
 
+# libcuda.so.1 is supplied by NVIDIA Container Toolkit at `docker run --gpus`.
+# Build-time validation allows only that driver library to be absent; never ship stubs.
 # The CUDA execution provider cannot work without its shared provider
 # libraries; fail the build unless they were staged.
 RUN set -e; \
@@ -226,13 +199,12 @@ RUN set -e; \
     fi; \
     for prov in libonnxruntime_providers_shared.so libonnxruntime_providers_cuda.so; do if [ ! -f "/app/ort-lib/$prov" ]; then echo "ERROR: $prov missing from CUDA image" >&2; exit 1; fi; done; \
     echo "Using staged ONNX Runtime: $(ls /app/ort-lib/)"; \
-    if ldd /app/sonicboom | grep -q 'not found'; then echo "ERROR: unresolved shared-library dependency" >&2; ldd /app/sonicboom >&2; exit 1; fi; \
-    for prov in /app/ort-lib/*.so; do if ldd "$prov" | grep -q 'not found'; then echo "ERROR: unresolved provider dependency in $prov" >&2; ldd "$prov" >&2; exit 1; fi; done
+    if ldd /app/sonicboom | grep 'not found' | grep -vE '^[[:space:]]*libcuda\.so\.1 => not found$'; then echo "ERROR: unresolved shared-library dependency" >&2; ldd /app/sonicboom >&2; exit 1; fi; \
+    for prov in /app/ort-lib/*.so; do if ldd "$prov" | grep 'not found' | grep -vE '^[[:space:]]*libcuda\.so\.1 => not found$'; then echo "ERROR: unresolved provider dependency in $prov" >&2; ldd "$prov" >&2; exit 1; fi; done
 
 RUN mkdir -p /app/models /app/logs /app/data /app/temp_audio \
     && chown -R sonicboom:sonicboom /app
 
-ENV LD_LIBRARY_PATH=/app/ort-lib:/app
 ENV RUST_LOG=info
 ENV PORT=17842
 ENV BIND=0.0.0.0
@@ -269,6 +241,7 @@ WORKDIR /app
 
 COPY --from=builder-playback /build/target/release/SonicBoom /app/sonicboom
 COPY --from=builder-playback /build/ort-dist/ /app/ort-lib/
+ENV LD_LIBRARY_PATH=/app/ort-lib:/app
 
 RUN set -e; \
     if ldd /app/sonicboom | grep -q libonnxruntime; then \
@@ -280,7 +253,6 @@ RUN set -e; \
 RUN mkdir -p /app/models /app/logs /app/data /app/temp_audio \
     && chown -R sonicboom:sonicboom /app
 
-ENV LD_LIBRARY_PATH=/app/ort-lib:/app
 ENV RUST_LOG=info
 ENV PORT=17842
 ENV BIND=0.0.0.0
@@ -317,6 +289,7 @@ WORKDIR /app
 
 COPY --from=builder /build/target/release/SonicBoom /app/sonicboom
 COPY --from=builder /build/ort-dist/ /app/ort-lib/
+ENV LD_LIBRARY_PATH=/app/ort-lib:/app
 
 # Fail the build if the binary needs libonnxruntime but none was staged.
 RUN set -e; \
@@ -329,7 +302,6 @@ RUN set -e; \
 RUN mkdir -p /app/models /app/logs /app/data /app/temp_audio \
     && chown -R sonicboom:sonicboom /app
 
-ENV LD_LIBRARY_PATH=/app/ort-lib:/app
 ENV RUST_LOG=info
 ENV PORT=17842
 ENV BIND=0.0.0.0

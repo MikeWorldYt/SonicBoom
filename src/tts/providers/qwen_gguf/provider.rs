@@ -29,7 +29,7 @@ use crate::tts::quality::QualityPolicy;
 /// Stable provider identifier for the native GGUF/ONNX backend.
 pub const QWEN_GGUF_PROVIDER_ID: &str = "qwen3-gguf";
 /// Model identifiers owned by this provider (exactly one: no collisions).
-pub const QWEN_GGUF_MODELS: &[&str] = &["qwen3-tts-1.7b-base"];
+pub use crate::tts::providers::catalog::QWEN_GGUF_MODELS;
 /// Languages with validated prompt token IDs (`conditioning::prompt`).
 pub const QWEN_GGUF_LANGUAGES: &[&str] =
     &["en", "de", "es", "zh", "ja", "fr", "ko", "ru", "it", "pt"];

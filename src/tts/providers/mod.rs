@@ -6,6 +6,7 @@
 //! in-process worker threads with bounded channels, never subprocesses.
 
 pub mod assets;
+pub mod catalog;
 pub mod error;
 pub mod pocket_tts;
 pub mod pool;

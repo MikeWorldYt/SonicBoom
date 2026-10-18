@@ -48,14 +48,7 @@ pub const POCKET_TTS_PROVIDER_ID: &str = "pocket-tts";
 pub const POCKET_TTS_UPSTREAM_REVISION: &str = "58a6d00cf13d239b6748cb0769f35c580a8f606c";
 pub const POCKET_TTS_REPO: &str = "KevinAHM/pocket-tts-onnx";
 /// Independently pinned language bundles. French uses the larger 24-layer preview.
-pub const POCKET_TTS_MODELS: &[&str] = &[
-    "pocket-tts-en",
-    "pocket-tts-es",
-    "pocket-tts-pt",
-    "pocket-tts-de",
-    "pocket-tts-it",
-    "pocket-tts-fr-24l",
-];
+pub use super::catalog::POCKET_TTS_MODELS;
 pub const POCKET_TTS_LANGUAGES: &[&str] = &["en", "es", "pt", "de", "it", "fr"];
 
 /// Exact language for a model; no cross-language fallback or three-letter aliases.

@@ -233,10 +233,17 @@ fn main() {
     println!("cargo:rerun-if-changed=shim.cpp");
     println!("cargo:rerun-if-changed=CMakeLists.txt");
     println!("cargo:rerun-if-changed=../../vendor/llama.cpp/include/llama.h");
-    assert!(
-        Path::new("../../vendor/llama.cpp/include/llama.h").is_file(),
-        "initialize the pinned native sources with git submodule update --init --recursive"
-    );
+    let sources = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/llama.cpp");
+    if !sources.join("include/llama.h").is_file() || !sources.join("CMakeLists.txt").is_file() {
+        fail(&format!(
+            "Pinned llama.cpp sources are missing or incomplete at {}.\n\
+             Run `git submodule update --init --recursive` from the repository root.\n\
+             CI checkout must set `submodules: recursive`; Docker contexts must include vendor/llama.cpp.\n\
+             This is a source checkout problem, not a missing Vulkan/CUDA SDK.\n\
+             Compilation never downloads or changes the pinned native revision.",
+            sources.display()
+        ));
+    }
 
     let vulkan = cfg!(feature = "vulkan");
     let cuda = cfg!(feature = "cuda");
@@ -302,10 +309,26 @@ fn main() {
         );
     }
     if cuda {
+        let paths = std::fs::read_to_string(dst.join("build/cuda-link-paths.txt"))
+            .expect("CMake must report resolved CUDA libraries for Cargo linking");
+        for library in paths.lines() {
+            let parent = Path::new(library)
+                .parent()
+                .expect("absolute CUDA library path");
+            println!("cargo:rustc-link-search=native={}", parent.display());
+        }
         println!("cargo:rustc-link-lib=static=ggml-cuda");
         println!("cargo:rustc-link-lib=cudart");
         println!("cargo:rustc-link-lib=cublas");
         println!("cargo:rustc-link-lib=cublasLt");
+        println!(
+            "cargo:rustc-link-lib={}",
+            if target_is_windows() {
+                "nvcuda"
+            } else {
+                "cuda"
+            }
+        );
     }
     let target = std::env::var("TARGET").unwrap();
     if target.contains("apple") {
