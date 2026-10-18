@@ -139,3 +139,36 @@ installation of the previous verified version and restore user data from a
 backup if a migration occurred. Revert the change through a PR and publish a
 new tag after validation. Never replace existing assets silently: checksums and
 consumer downloads must continue to identify the same bytes.
+
+### Native and container preflight
+
+Initialize sources with `git submodule update --init --recursive`, then run
+`python3 scripts/ci/preflight.py`. It checks the checked-out Gitlink revisions,
+explicit Cargo examples, local path manifests and each Docker builder's manifest
+inputs and feature names. CI runs it before compilation on Linux and Windows.
+Default release binaries include all providers with CPU backends. Vulkan and
+native CUDA remain explicit `qwen-gguf-vulkan` / `qwen-gguf-cuda` opt-ins and
+require their SDKs; ONNX Runtime's `cuda` feature selects a separate stack.
+
+Docker's CPU and playback targets select their features explicitly. The CUDA
+target selects both ONNX Runtime CUDA and native GGML CUDA. The locked
+ort-sys rc.13 distribution ships CUDA 13 only, so the CUDA images use matching
+CUDA 13/cuDNN runtime and development bases; a CUDA 13 compatible host driver
+is required. CPU images retain their independent SDK-free build. Its pinned toolkit
+builds the portable llama.cpp architecture set without requiring a GPU during
+compilation. At runtime use NVIDIA Container Toolkit (`docker run --gpus all`):
+`libcuda.so.1` must come from the host driver. Image checks permit only that
+specific driver library to be absent and never ship linker stubs. Hardware
+inference still requires a supported GPU and installed models.
+
+`TOKEN_STORE_PATH=/app/data/tokens.json` in Docker/Compose is a storage path,
+not an access token. Keep it writable by the non-root `sonicboom` user and mount
+persistent data as needed. Docker's name-based secret warning does not indicate
+embedded credentials here; do not place access tokens in build arguments or
+image environment defaults. Model weights, credential files, nested Git data
+and local build caches are excluded from the allowlisted build context.
+
+Use `python3 scripts/ci/container_smoke.py sonicboom:cpu` (or
+`sonicboom:playback`) to check real HTTP health and graceful shutdown without
+model downloads. This invokes the existing bounded `--smoke-test` mode inside
+the container, whose loopback listener is probed using `docker exec`.

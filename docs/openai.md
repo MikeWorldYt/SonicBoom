@@ -258,3 +258,13 @@ with open("output.ogg", "wb") as f:
 Unknown `response_format` values return `400 Bad Request`. Omitted
 formats default to `opus`. Each response is one fully encoded audio
 buffer (not an incremental stream).
+
+### Model identity and availability
+
+`/v1/models` lists recognized identifiers and their stable owning provider,
+independently of build features or downloaded weights. It is not a readiness
+guarantee. Speech requests for a recognized provider omitted at compile time
+return HTTP 503 with an explicit provider-unavailable message. They never fall
+back to Supertonic. Compiled providers still validate runtime enablement, model
+installation and readiness through the provider registry. Unknown and retired
+model identifiers remain HTTP 400 errors.

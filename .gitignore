@@ -10,3 +10,6 @@ temp_audio/**
 
 /frontend/node_modules/
 /frontend/dist/
+
+# Python preflight and release validation caches.
+__pycache__/

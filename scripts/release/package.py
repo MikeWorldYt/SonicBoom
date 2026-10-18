@@ -60,12 +60,21 @@ def package(target, output):
         native_notices = ROOT / 'licenses/onnxruntime'
         if native_notices.is_dir():
             shutil.copytree(native_notices, notices / 'onnxruntime')
+        # The native wrapper builds pinned llama.cpp/ggml outside Cargo's
+        # package graph. Carry those upstream notices explicitly.
+        llama = ROOT / 'vendor/llama.cpp'
+        for source in sorted(llama.glob('LICENSE*')) + sorted((llama / 'ggml').rglob('LICENSE*')):
+            if not source.is_file():
+                continue
+            destination = notices / 'llama.cpp' / source.relative_to(llama)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
         inventory = []
         for pkg in sorted(metadata['packages'], key=lambda p: p['id']):
             home = Path(pkg['manifest_path']).parent
             destination = notices / f"{pkg['name']}-{pkg['version']}"
             files = [p for p in home.iterdir() if p.is_file() and
-                     p.name.upper().startswith(('LICENSE', 'LICENCE', 'COPYING', 'NOTICE', 'AUTHORS'))]
+                     p.name.upper().startswith(('LICENSE', 'LICENCE', 'COPYING', 'NOTICE', 'AUTHORS', 'UNLICENSE'))]
             # Preserve notices embedded in bundled C/C++ source trees too.
             if pkg['name'] in ('knf-rs-sys', 'opusic-sys', 'esaxx-rs'):
                 files += [p for p in home.rglob('*') if p.is_file() and

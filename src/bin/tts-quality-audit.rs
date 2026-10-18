@@ -2,13 +2,15 @@
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+#[cfg(feature = "qwen-gguf")]
+use sonicboom::tts::quality::QualityPolicy;
 use sonicboom::tts::{
     audio::{AudioFormat, encode_audio},
     providers::{
         PcmAudio, ProviderRequest, TtsProvider,
         types::{ReferenceAudio, SamplingPreset, SamplingRequest},
     },
-    quality::{DetectionMode, QualityPolicy},
+    quality::DetectionMode,
 };
 use std::{
     fs::{self, OpenOptions},

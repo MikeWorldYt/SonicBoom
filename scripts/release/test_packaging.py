@@ -68,6 +68,9 @@ class PackagingTests(unittest.TestCase):
             (root / 'docs').mkdir()
             for path in ('LICENSE', 'README.md', 'docs/RELEASING.md', 'models.sha256.json'):
                 (root / path).write_text('documentation')
+            (root / 'vendor/llama.cpp/ggml').mkdir(parents=True)
+            (root / 'vendor/llama.cpp/LICENSE').write_text('llama license fixture')
+            (root / 'vendor/llama.cpp/ggml/LICENSE').write_text('ggml license fixture')
             (root / 'tokens.json').write_text('must never ship')
             for target, name, asset in [
                 ('x86_64-unknown-linux-gnu', 'SonicBoom', package.ASSETS[0]),
@@ -109,6 +112,8 @@ class PackagingTests(unittest.TestCase):
                         self.assertIn(b'exec "$APP_DIR/SonicBoom" "$@"', archive.extractfile('sonicboom').read())
                 self.assertNotIn('tokens.json', names)
                 self.assertIn('LICENSE', names)
+                self.assertIn('licenses/llama.cpp/LICENSE', names)
+                self.assertIn('licenses/llama.cpp/ggml/LICENSE', names)
                 self.assertIn('docs/RELEASING.md', names)
 
 

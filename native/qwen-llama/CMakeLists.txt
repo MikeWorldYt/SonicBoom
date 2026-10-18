@@ -21,6 +21,12 @@ if(WIN32)
   # Keep the nested shader-generator build below MSBuild's path-length limit.
   set_property(DIRECTORY PROPERTY EP_BASE "${CMAKE_BINARY_DIR}/ep")
 endif()
+if(GGML_CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  # Cargo does not inherit transitive CMake link directories from static ggml.
+  file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/cuda-link-paths.txt" CONTENT
+    "$<TARGET_FILE:CUDA::cudart>\n$<TARGET_FILE:CUDA::cublas>\n$<TARGET_FILE:CUDA::cublasLt>\n$<TARGET_FILE:CUDA::cuda_driver>\n")
+endif()
 add_subdirectory(../../vendor/llama.cpp llama)
 # The pinned llama.cpp revision discovers the SPIRV-Headers CMake package but
 # never links its imported target, so ggml-vulkan.cpp's `#include <spirv/...>`

@@ -128,8 +128,8 @@ supported, and the effective device is always reported.
 
 ## Qwen3-TTS 1.7B GGUF/ONNX setup (CPU smoke test)
 
-1. Special build required: `cargo build --features qwen-gguf` (add
-   `qwen-gguf-vulkan` for AMD Vulkan). Default builds cannot serve Qwen.
+1. Default builds include Qwen on CPU. Add `--features qwen-gguf-vulkan`
+   for Vulkan, or `--features qwen-gguf-cuda` for native CUDA.
 2. Press Enable on the qwen3-gguf card (or set `enabled = true` and
    hot-reload): the server downloads the pinned bundle into
    `[providers.qwen3_gguf] model_dir` (`./models/qwen3-tts-1.7b-gguf`) in

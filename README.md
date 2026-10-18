@@ -33,8 +33,8 @@ git clone https://github.com/nglmercer/SonicBoom.git
 cd SonicBoom
 git submodule update --init --recursive
 
-# Default build: Supertonic 3 + Pocket TTS on CPU, Qwen3-TTS with Vulkan.
-# Requires the Vulkan SDK, including glslc and SPIRV-Headers.
+# Default build: Supertonic 3 + Pocket TTS + Qwen3-TTS on CPU.
+# GPU backends are explicit opt-ins; no GPU SDK is needed here.
 cargo build --release
 
 # Desktop system-tray GUI:
@@ -43,14 +43,14 @@ cargo build --release --features gui
 
 ### GPU acceleration
 
-The default application build enables Qwen's Vulkan backend. Install the
+Qwen's Vulkan backend is opt-in (`--features qwen-gguf-vulkan`). Install the
 [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) before building. On Windows,
 restart the terminal after installation, or set the SDK path in PowerShell:
 
 ```powershell
 $env:VULKAN_SDK = 'C:\VulkanSDK\<version>'
 $env:Path = "$env:VULKAN_SDK\Bin;$env:Path"
-cargo build --release
+cargo build --release --features qwen-gguf-vulkan
 ```
 
 To build the same application with Qwen on CPU:
@@ -70,7 +70,7 @@ cargo build --release --features cuda     # NVIDIA CUDA (Linux/Windows)
 cargo build --release --features rocm     # AMD ROCm (Linux)
 cargo build --release --features coreml   # Apple Silicon CoreML (macOS)
 
-# Qwen3-TTS native llama.cpp backend (Vulkan is enabled by default):
+# Qwen3-TTS native llama.cpp backend (GPU backends are opt-in):
 cargo build --release --features qwen-gguf-vulkan   # Vulkan SDK + SPIRV-Headers + glslc
 cargo build --release --features qwen-gguf-cuda     # CUDA Toolkit (nvcc)
 
