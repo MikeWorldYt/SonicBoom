@@ -559,12 +559,39 @@ fn lookup_idempotent_locked(
     }
 }
 
+/// Explicit provider selection must agree with the authenticated profile.
+/// Omitted provider preserves compatibility with existing profile clients.
+#[cfg(feature = "playback")]
+fn validate_profile_provider(selected: Option<&str>, actual: &str) -> Result<(), AppError> {
+    if selected.is_some_and(|selected| selected != actual) {
+        return Err(AppError::BadRequest(
+            "selected provider does not match voice profile; reload voices and select a profile for this provider".into(),
+        ));
+    }
+    Ok(())
+}
+
 async fn execute_request(
     token: AuthenticatedToken,
     state: AppState,
     query: JobQuery,
     body: String,
 ) -> Result<Response, AppError> {
+    // Verify explicit routing using owned metadata before reading reference audio.
+    #[cfg(feature = "playback")]
+    if let Some(id) = query.profile.as_ref() {
+        let owner = token.rate_limit_key();
+        let id = id.clone();
+        let profile = super::voices::with_store(&state, move |store| {
+            store
+                .get(&id)
+                .filter(|profile| profile.owner_token_hash.as_deref() == Some(owner.as_str()))
+                .cloned()
+                .ok_or_else(|| AppError::NotFound("unknown voice profile".into()))
+        })
+        .await?;
+        validate_profile_provider(query.provider.as_deref(), &profile.provider)?;
+    }
     if let Some(profile) = query.profile.clone() {
         // Sampling/quality overrides travel with the preview request; the
         // preview handler validates them and rejects non-Qwen providers.
@@ -1838,5 +1865,16 @@ mod tests {
             status["playback"]["state"], "skipped",
             "a cancelled job is never enqueued for playback"
         );
+    }
+}
+
+#[cfg(all(test, feature = "playback"))]
+mod profile_routing_regression {
+    #[test]
+    fn explicit_provider_cannot_route_to_another_profiles_engine() {
+        assert!(super::validate_profile_provider(Some("qwen3-gguf"), "pocket-tts").is_err());
+        assert!(super::validate_profile_provider(Some("supertonic"), "qwen3-gguf").is_err());
+        assert!(super::validate_profile_provider(Some("qwen3-gguf"), "qwen3-gguf").is_ok());
+        assert!(super::validate_profile_provider(None, "pocket-tts").is_ok());
     }
 }

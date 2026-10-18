@@ -11,9 +11,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
+use axum::response::IntoResponse;
 use tokio::sync::{Mutex, RwLock, oneshot};
 use tokio::task::JoinHandle;
-use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::{DefaultOnFailure, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
 
@@ -84,10 +84,14 @@ impl ApiServerManager {
                 security::request_origin_guard,
             ))
             .layer(session_layer)
-            .layer(TimeoutLayer::with_status_code(
-                axum::http::StatusCode::REQUEST_TIMEOUT,
-                Duration::from_secs(request_timeout),
-            ))
+            .layer(axum::middleware::from_fn(move |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                let secs = synchronous_http_budget(request_timeout, request.uri().path(), request.uri().query());
+                match tokio::time::timeout(Duration::from_secs(secs), next.run(request)).await {
+                    Ok(response) => response,
+                    Err(_) => (axum::http::StatusCode::REQUEST_TIMEOUT,
+                        axum::Json(serde_json::json!({"error":"HTTP request deadline exceeded; use /api/tts/jobs for slow synthesis", "stage":"http_request_deadline"}))).into_response(),
+                }
+            }))
             .layer(
                 TraceLayer::new_for_http()
                     .make_span_with(|request: &axum::http::Request<axum::body::Body>| tracing::info_span!("http_request", method = %request.method(), path = request.uri().path()))
@@ -290,5 +294,55 @@ mod tests {
         // resolves when the sender is dropped.
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async { shutdown_signal(rx).await });
+    }
+}
+
+/// Only the legacy synchronous playback route gets a provider budget. Job
+/// submission/polling retain the ordinary short HTTP contract; inference has
+/// its own deadline and admission controls. Explicit non-default server
+/// limits remain upper bounds.
+fn synchronous_http_budget(configured: u64, path: &str, query: Option<&str>) -> u64 {
+    if path != "/api/tts/play" {
+        return configured.max(1);
+    }
+    let provider = query
+        .unwrap_or("")
+        .split('&')
+        .find_map(|part| part.strip_prefix("provider="))
+        .unwrap_or("supertonic");
+    let budget = match provider {
+        "qwen3-gguf" => 180,
+        "pocket-tts" => 60,
+        _ => 15,
+    };
+    if configured == 120 {
+        budget
+    } else {
+        budget.min(configured.max(1))
+    }
+}
+
+#[cfg(test)]
+mod synchronous_budget_tests {
+    #[test]
+    fn provider_budgets_do_not_expand_jobs_or_other_requests() {
+        use super::synchronous_http_budget as budget;
+        assert_eq!(
+            budget(120, "/api/tts/play", Some("provider=qwen3-gguf")),
+            180
+        );
+        assert_eq!(
+            budget(120, "/api/tts/play", Some("provider=pocket-tts")),
+            60
+        );
+        assert_eq!(
+            budget(120, "/api/tts/play", Some("provider=supertonic")),
+            15
+        );
+        assert_eq!(budget(20, "/api/tts/play", Some("provider=qwen3-gguf")), 20);
+        assert_eq!(
+            budget(120, "/api/tts/jobs", Some("provider=qwen3-gguf")),
+            120
+        );
     }
 }
