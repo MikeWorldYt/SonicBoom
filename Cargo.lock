@@ -50,6 +50,7 @@ dependencies = [
  "tray-icon",
  "unicode-normalization",
  "uuid",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

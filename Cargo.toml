@@ -165,6 +165,13 @@ ksni = { version = "0.3", features = ["blocking"], optional = true }
 tray-icon = { version = "0.19", optional = true }
 tao = { version = "0.30", optional = true }
 
+# Windows file identity for the config watcher's metadata snapshot.
+# `std::os::windows::fs::MetadataExt::file_index`/`volume_serial_number` are
+# still nightly-only, so query `GetFileInformationByHandle` through the same
+# windows-sys family the rest of the Windows dependency graph already uses.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
 # Pinned to an immutable revision of the `remake` branch (retrieved 2026-09-16).
 # Update intentionally via `cargo update -p tiktools-plugin-sdk` and review the diff.
 [dependencies.tiktools-plugin-sdk]

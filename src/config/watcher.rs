@@ -27,17 +27,57 @@ pub const POLL_INTERVAL_SECS: u64 = 5;
 pub const POLL_VERIFY_EVERY: u32 = 6;
 
 /// Cheap identity snapshot for change detection: length, modification time,
-/// and (on Unix) file identity, so atomic rename-over-write is observed even
-/// when length and mtime are preserved.
+/// and a stable per-file identity, so atomic rename-over-write is observed
+/// even when length and mtime are preserved. The identity is
+/// `(device, inode)` on Unix and `(volume serial, file index)` on Windows;
+/// platforms without a cheap identity fall back to `(0, 0)` and rely on the
+/// periodic content-verification tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FileMeta {
     len: u64,
     mtime_secs: i64,
     mtime_nanos: u32,
-    #[cfg(unix)]
-    ino: u64,
-    #[cfg(unix)]
-    dev: u64,
+    identity: (u64, u64),
+}
+
+#[cfg(unix)]
+fn file_identity(_path: &std::path::Path, meta: &std::fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    (meta.dev(), meta.ino())
+}
+
+/// Windows has no stable `std` API for a file's identity (`file_index` is
+/// still nightly-only), so query the volume serial number and file index
+/// directly. Both survive an atomic rename, which is exactly what lets the
+/// poller observe a rename-over-write that preserves length and mtime.
+#[cfg(windows)]
+fn file_identity(path: &std::path::Path, _meta: &std::fs::Metadata) -> (u64, u64) {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let Ok(file) = std::fs::File::open(path) else {
+        return (0, 0);
+    };
+    let mut info = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+    // SAFETY: `file` owns a live handle, and `info` is valid writable memory
+    // for the out parameter. The call only initializes `info` on success,
+    // which is checked before `assume_init`.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, info.as_mut_ptr()) };
+    if ok == 0 {
+        return (0, 0);
+    }
+    let info = unsafe { info.assume_init() };
+    (
+        u64::from(info.dwVolumeSerialNumber),
+        (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn file_identity(_path: &std::path::Path, _meta: &std::fs::Metadata) -> (u64, u64) {
+    (0, 0)
 }
 
 fn file_meta(path: &std::path::Path) -> Option<FileMeta> {
@@ -47,25 +87,12 @@ fn file_meta(path: &std::path::Path) -> Option<FileMeta> {
     let age = modified
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Some(FileMeta {
-            len,
-            mtime_secs: age.as_secs() as i64,
-            mtime_nanos: age.subsec_nanos(),
-            ino: meta.ino(),
-            dev: meta.dev(),
-        })
-    }
-    #[cfg(not(unix))]
-    {
-        Some(FileMeta {
-            len,
-            mtime_secs: age.as_secs() as i64,
-            mtime_nanos: age.subsec_nanos(),
-        })
-    }
+    Some(FileMeta {
+        len,
+        mtime_secs: age.as_secs() as i64,
+        mtime_nanos: age.subsec_nanos(),
+        identity: file_identity(path, &meta),
+    })
 }
 
 /// Handle for the background watcher task.
