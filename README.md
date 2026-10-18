@@ -31,16 +31,33 @@ requires Node.js 22.12+ and npm; deployed binaries need neither.
 # Clone the repository
 git clone https://github.com/nglmercer/SonicBoom.git
 cd SonicBoom
+git submodule update --init --recursive
 
-# Default build: Supertonic 3 + Pocket TTS + Qwen3-TTS GGUF/ONNX, all on CPU.
-# It needs NO CUDA Toolkit, ROCm or Vulkan SDK.
+# Default build: Supertonic 3 + Pocket TTS on CPU, Qwen3-TTS with Vulkan.
+# Requires the Vulkan SDK, including glslc and SPIRV-Headers.
 cargo build --release
 
 # Desktop system-tray GUI:
 cargo build --release --features gui
 ```
 
-### GPU acceleration (optional, opt-in)
+### GPU acceleration
+
+The default application build enables Qwen's Vulkan backend. Install the
+[Vulkan SDK](https://vulkan.lunarg.com/sdk/home) before building. On Windows,
+restart the terminal after installation, or set the SDK path in PowerShell:
+
+```powershell
+$env:VULKAN_SDK = 'C:\VulkanSDK\<version>'
+$env:Path = "$env:VULKAN_SDK\Bin;$env:Path"
+cargo build --release
+```
+
+To build the same application with Qwen on CPU:
+
+```bash
+cargo build --release --no-default-features --features server,playback,qwen-gguf,pocket-tts,gui
+```
 
 Two independent acceleration stacks exist; enabling one never enables the
 other. A requested GPU backend whose SDK is missing fails the build **early**
@@ -53,7 +70,7 @@ cargo build --release --features cuda     # NVIDIA CUDA (Linux/Windows)
 cargo build --release --features rocm     # AMD ROCm (Linux)
 cargo build --release --features coreml   # Apple Silicon CoreML (macOS)
 
-# Qwen3-TTS native llama.cpp backend (separate build features):
+# Qwen3-TTS native llama.cpp backend (Vulkan is enabled by default):
 cargo build --release --features qwen-gguf-vulkan   # Vulkan SDK + SPIRV-Headers + glslc
 cargo build --release --features qwen-gguf-cuda     # CUDA Toolkit (nvcc)
 
