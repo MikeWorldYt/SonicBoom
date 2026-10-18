@@ -143,7 +143,17 @@ COPY models.sha256.json ./models.sha256.json
 # The `cuda` feature enables the ONNX Runtime CUDA execution provider.
 # Native GGML CUDA is selected separately from ONNX Runtime CUDA.
 # GGML_NATIVE=OFF selects the pinned portable architecture set without a GPU.
+#
+# NCCL multi-GPU collectives are OFF by default (native/qwen-llama records the
+# policy): leaving them on makes static ggml-cuda reference NCCL symbols that
+# Cargo never links. Set SONICBOOM_CUDA_NCCL=1 to opt in.
+#
+# SONICBOOM_CUDA_ARCHITECTURES overrides the compiled CUDA architecture set.
+# Empty keeps the full release default; CI smoke builds can narrow it
+# (e.g. --build-arg SONICBOOM_CUDA_ARCHITECTURES=90-virtual) to cut NVCC time.
 ENV CARGO_BUILD_JOBS=2
+ARG SONICBOOM_CUDA_ARCHITECTURES=""
+ENV SONICBOOM_CUDA_ARCHITECTURES=${SONICBOOM_CUDA_ARCHITECTURES}
 RUN cargo build --release --locked --no-default-features --features server,cuda,qwen-gguf-cuda,pocket-tts
 
 RUN set -eu; \

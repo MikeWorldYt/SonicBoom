@@ -21,11 +21,37 @@ if(WIN32)
   # Keep the nested shader-generator build below MSBuild's path-length limit.
   set_property(DIRECTORY PROPERTY EP_BASE "${CMAKE_BINARY_DIR}/ep")
 endif()
+# Multi-GPU NCCL collectives are unnecessary for SonicBoom's single-service TTS
+# server. The pinned llama.cpp defaults GGML_CUDA_NCCL=ON, so ggml-cuda.a
+# references NCCL symbols whenever the builder image happens to ship libnccl;
+# Cargo's final link line never passes -lnccl, producing
+# "undefined reference to ncclCommDestroy" and friends. Default it OFF and
+# expose an explicit opt-in. build.rs forwards SONICBOOM_CUDA_NCCL and links
+# the resolved NCCL library when it is enabled. Ordinary single-GPU CUDA
+# inference is unaffected either way.
+option(SONICBOOM_CUDA_NCCL "Enable NCCL multi-GPU collectives in ggml-cuda" OFF)
+set(GGML_CUDA_NCCL ${SONICBOOM_CUDA_NCCL} CACHE BOOL "" FORCE)
+# CUDA architectures to compile ggml-cuda for. Empty keeps the pinned llama.cpp
+# release default, which covers Maxwell through Blackwell and is required for
+# release binaries. CI smoke builds may pass a narrow set (e.g. "90-virtual")
+# via SONICBOOM_CUDA_ARCHITECTURES to cut NVCC time without changing what
+# production ships.
+set(SONICBOOM_CUDA_ARCHITECTURES "" CACHE STRING
+  "Override CMAKE_CUDA_ARCHITECTURES for ggml-cuda (empty keeps the full default)")
+if(GGML_CUDA AND SONICBOOM_CUDA_ARCHITECTURES)
+  set(CMAKE_CUDA_ARCHITECTURES "${SONICBOOM_CUDA_ARCHITECTURES}" CACHE STRING "" FORCE)
+endif()
 if(GGML_CUDA)
   find_package(CUDAToolkit REQUIRED)
   # Cargo does not inherit transitive CMake link directories from static ggml.
+  set(SONICBOOM_CUDA_LINK_FILES
+    "$<TARGET_FILE:CUDA::cudart>\n$<TARGET_FILE:CUDA::cublas>\n$<TARGET_FILE:CUDA::cublasLt>\n$<TARGET_FILE:CUDA::cuda_driver>")
+  if(GGML_CUDA_NCCL)
+    find_package(NCCL REQUIRED)
+    string(APPEND SONICBOOM_CUDA_LINK_FILES "\n$<TARGET_FILE:NCCL::NCCL>")
+  endif()
   file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/cuda-link-paths.txt" CONTENT
-    "$<TARGET_FILE:CUDA::cudart>\n$<TARGET_FILE:CUDA::cublas>\n$<TARGET_FILE:CUDA::cublasLt>\n$<TARGET_FILE:CUDA::cuda_driver>\n")
+    "${SONICBOOM_CUDA_LINK_FILES}\n")
 endif()
 add_subdirectory(../../vendor/llama.cpp llama)
 # The pinned llama.cpp revision discovers the SPIRV-Headers CMake package but

@@ -168,7 +168,36 @@ embedded credentials here; do not place access tokens in build arguments or
 image environment defaults. Model weights, credential files, nested Git data
 and local build caches are excluded from the allowlisted build context.
 
+Native GGML CUDA builds disable multi-GPU NCCL collectives by default
+(`GGML_CUDA_NCCL=OFF`). SonicBoom runs a single service and does not need NCCL
+for single-GPU inference; leaving it enabled made the static `ggml-cuda`
+archive reference NCCL symbols the Rust link never resolved. Set
+`SONICBOOM_CUDA_NCCL=1` to opt in (build.rs then links the discovered NCCL
+library). `SONICBOOM_CUDA_ARCHITECTURES` overrides the compiled architecture
+set; unset keeps the full release set, and CI smoke builds may narrow it to cut
+NVCC time.
+
+### CI structure and CUDA validation
+
+Ordinary push/pull-request CI (`.github/workflows/ci.yml`) never runs the full
+CUDA Docker build. It runs formatting, Clippy, tests, the security-regression
+manifest guard, the feature matrix, native CPU/Vulkan GGUF builds, Linux and
+Windows GUI packaging, Docker CPU/playback images and a fast *static* CUDA
+configuration check (`scripts/ci/cuda_structure.py`) that invokes neither NVCC
+nor Docker. That static check proves the CUDA feature names, Docker stages,
+digest-pinned bases, native CMake/NCCL policy and runtime packaging are wired
+correctly; it does not prove GPU inference works.
+
+The full native CUDA compile and CUDA Docker image build live in the dedicated
+`.github/workflows/cuda-full.yml` workflow, triggered manually, weekly, and on
+release tags. It compiles the native backend, verifies NCCL/static linking and
+shared-library resolution, builds the CUDA image with a layer cache, and runs
+GPU runtime tests only when a self-hosted CUDA runner is attached. Release CUDA
+artifacts are not treated as validated unless those full checks pass.
+
 Use `python3 scripts/ci/container_smoke.py sonicboom:cpu` (or
 `sonicboom:playback`) to check real HTTP health and graceful shutdown without
-model downloads. This invokes the existing bounded `--smoke-test` mode inside
-the container, whose loopback listener is probed using `docker exec`.
+model downloads. The production images set `BIND=0.0.0.0`, so the probe starts
+the container with an explicit `BIND=127.0.0.1` override; the application
+deliberately refuses `--smoke-test` on a non-loopback listener.
+

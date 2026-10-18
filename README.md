@@ -86,6 +86,14 @@ point at an SDK in a non-standard location. Diagnostics and the
 `SONICBOOM_SKIP_SDK_CHECK=1` escape hatch are documented in
 [docs/providers.md](docs/providers.md#build-time-sdk-validation).
 
+Native CUDA builds compile ggml-cuda with multi-GPU NCCL collectives **off by
+default**. SonicBoom runs a single service, and NCCL is not required for
+ordinary single-GPU inference; leaving it enabled made the static `ggml-cuda`
+archive reference NCCL symbols that Cargo never links, which broke the final
+link. Set `SONICBOOM_CUDA_NCCL=1` to opt in to NCCL (the discovered library is
+then linked) and `SONICBOOM_CUDA_ARCHITECTURES` (for example `90-virtual`) to
+override the compiled GPU architecture set. Unset keeps the full release set.
+
 ### Run
 
 Desktop builds open a first-run setup wizard. No `.env` file is needed:

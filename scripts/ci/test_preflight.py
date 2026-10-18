@@ -1,10 +1,49 @@
 """Regression checks for the source preflight; no third-party test framework."""
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import shutil
 import tempfile
 import unittest
 
-from preflight import ROOT, docker_included, validate
+from preflight import (
+    ROOT,
+    _copy_sources,
+    docker_included,
+    to_docker_path,
+    to_fs_path,
+    validate,
+)
+
+
+class PathNormalizationTests(unittest.TestCase):
+    def test_windows_and_posix_paths_normalize_identically(self):
+        expected = 'native/qwen-llama/Cargo.toml'
+        self.assertEqual(to_docker_path(expected), expected)
+        self.assertEqual(to_docker_path('native\\qwen-llama\\Cargo.toml'), expected)
+        self.assertEqual(
+            to_docker_path(PureWindowsPath('native', 'qwen-llama', 'Cargo.toml')),
+            expected,
+        )
+        self.assertEqual(to_docker_path(Path('native/qwen-llama/Cargo.toml')), expected)
+
+    def test_fs_path_is_portable(self):
+        root = Path(tempfile.gettempdir())
+        self.assertEqual(to_fs_path(root, 'a/b/c.txt'), root / 'a' / 'b' / 'c.txt')
+
+    def test_copy_sources_normalize_and_strip_prefixes(self):
+        self.assertEqual(_copy_sources('COPY native ./native'), ['native'])
+        self.assertEqual(
+            _copy_sources('COPY Cargo.toml Cargo.lock ./'),
+            ['Cargo.toml', 'Cargo.lock'],
+        )
+        self.assertEqual(_copy_sources('COPY /src ./src'), ['src'])
+        self.assertEqual(
+            _copy_sources('COPY --chown=1000:1000 native ./native'),
+            ['native'],
+        )
+
+    def test_docker_included_accepts_windows_separators(self):
+        rules = ['**', '!native/', '!native/**']
+        self.assertTrue(docker_included('native\\qwen-llama\\Cargo.toml', rules))
 
 
 class PreflightTests(unittest.TestCase):

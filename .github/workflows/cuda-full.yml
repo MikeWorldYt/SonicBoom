@@ -1,0 +1,217 @@
+name: CUDA full build
+
+# The full native CUDA compile and CUDA Docker image build are slow (~80 min)
+# and are deliberately kept OUT of ordinary push/PR CI. This workflow runs
+# them manually, weekly, and for release tags so CUDA support stays validated
+# without blocking normal pull requests. It is NOT a mandatory branch-check.
+on:
+  workflow_dispatch:
+    inputs:
+      run_gpu_tests:
+        description: Run GPU runtime tests on the self-hosted CUDA runner
+        type: boolean
+        default: false
+      run_cuda_arch_smoke:
+        description: Also build a narrow-arch CUDA image for faster feedback
+        type: boolean
+        default: false
+  schedule:
+    # Weekly, Sunday 04:00 UTC.
+    - cron: '0 4 * * 0'
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cuda-full-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # Digest-pinned to match Dockerfile; refresh tag + digest together.
+  CUDA_DEVEL_IMAGE: nvidia/cuda:13.0.2-devel-ubuntu24.04@sha256:5dc1bca23d05bd37b011be68ec470c03b403a5da07ec3a86e41af9470e9d0cc6
+
+jobs:
+  # Compile the native ggml-cuda backend and prove the final link resolves:
+  # no undefined NCCL symbols and no unexpected runtime library gaps.
+  native-cuda-link:
+    name: Native CUDA (NCCL / static linking)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify pinned native sources and manifests
+        shell: bash
+        run: python3 scripts/ci/preflight.py
+      - name: Static CUDA configuration check
+        run: python3 scripts/ci/cuda_structure.py
+      - name: Cache cargo
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-v3-${{ runner.os }}-cuda13-native-servercuda-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-${{ github.sha }}
+          restore-keys: |
+            cargo-v3-${{ runner.os }}-cuda13-native-servercuda-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
+      # Build inside the digest-pinned CUDA devel image (same base as the
+      # Dockerfile builder-cuda) so CUDA/NCCL behaviour matches production.
+      # The image is pulled from the host runner to avoid container-job
+      # checkout/toolchain pitfalls. Cargo caches are bind-mounted.
+      - name: Compile, link and verify native CUDA
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.cargo/registry" "${HOME}/.cargo/git" target
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}":/src \
+            -v "${HOME}/.cargo/registry":/root/.cargo/registry \
+            -v "${HOME}/.cargo/git":/root/.cargo/git \
+            -w /src \
+            -e CARGO_TERM_COLOR=always \
+            -e ORT_STRATEGY=download \
+            -e ORT_CUDA_VERSION=13 \
+            "$CUDA_DEVEL_IMAGE" bash -lc '
+              set -euo pipefail
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                build-essential curl ca-certificates pkg-config cmake \
+                libclang-dev libopus-dev libssl-dev binutils
+              rm -rf /var/lib/apt/lists/*
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --profile minimal --default-toolchain 1.89.0
+              . "$HOME/.cargo/env"
+              cargo build --release --locked --no-default-features \
+                --features server,cuda,qwen-gguf-cuda,pocket-tts
+              BIN=target/release/SonicBoom
+              test -x "$BIN"
+              if readelf -d "$BIN" | grep -qi libnccl; then
+                echo "ERROR: default CUDA build unexpectedly requires libnccl" >&2
+                exit 1
+              fi
+              if nm -D --undefined-only "$BIN" 2>/dev/null | grep -qi nccl; then
+                echo "ERROR: default CUDA build has undefined NCCL symbols" >&2
+                exit 1
+              fi
+              echo "OK: default CUDA build has no NCCL dependency"
+              ldd "$BIN" | tee /tmp/ldd.txt
+              if grep "not found" /tmp/ldd.txt | grep -vE "^[[:space:]]*libcuda\.so\.1 => not found$"; then
+                echo "ERROR: unresolved shared library in $BIN" >&2
+                exit 1
+              fi
+              echo "OK: ldd clean (libcuda supplied by the driver at runtime)"
+            '
+
+  # Build the production CUDA Docker image with a layer cache, then re-run the
+  # provider/staging checks against the built image.
+  docker-cuda-build:
+    name: Docker CUDA image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify pinned native sources and manifests
+        shell: bash
+        run: python3 scripts/ci/preflight.py
+      - name: Static CUDA configuration check
+        run: python3 scripts/ci/cuda_structure.py
+      - name: Set up BuildKit builder with registry cache
+        run: |
+          set -euo pipefail
+          docker buildx create --name sonicboom-cuda --driver docker-container --use \
+            || docker buildx use sonicboom-cuda
+          docker buildx inspect --bootstrap
+      - name: Build CUDA runtime image (cached)
+        run: |
+          set -euo pipefail
+          extra_args=()
+          if [ "${{ inputs.run_cuda_arch_smoke }}" = "true" ]; then
+            # Narrow arch set only for the opt-in smoke build; the default
+            # (release) build keeps every supported architecture.
+            extra_args+=(--build-arg SONICBOOM_CUDA_ARCHITECTURES=90-virtual)
+          fi
+          docker buildx build \
+            --target runtime-cuda \
+            --tag sonicboom:cuda \
+            --cache-from type=gha,scope=sonicboom-cuda-runtime \
+            --cache-to type=gha,scope=sonicboom-cuda-runtime,mode=max \
+            "${extra_args[@]}" \
+            --load .
+      - name: Verify CUDA provider libraries and staging
+        run: |
+          set -euo pipefail
+          USER="$(docker inspect sonicboom:cuda --format '{{.Config.User}}')"
+          echo "image user: $USER"
+          test "$USER" = "sonicboom"
+          docker run --rm --entrypoint /bin/sh sonicboom:cuda -c \
+            'test -f /app/ort-lib/libonnxruntime_providers_shared.so && test -f /app/ort-lib/libonnxruntime_providers_cuda.so && echo "OK: providers staged"'
+      - name: Verify no unresolved CUDA runtime dependencies
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint /bin/sh sonicboom:cuda -c \
+            'ldd /app/sonicboom | grep "not found" | grep -vE "^[[:space:]]*libcuda\.so\.1 => not found$" && exit 1 || echo "OK: ldd clean"'
+          docker run --rm --entrypoint /bin/sh sonicboom:cuda -c \
+            'for p in /app/ort-lib/*.so; do ldd "$p" | grep "not found" | grep -vE "^[[:space:]]*libcuda\.so\.1 => not found$" && { echo "unresolved deps in $p"; exit 1; }; done; echo "OK: providers resolve"'
+
+  # GPU inference only runs when a compatible self-hosted runner is attached.
+  # Never a silent pass: the job is skipped (not faked) when unavailable.
+  gpu-runtime:
+    name: GPU runtime tests (self-hosted, optional)
+    needs: docker-cuda-build
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.run_gpu_tests) ||
+      (github.event_name == 'schedule' && vars.CUDA_GPU_RUNNER == 'true')
+    runs-on: [self-hosted, linux, cuda]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Confirm GPU is visible
+        run: nvidia-smi
+      - name: Model-free CUDA container probe
+        run: |
+          set -euo pipefail
+          docker build --target runtime-cuda -t sonicboom:cuda .
+          name="sonicboom-cuda-smoke-${GITHUB_RUN_ID}"
+          docker run -d --name "$name" --gpus all \
+            -e BIND=127.0.0.1 \
+            -e SONICBOOM_ADMIN_PW=ci-local-testing-password-123 \
+            --entrypoint /app/sonicboom sonicboom:cuda --smoke-test
+          trap 'docker logs "$name" || true; docker rm -f "$name" || true' EXIT
+          for _ in $(seq 1 60); do
+            code="$(docker exec "$name" curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:17842/health || true)"
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          test "$code" = "200"
+          test "$(docker wait "$name")" = "0"
+          echo "OK: CUDA container healthy and shut down gracefully"
+
+  # Release tags must not publish CUDA artifacts unless the full checks ran.
+  release-cuda-validation:
+    name: Release CUDA validation
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [native-cuda-link, docker-cuda-build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - run: echo "Full CUDA native link and Docker image validation passed for $GITHUB_REF_NAME"
