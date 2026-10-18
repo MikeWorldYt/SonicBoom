@@ -227,6 +227,8 @@ fn main() {
         "CMAKE_PREFIX_PATH",
         "SONICBOOM_SPIRV_INCLUDE_DIR",
         "SONICBOOM_SKIP_SDK_CHECK",
+        "SONICBOOM_CUDA_NCCL",
+        "SONICBOOM_CUDA_ARCHITECTURES",
     ] {
         println!("cargo:rerun-if-env-changed={var}");
     }
@@ -277,6 +279,31 @@ fn main() {
         .profile("Release")
         .define("GGML_VULKAN", if vulkan { "ON" } else { "OFF" })
         .define("GGML_CUDA", if cuda { "ON" } else { "OFF" });
+    // Multi-GPU NCCL collectives are an explicit opt-in and OFF by default:
+    // the CUDA devel images ship libnccl, so leaving llama.cpp's ON default
+    // makes static ggml-cuda.a reference NCCL symbols that Cargo never links.
+    // See CMakeLists.txt for the full rationale. Single-GPU inference is
+    // unaffected.
+    let nccl =
+        cuda && std::env::var_os("SONICBOOM_CUDA_NCCL").is_some_and(|v| !v.is_empty() && v != "0");
+    cmake.define("SONICBOOM_CUDA_NCCL", if nccl { "ON" } else { "OFF" });
+    if nccl {
+        println!(
+            "cargo:warning=sonicboom-qwen-llama: NCCL multi-GPU collectives enabled; \
+             linking the discovered NCCL library"
+        );
+    }
+    // CI smoke builds may narrow the CUDA architecture set to cut NVCC time.
+    // Unset keeps the full release default (all supported architectures).
+    if let Some(architectures) = std::env::var_os("SONICBOOM_CUDA_ARCHITECTURES")
+        && !architectures.is_empty()
+    {
+        println!(
+            "cargo:warning=sonicboom-qwen-llama: CUDA architectures overridden to {}",
+            architectures.to_string_lossy()
+        );
+        cmake.define("SONICBOOM_CUDA_ARCHITECTURES", architectures);
+    }
     if vulkan && let Some(dir) = find_spirv_include_dir() {
         // Handed to CMakeLists.txt, which adds it to the ggml-vulkan target
         // (the pinned llama.cpp revision never links the SPIRV-Headers package).
@@ -321,6 +348,11 @@ fn main() {
         println!("cargo:rustc-link-lib=cudart");
         println!("cargo:rustc-link-lib=cublas");
         println!("cargo:rustc-link-lib=cublasLt");
+        // The NCCL library path is only present in `cuda-link-paths.txt` when
+        // the collectives opt-in is enabled; link it then, never otherwise.
+        if nccl {
+            println!("cargo:rustc-link-lib=nccl");
+        }
         println!(
             "cargo:rustc-link-lib={}",
             if target_is_windows() {

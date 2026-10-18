@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
-"""Fast source/manifest checks before downloading or compiling dependencies."""
+"""Fast source/manifest checks before downloading or compiling dependencies.
+
+Dockerfile `COPY` instructions and `.dockerignore` rules are always written
+with POSIX separators, so every Docker-context path this module builds must be
+normalized to POSIX (`/`) before it is compared or matched. Building paths with
+`str(pathlib.Path(...))` emits `\\` on Windows and silently breaks those
+comparisons there; `to_docker_path` is the single normalization point.
+"""
 import fnmatch
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import tomllib
@@ -9,24 +16,68 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def to_docker_path(value):
+    """Return a POSIX, Docker-context-relative path for any host path style.
+
+    Accepts `str`, `PurePosixPath`, `PureWindowsPath` or `Path` and always
+    yields `/`-separated output, independent of the host operating system.
+    """
+    text = str(value).replace('\\', '/')
+    return PurePosixPath(text).as_posix()
+
+
+def to_fs_path(root, docker_path):
+    """Map a normalized Docker-context path back onto the local filesystem.
+
+    Windows accepts forward slashes in filesystem APIs, so `root / 'a/b'`
+    is portable; using `PurePosixPath.parts` keeps the join deterministic.
+    """
+    return root.joinpath(*PurePosixPath(docker_path).parts)
+
+
 def docker_included(path, rules):
+    path = to_docker_path(path)
     included = True
     for rule in rules:
         rule = rule.strip()
         if not rule or rule.startswith('#'):
             continue
         allow = rule.startswith('!')
-        pattern = rule.lstrip('!').rstrip('/')
+        pattern = to_docker_path(rule.lstrip('!').rstrip('/'))
         if fnmatch.fnmatch(path, pattern) or path.startswith(pattern + '/'):
             included = allow
     return included
+
+
+def _copy_sources(line):
+    """Extract normalized source operands from a `COPY` instruction.
+
+    Handles `COPY --chown=... a b dest`, `COPY a b ./`, directory sources and
+    root-relative (`/a/b`) or explicit relative (`./a/b`) spellings. Flags that
+    take a value are skipped so `--chown=user:group` never looks like a source.
+    """
+    tokens = line.split()
+    index = 1
+    while index < len(tokens) and tokens[index].startswith('--'):
+        index += 1
+    sources = tokens[index:-1]
+    return [to_docker_path(source.lstrip('./')) for source in sources]
+
+
+def _is_covered(path, copies):
+    return any(
+        path == source or path.startswith(source.rstrip('/') + '/')
+        for source in copies
+    )
 
 
 def validate(root=ROOT):
     manifest = tomllib.loads((root / 'Cargo.toml').read_text())
     required = ['Cargo.toml', 'Cargo.lock']
     for example in manifest.get('example', []):
-        required.append(example.get('path', f"examples/{example['name']}.rs"))
+        required.append(
+            to_docker_path(example.get('path', f"examples/{example['name']}.rs"))
+        )
     dependencies = dict(manifest.get('dependencies', {}))
     for table in manifest.get('target', {}).values():
         dependencies.update(table.get('dependencies', {}))
@@ -35,13 +86,14 @@ def validate(root=ROOT):
     for dependency in dependencies.values():
         if isinstance(dependency, dict) and 'path' in dependency:
             path = Path(dependency['path'])
-            required.append(str(path / 'Cargo.toml'))
+            required.append(to_docker_path(path / 'Cargo.toml'))
             local = tomllib.loads((root / path / 'Cargo.toml').read_text())
-            required.append(str(path / local.get('lib', {}).get('path', 'src/lib.rs')))
+            lib = local.get('lib', {}).get('path', 'src/lib.rs')
+            required.append(to_docker_path(path / lib))
     required.extend(['vendor/llama.cpp/include/llama.h', 'vendor/llama.cpp/CMakeLists.txt'])
     rules = (root / '.dockerignore').read_text().splitlines()
     for path in required:
-        if not (root / path).is_file():
+        if not to_fs_path(root, path).is_file():
             raise ValueError(f'Missing manifest/native input: {path}; initialize pinned submodules')
         if not docker_included(path, rules):
             raise ValueError(f'Docker context excludes required input: {path}')
@@ -52,10 +104,10 @@ def validate(root=ROOT):
             stage = line.split()[-1]
             copies = []
         if line.startswith('COPY ') and '--from=' not in line:
-            copies.extend(line.split()[1:-1])
+            copies.extend(_copy_sources(line))
         if 'cargo fetch ' in line:
             for path in required:
-                if not any(path == src or path.startswith(src.rstrip('/') + '/') for src in copies):
+                if not _is_covered(path, copies):
                     raise ValueError(f'{stage}: {path} must be copied before cargo fetch')
         if 'cargo build ' in line:
             if '--no-default-features' not in line:
