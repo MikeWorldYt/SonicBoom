@@ -17,6 +17,10 @@ set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 foreach(flag AVX AVX2 AVX512 FMA F16C BMI2 SSE42)
   set(GGML_${flag} OFF CACHE BOOL "" FORCE)
 endforeach()
+if(WIN32)
+  # Keep the nested shader-generator build below MSBuild's path-length limit.
+  set_property(DIRECTORY PROPERTY EP_BASE "${CMAKE_BINARY_DIR}/ep")
+endif()
 add_subdirectory(../../vendor/llama.cpp llama)
 # The pinned llama.cpp revision discovers the SPIRV-Headers CMake package but
 # never links its imported target, so ggml-vulkan.cpp's `#include <spirv/...>`
@@ -29,6 +33,10 @@ if(TARGET ggml-vulkan)
   endif()
   if(SONICBOOM_SPIRV_INCLUDE_DIR)
     target_include_directories(ggml-vulkan PRIVATE "${SONICBOOM_SPIRV_INCLUDE_DIR}")
+  endif()
+  if(WIN32)
+    # Make the SDK import library available in Cargo's native link directory.
+    install(FILES "${Vulkan_LIBRARY}" DESTINATION lib)
   endif()
 endif()
 add_library(sonicboom-qwen-llama STATIC shim.cpp)

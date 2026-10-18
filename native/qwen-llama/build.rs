@@ -292,7 +292,14 @@ fn main() {
     }
     if vulkan {
         println!("cargo:rustc-link-lib=static=ggml-vulkan");
-        println!("cargo:rustc-link-lib=vulkan");
+        println!(
+            "cargo:rustc-link-lib={}",
+            if target_is_windows() {
+                "vulkan-1"
+            } else {
+                "vulkan"
+            }
+        );
     }
     if cuda {
         println!("cargo:rustc-link-lib=static=ggml-cuda");
