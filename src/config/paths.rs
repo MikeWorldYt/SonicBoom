@@ -15,6 +15,7 @@
 use std::path::PathBuf;
 
 /// Application-specific directory name.
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 pub const APP_DIR_NAME: &str = "sonicboom";
 
 /// The platform configuration directory (uncreated).
