@@ -39,7 +39,14 @@ fn feature_list(manifest: &str, name: &str) -> Vec<String> {
 #[test]
 fn root_defaults_keep_core_providers_and_one_onnx_execution_provider() {
     let default = feature_list(&manifest("Cargo.toml"), "default");
-    for required in ["server", "playback", "qwen-gguf", "pocket-tts", "gui"] {
+    for required in [
+        "server",
+        "playback",
+        "qwen-gguf",
+        "qwen-gguf-vulkan",
+        "pocket-tts",
+        "gui",
+    ] {
         assert!(
             default.contains(&required.to_string()),
             "`default` unexpectedly dropped `{required}`: {default:?}"
@@ -55,11 +62,16 @@ fn root_defaults_keep_core_providers_and_one_onnx_execution_provider() {
         onnx_eps.len() <= 1,
         "`default` selects conflicting ONNX execution providers: {onnx_eps:?}"
     );
-    // NOTE: a native `qwen-gguf-vulkan`/`qwen-gguf-cuda` backend MAY be enabled
-    // in `default` by maintainer choice. It is intentionally not forbidden
-    // here, but doing so makes the matching GPU SDK a hard build requirement
-    // for everyone (CI/Docker included). The CPU-only configuration is
+    // NOTE: `qwen-gguf-vulkan` ships in `default`, so the Vulkan SDK (glslc,
+    // loader/headers, SPIRV-Headers) is a hard build requirement for every
+    // default build, CI included. Docker pins `--no-default-features` and
+    // stays CPU-only. The CPU-only local configuration is
     // `--no-default-features --features qwen-gguf`; see docs/providers.md.
+    // `qwen-gguf-cuda` must stay opt-in: CUDA and Vulkan stacks are distinct.
+    assert!(
+        !default.contains(&"qwen-gguf-cuda".to_string()),
+        "`default` must not enable the CUDA backend stack: {default:?}"
+    );
 }
 
 #[test]

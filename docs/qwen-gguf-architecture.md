@@ -144,7 +144,7 @@ and `Cargo.toml` on main:
 shader operations, offload, speed, output correctness or ONNX acceleration.
 No benchmark numbers are available for this backend.
 
-Vulkan build notes (opt-in `qwen-gguf-vulkan`): besides the Vulkan driver,
+Vulkan build notes (`qwen-gguf-vulkan`, in `default`): besides the Vulkan driver,
 headers (`vulkan-headers`), `glslc` and a `SPIRV-Headers` CMake package are
 required. The pinned llama.cpp revision finds the SPIRV-Headers package but
 does not add its include directory to the `ggml-vulkan` target, so the

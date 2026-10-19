@@ -93,8 +93,10 @@ jobs:
           fi
 
       # The default `playback` feature (rodio/cpal) links against ALSA on Linux.
-      - name: Install ALSA development libraries
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      # The default `qwen-gguf-vulkan` feature compiles ggml-vulkan, which
+      # needs the Vulkan SDK at build time (glslc, headers, SPIRV-Headers).
+      - name: Install ALSA and Vulkan development libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libvulkan-dev vulkan-tools glslc spirv-headers
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -163,9 +165,11 @@ jobs:
           restore-keys: |
             cargo-v3-${{ runner.os }}-build-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
 
-      # Install ALSA for audio playback feature (server-side queue)
-      - name: Install ALSA development libraries
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      # Install ALSA for audio playback feature (server-side queue).
+      # Default builds compile ggml-vulkan (`qwen-gguf-vulkan`), which needs
+      # the Vulkan SDK at build time.
+      - name: Install ALSA and Vulkan development libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libvulkan-dev vulkan-tools glslc spirv-headers
 
       # GPU-accelerated builds (`--features cuda`/`rocm`/`coreml`) require the
       # respective SDKs/toolchains and are validated locally, not in CI.

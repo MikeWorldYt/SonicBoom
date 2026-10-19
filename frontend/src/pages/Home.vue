@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, provide, ref, defineAsyncComponent } from 'vue';
+import { computed, nextTick, onMounted, provide, ref, watch, defineAsyncComponent } from 'vue';
 import { t } from '../i18n';
 import type { HomeData } from '../types';
 import { createStudio, studioKey } from '../composables/useStudio';
@@ -12,7 +12,20 @@ import FeedbackNotice from '../components/FeedbackNotice.vue';
 const props = defineProps<{ data: HomeData }>();
 const studio = createStudio(props.data); provide(studioKey, studio);
 const { token, info, loading, errors } = studio;
-const active = ref<StudioTab>('create');
+const tabs: StudioTab[] = ['create', 'voices', 'engines', 'settings'];
+function tabFromHash(): StudioTab | null {
+  const hash = window.location.hash.replace('#/', '').replace('#', '') as StudioTab;
+  return tabs.includes(hash) ? hash : null;
+}
+const active = ref<StudioTab>(tabFromHash() ?? 'create');
+onMounted(() => {
+  const sync = () => { const tab = tabFromHash(); if (tab) active.value = tab; };
+  window.addEventListener('hashchange', sync);
+});
+watch(active, value => {
+  const hash = `#/${value}`;
+  if (window.location.hash !== hash) history.replaceState(null, '', hash);
+});
 const modelStatus = computed(() => info.value?.model.status || (props.data.modelReady ? 'ready' : 'idle'));
 async function compose() { active.value = 'create'; await nextTick(); document.getElementById('text')?.focus(); }
 </script>

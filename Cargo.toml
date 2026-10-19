@@ -17,8 +17,13 @@ path = "src/lib.rs"
 # Native voice-cloning backends ship in default builds so every engine works
 # without a rebuild; providers stay disabled by default, so only the
 # Supertonic weights download until an engine is enabled.
-# GPU SDKs are explicit opt-ins; default binaries retain all providers on CPU.
-default = ["server", "playback", "qwen-gguf", "pocket-tts", "gui"]
+# The Qwen3 Vulkan backend ships in default builds too: `device = "vulkan"`
+# works without a rebuild wherever a Vulkan GPU exists, falling back to CPU
+# otherwise. This makes the Vulkan SDK (glslc, loader/headers, SPIRV-Headers)
+# a hard build requirement for default builds; build CPU-only with
+# `--no-default-features --features qwen-gguf` instead. CUDA stays an
+# explicit opt-in (`qwen-gguf-cuda`).
+default = ["server", "playback", "qwen-gguf", "qwen-gguf-vulkan", "pocket-tts", "gui"]
 server = [
     "dep:axum",
     "dep:tower",

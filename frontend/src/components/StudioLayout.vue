@@ -26,8 +26,8 @@ async function navigate(event: KeyboardEvent) {
 <template>
   <div class="studio-layout">
     <aside class="workspace-nav"><div role="tablist" :aria-label="t('Workspace')" @keydown="navigate">
-      <button v-for="section in sections" :id="`tab-${section.id}`" :key="section.id" role="tab" :aria-selected="active === section.id" :aria-controls="`panel-${section.id}`" :tabindex="active === section.id ? 0 : -1" :class="{ selected: active === section.id }" @click="active = section.id"><span class="nav-icon" aria-hidden="true">{{ section.icon }}</span>{{ t(section.label) }}</button>
-    </div></aside>
+      <button v-for="section in sections" :id="`tab-${section.id}`" :key="section.id" role="tab" :aria-selected="active === section.id" :aria-controls="`panel-${section.id}`" :tabindex="active === section.id ? 0 : -1" :class="{ selected: active === section.id }" :title="t(section.description)" @click="active = section.id"><span class="nav-icon" aria-hidden="true">{{ section.icon }}</span><span class="nav-label">{{ t(section.label) }}</span></button>
+    </div><p class="workspace-tip"><strong>{{ t(current.label) }}</strong>{{ t(current.description) }}</p></aside>
     <main id="main-content" class="workspace-content" tabindex="-1">
       <header class="workspace-heading"><div><h1>{{ t(current.label) }}</h1><p>{{ t(current.description) }}</p></div><slot name="actions"/></header>
       <slot name="notice"/>

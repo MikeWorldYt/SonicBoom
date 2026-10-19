@@ -62,7 +62,7 @@ and is shared by all providers (initialized once). Python was used
 |---|---|
 | (default) | Supertonic 3 + Pocket TTS compiled; optional providers disabled, no weights fetched |
 | `qwen-gguf` | Qwen3-TTS 1.7B GGUF/ONNX provider, CPU (`device=cpu\|auto`) |
-| `qwen-gguf-vulkan` | Additionally allow GGUF `device=vulkan` on Vulkan-capable GPUs (implies `qwen-gguf`) |
+| `qwen-gguf-vulkan` | Allow GGUF `device=vulkan` on Vulkan-capable GPUs (implies `qwen-gguf`; ships in `default`) |
 | `qwen-gguf-cuda` | Additionally allow GGUF `device=cuda` (NVIDIA only; implies `qwen-gguf`) |
 | `pocket-tts` | Pocket TTS ONNX provider, CPU execution provider only |
 | `cuda` / `rocm` / `coreml` | Existing ORT flags for Supertonic; they do **not** accelerate Pocket TTS |
@@ -128,14 +128,15 @@ supported, and the effective device is always reported.
 
 ## Qwen3-TTS 1.7B GGUF/ONNX setup (CPU smoke test)
 
-1. Default source builds include Qwen on CPU. Official releases add
-   `--features gui,qwen-gguf-vulkan` (Vulkan + CPU in one binary; loader
-   opened at runtime, CPU fallback with `device=auto`); add
+1. Default source builds include Qwen on CPU + Vulkan in one binary
+   (loader opened at runtime, CPU fallback with `device=auto`); building
+   them requires the Vulkan SDK (glslc, loader/headers, SPIRV-Headers).
+   Official releases add `--features gui` on top of the defaults; add
    `--features qwen-gguf-cuda` for native CUDA source builds. Provider
    status exposes compiled/available backends, Vulkan GPU name, requested
    vs effective device, model-loading status, Vulkan init error and CPU
    fallback reason. Verify real GPU use with
-   `cargo run --release --features qwen-gguf-vulkan --example qwen_gguf_smoke -- <model-dir> vulkan`.
+   `cargo run --release --example qwen_gguf_smoke -- <model-dir> vulkan`.
 2. Press Enable on the qwen3-gguf card (or set `enabled = true` and
    hot-reload): the server downloads the pinned bundle into
    `[providers.qwen3_gguf] model_dir` (`./models/qwen3-tts-1.7b-gguf`) in

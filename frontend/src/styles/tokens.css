@@ -32,7 +32,56 @@
   --space-5: 24px;
   --space-6: 32px;
   --content-max: 1440px;
-  --nav-width: 192px;
+  --nav-width: 176px;
+  --create-max: 1080px;
+  --radius-sm: 6px;
+}
+/* Manual theme override wins over the OS preference. */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --page: #f4f6f8;
+  --surface: #ffffff;
+  --surface-raised: #f8fafb;
+  --text: #203340;
+  --text-secondary: #4d6070;
+  --text-muted: #5f7281;
+  --border: #8193a0;
+  --border-subtle: #e1e7ec;
+  --accent: #076c77;
+  --accent-hover: #04535e;
+  --on-accent: #ffffff;
+  --accent-surface: #e0f0ee;
+  --success: #246642;
+  --success-surface: #e8f4ec;
+  --warning: #775400;
+  --warning-surface: #fff3cf;
+  --danger: #a12731;
+  --danger-surface: #fff0f0;
+  --focus: #076c77;
+  --shadow: 0 3px 18px rgb(24 42 55 / 6%);
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --page: #10191f;
+  --surface: #17242d;
+  --surface-raised: #1d2d38;
+  --text: #edf3f7;
+  --text-secondary: #c5d2dd;
+  --text-muted: #aabcc9;
+  --border: #6c8594;
+  --border-subtle: #344b59;
+  --accent: #8cdecc;
+  --accent-hover: #b2eddf;
+  --on-accent: #10352f;
+  --accent-surface: #193d38;
+  --success: #a3e4b8;
+  --success-surface: #203b2d;
+  --warning: #f3d383;
+  --warning-surface: #3b321c;
+  --danger: #ffb2b9;
+  --danger-surface: #442930;
+  --focus: #8cdecc;
+  --shadow: 0 3px 18px rgb(0 0 0 / 15%);
 }
 @media (prefers-color-scheme: dark) {
   :root {

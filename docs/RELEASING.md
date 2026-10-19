@@ -149,7 +149,8 @@ inputs and feature names. CI runs it before compilation on Linux and Windows.
 Official release binaries (exactly `sonicboom-windows-x86_64.zip` and
 `sonicboom-linux-x86_64.tar.gz`) include all providers with CPU + Vulkan
 backends, built with `cargo build --release --locked --features
-gui,qwen-gguf-vulkan`. The Vulkan SDK is a build-time-only requirement
+gui,qwen-gguf-vulkan` (Vulkan now also ships in plain default builds).
+The Vulkan SDK is a build-time-only requirement
 (Windows: pinned LunarG SDK via `scripts/ci/install-vulkan.ps1`; Linux:
 `libvulkan-dev vulkan-tools glslc spirv-headers`); end users need only the
 system Vulkan loader/driver. The executable opens the loader at runtime,
