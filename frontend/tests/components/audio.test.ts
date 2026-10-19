@@ -54,10 +54,29 @@ it('editor keeps original untouched, emits only after explicit apply and release
   const inputs = wrapper.findAll('input[type="number"]');
   await inputs[0].setValue(.25); await inputs[1].setValue(.75);
   await wrapper.findAll('button').find(button => button.text() === 'Preview selection')!.trigger('click');
-  expect(create).toHaveBeenCalledTimes(1);
+  // The preview keeps the cropped audio in memory: no object URL is created.
+  expect(create).not.toHaveBeenCalled();
+  expect(wrapper.find('.waveform-player').exists()).toBe(true);
   await wrapper.findAll('button').find(button => button.text() === 'Use trimmed recording')!.trigger('click');
   const result = wrapper.emitted('apply')![0][0] as File;
   expect(inspectWave(await result.arrayBuffer()).duration).toBe(.5);
   expect(inspectWave(await file.arrayBuffer()).duration).toBe(1);
-  wrapper.unmount(); expect(revoke).toHaveBeenCalledWith('blob:trim');
+});
+
+it('the exported selection releases its temporary URL', async () => {
+  vi.stubGlobal('File', NodeFile);
+  const create = vi.fn(() => 'blob:trim'), revoke = vi.fn();
+  vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke }));
+  // The download click would navigate the test document.
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  const file = new NodeFile([source()], 'original.wav', { type: 'audio/wav' });
+  const wrapper = mount(ReferenceEditor, { props: { file: file as unknown as File, maxBytes: 1000000 } });
+  await flushPromises();
+  await vi.waitFor(() => expect(wrapper.find('.audio-waveform').exists()).toBe(true));
+  const inputs = wrapper.findAll('input[type="number"]');
+  await inputs[0].setValue(.25); await inputs[1].setValue(.75);
+  await wrapper.findAll('button').find(button => button.text() === 'Export selected WAV')!.trigger('click');
+  expect(create).toHaveBeenCalledTimes(1);
+  await vi.waitFor(() => expect(revoke).toHaveBeenCalledWith('blob:trim'));
+  click.mockRestore();
 });

@@ -26,7 +26,11 @@ pub fn dev_mode() -> bool {
     cfg!(debug_assertions) && std::env::var("SONICBOOM_FRONTEND_DEV").as_deref() == Ok("1")
 }
 
-pub fn page(data: serde_json::Value) -> String {
+/// Build the HTML shell for a page.
+///
+/// `nonce` is the per-response CSP nonce: the frontend marks the one inline
+/// style it owns with it, so the page can keep a strict `style-src`.
+pub fn page(data: serde_json::Value, nonce: &crate::security::CspNonce) -> String {
     let template = if dev_mode() {
         include_str!("../../frontend/index.html").replace(
             "</head>",
@@ -43,7 +47,9 @@ pub fn page(data: serde_json::Value) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;");
-    template.replace("SONICBOOM_PAGE_DATA", &data)
+    template
+        .replace("SONICBOOM_PAGE_DATA", &data)
+        .replace("SONICBOOM_CSP_NONCE", nonce.as_str())
 }
 
 #[cfg(test)]
@@ -56,11 +62,20 @@ mod tests {
     fn hostile_voice_names_are_escaped() {
         let html = page(
             serde_json::json!({"page": "home", "voices": ["\"><script>alert(1)</script>", "A&B"]}),
+            &crate::security::CspNonce::new(),
         );
         assert!(!html.contains("<script>alert"));
         assert!(html.contains("&lt;script&gt;"));
         assert!(html.contains("A&amp;B"));
         assert!(!html.contains("unsafe-eval"));
+    }
+
+    #[test]
+    fn the_page_carries_the_csp_nonce() {
+        let nonce = crate::security::CspNonce::new();
+        let html = page(serde_json::json!({"page": "home"}), &nonce);
+        assert!(html.contains(nonce.as_str()), "the page must carry its nonce");
+        assert!(!html.contains("SONICBOOM_CSP_NONCE"), "the placeholder must be replaced");
     }
 
     #[tokio::test]

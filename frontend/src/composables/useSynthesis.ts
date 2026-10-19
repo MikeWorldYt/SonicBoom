@@ -19,6 +19,8 @@ export interface GenerationResult {
   quality?: QualityReport;
   model: string;
   voice: string;
+  /** The generated audio; the waveform player renders it directly. */
+  blob: Blob;
 }
 /** How many alternatives are kept before the oldest URL is released. */
 export const MAX_RESULTS = 4;
@@ -31,6 +33,7 @@ export function useSynthesis(studio: Studio) {
   const results = shallowRef<GenerationResult[]>([]);
   const audioUrl = ref('');
   const audioFilename = ref('');
+  const audioBlob = ref<Blob | null>(null);
   const error = shallowRef<Message | null>(null);
   const complete = ref(false);
   let lastInput: GenerationInput | null = null;
@@ -46,12 +49,14 @@ export function useSynthesis(studio: Studio) {
     results.value = [];
     audioUrl.value = '';
     audioFilename.value = '';
+    audioBlob.value = null;
   }
   // Detach the current-player pointer without discarding the comparison list:
   // a new attempt must never present stale audio as its own result.
   function resetCurrent() {
     audioUrl.value = '';
     audioFilename.value = '';
+    audioBlob.value = null;
   }
   function publish(result: GenerationResult) {
     const next = [result, ...results.value].slice(0, MAX_RESULTS);
@@ -59,6 +64,7 @@ export function useSynthesis(studio: Studio) {
     results.value = next;
     audioUrl.value = result.url;
     audioFilename.value = result.filename;
+    audioBlob.value = result.blob;
     for (const previous of evicted) release(previous);
   }
   function removeResult(index: number) {
@@ -70,6 +76,7 @@ export function useSynthesis(studio: Studio) {
     // Never leave the player pointing at a released object URL.
     audioUrl.value = next[0]?.url ?? '';
     audioFilename.value = next[0]?.filename ?? '';
+    audioBlob.value = next[0]?.blob ?? null;
   }
   async function monitor(generation: ActiveGeneration, signal: AbortSignal) {
     const current = () => !disposed && generation.requestEpoch === epoch;
@@ -86,6 +93,7 @@ export function useSynthesis(studio: Studio) {
       if (!current()) return;
       publish({
         jobId: generation.jobId,
+        blob: audio,
         url: URL.createObjectURL(audio),
         filename: `sonicboom-${generation.jobId}.wav`,
         durationSecs: result.audio_secs ?? 0,
@@ -176,5 +184,5 @@ export function useSynthesis(studio: Studio) {
   }, { flush: 'sync' });
   function dispose() { stopTokenWatch(); disposed = true; ++epoch; control?.abort(); clearAudio(); }
   if (getCurrentScope()) onScopeDispose(dispose);
-  return { pending, cancelling, jobId, active, snapshot, results, audioUrl, audioFilename, error, complete, canGenerate, generate, regenerate, removeResult, resume, cancel, dispose };
+  return { pending, cancelling, jobId, active, snapshot, results, audioUrl, audioFilename, audioBlob, error, complete, canGenerate, generate, regenerate, removeResult, resume, cancel, dispose };
 }

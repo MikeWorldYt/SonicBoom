@@ -9,6 +9,43 @@ use std::sync::Arc;
 
 use crate::config::ConfigManager;
 
+/// Content-Security-Policy for HTML pages.
+///
+/// `{nonce}` is replaced with a fresh random nonce per response. It lets
+/// exactly one audited inline style load (the audio player renders its
+/// waveform inside a shadow root with an inline stylesheet) without opening
+/// `style-src` to `'unsafe-inline'`.
+pub const CSP_TEMPLATE: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'nonce-{nonce}'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
+
+/// Development keeps `'unsafe-inline'` for styles: the Vite client injects
+/// stylesheets at runtime.
+const DEV_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws://localhost:5173; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
+
+/// Per-response CSP nonce, shared with the page so the frontend can mark the
+/// one inline style it owns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CspNonce(String);
+
+impl CspNonce {
+    /// 128 bits of randomness, hex encoded: a valid CSP nonce value.
+    pub fn new() -> Self {
+        use rand::RngCore;
+        let mut bytes = [0u8; 16];
+        rand::rng().fill_bytes(&mut bytes);
+        CspNonce(hex::encode(bytes))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for CspNonce {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Add defense-in-depth security headers to responses.
 ///
 /// - `X-Content-Type-Options: nosniff` on everything.
@@ -17,13 +54,16 @@ use crate::config::ConfigManager;
 /// - `X-Frame-Options: DENY` plus CSP `frame-ancestors 'none'` on HTML pages
 ///   to prevent clickjacking of the admin UI.
 /// - A strict CSP on HTML pages. All JavaScript and CSS live in same-origin
-///   static assets, so no `'unsafe-inline'` is needed. The TTS demo page
-///   plays audio from a blob URL, hence `media-src 'self' blob:`.
+///   static assets, so no `'unsafe-inline'` is needed; the single inline
+///   style the audio player owns is unlocked with a per-response nonce. The
+///   TTS demo page plays audio from a blob URL, hence `media-src 'self' blob:`.
 pub async fn security_headers(
     State(config): State<Arc<ConfigManager>>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Response {
+    let nonce = CspNonce::new();
+    request.extensions_mut().insert(nonce.clone());
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
 
@@ -51,16 +91,13 @@ pub async fn security_headers(
         .is_some_and(|ct| ct.contains("text/html"));
     if is_html {
         headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-        if crate::web::static_files::dev_mode() {
-            headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(
-                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws://localhost:5173; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"));
+        let policy = if crate::web::static_files::dev_mode() {
+            DEV_CSP.to_owned()
         } else {
-            headers.insert(
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(
-                "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
-            ),
-        );
+            CSP_TEMPLATE.replace("{nonce}", nonce.as_str())
+        };
+        if let Ok(value) = HeaderValue::from_str(&policy) {
+            headers.insert(header::CONTENT_SECURITY_POLICY, value);
         }
     }
     response
@@ -210,6 +247,47 @@ mod tests {
         assert!(csp.contains("object-src 'none'"), "csp: {csp}");
         assert!(csp.contains("media-src 'self' blob:"), "csp: {csp}");
         assert_eq!(body_text(response).await, "<html></html>");
+    }
+
+    /// The inline style the audio player owns is unlocked per response, so the
+    /// policy stays strict while the one audited stylesheet still loads.
+    #[tokio::test]
+    async fn html_responses_carry_a_fresh_nonce() {
+        let nonce_of = |csp: &str| {
+            csp.split("'nonce-")
+                .nth(1)
+                .and_then(|rest| rest.split('\'').next())
+                .unwrap_or_default()
+                .to_string()
+        };
+        let first = app()
+            .oneshot(Request::get("/html").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let first_csp = first
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(first_csp.contains("style-src 'self' 'nonce-"), "csp: {first_csp}");
+        assert!(!first_csp.contains("'unsafe-inline'"), "csp: {first_csp}");
+        let first_nonce = nonce_of(&first_csp);
+        assert_eq!(first_nonce.len(), 32, "nonce: {first_nonce}");
+        assert!(first_nonce.chars().all(|c| c.is_ascii_hexdigit()));
+        let second = app()
+            .oneshot(Request::get("/html").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let second_csp = second
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert_ne!(first_nonce, nonce_of(&second_csp), "nonces must be fresh");
     }
 
     #[tokio::test]

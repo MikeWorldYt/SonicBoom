@@ -115,6 +115,9 @@ The UI uses the English catalog as a fallback for future untranslated messages.
   Server-discovered limits drive local WAV inspection and transcript validation.
   The lazy reference editor offers explicit waveform preview, exact sample-frame
   cropping and WAV export while retaining the original recording.
+- `WaveformPlayer` wraps wavesurfer.js: the waveform is the scrubber, the
+  button is the transport, and the recording is loaded from a blob so the
+  strict CSP never has to allow a cross-origin fetch.
 - `EnginesPanel` / `EngineCard` consolidate provider status, models and toggles.
 - `SettingsPanel` / `SettingField` group frequent and advanced settings and keep
   unsaved values during polling, language changes and filtering.

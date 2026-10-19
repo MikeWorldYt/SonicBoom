@@ -53,6 +53,10 @@ async function complete() {
     const result = await api.completeSetup(input);
     completed.value = result;
     form.admin_password = '';
+    // No one-time secret to protect: go straight to the studio instead of
+    // parking on the success screen. With a token the success screen stays,
+    // gated on acknowledgement, so the secret is never skipped over.
+    if (!result.api_token) { continueToStudio(); return; }
     await nextTick();
     document.getElementById('setup-success')?.focus();
   });

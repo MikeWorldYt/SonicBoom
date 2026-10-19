@@ -127,7 +127,8 @@ No microphone requests, ASR weights or automatic transcription are introduced.
 The optional separate analyze/upload-ID endpoint and future offline ASR remain
 future work. No transcript correctness is claimed. Existing service/composable
 locations are migrated incrementally instead of introducing duplicate API/state
-layers. Local reactive forms, native audio and lazy SVG waveform cover behavior
+layers. Local reactive forms, the waveform player and lazy SVG waveform cover
+behavior
 without requiring every recommended library or target component filename.
 
 Automated keyboard/axe checks are not manual screen-reader certification. Browser

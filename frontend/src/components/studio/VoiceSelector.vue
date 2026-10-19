@@ -30,7 +30,7 @@ const current = computed({ get: () => props.voices.find(voice => voice.id === se
         </div>
       </ComboboxContent></ComboboxPortal>
     </ComboboxRoot>
-    <p id="voice-count" role="status" class="muted">{{ t('{count} voices', { count: filtered.length }) }}</p>
+    <p v-if="open" id="voice-count" role="status" class="muted">{{ t('{count} voices', { count: filtered.length }) }}</p>
     <p id="voice-selected" class="muted">{{ current ? t('Selected voice: {name}', { name: current.name }) : t('No voices match this search.') }}</p>
   </div>
 </template>

@@ -4,7 +4,14 @@ export function wav(seconds = 1) {
   const buffer = Buffer.alloc(44 + seconds * 8000 * 2);
   buffer.write('RIFF', 0); buffer.writeUInt32LE(buffer.length - 8, 4); buffer.write('WAVEfmt ', 8); buffer.writeUInt32LE(16, 16);
   buffer.writeUInt16LE(1, 20); buffer.writeUInt16LE(1, 22); buffer.writeUInt32LE(8000, 24); buffer.writeUInt32LE(16000, 28);
-  buffer.writeUInt16LE(2, 32); buffer.writeUInt16LE(16, 34); buffer.write('data', 36); buffer.writeUInt32LE(buffer.length - 44, 40); return buffer;
+  buffer.writeUInt16LE(2, 32); buffer.writeUInt16LE(16, 34); buffer.write('data', 36); buffer.writeUInt32LE(buffer.length - 44, 40);
+  // Audible content (660 Hz tone with an amplitude envelope) so waveform
+  // graphs render real bars instead of digital silence.
+  for (let frame = 0; frame < seconds * 8000; frame++) {
+    const envelope = Math.sin(Math.PI * frame / (seconds * 8000)) ** 2;
+    buffer.writeInt16LE(Math.round(20000 * envelope * Math.sin(2 * Math.PI * 660 * frame / 8000)), 44 + frame * 2);
+  }
+  return buffer;
 }
 export async function studioFixtures(page: Page) {
   const voices: any[] = [];

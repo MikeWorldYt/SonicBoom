@@ -65,6 +65,16 @@ mod tests {
         router(state)
             .await
             .layer(SessionManagerLayer::new(MemoryStore::default()))
+            // The production security middleware hands every page its CSP
+            // nonce; the test router does the same.
+            .layer(axum::middleware::from_fn(
+                |mut request: axum::extract::Request, next: axum::middleware::Next| async move {
+                    request
+                        .extensions_mut()
+                        .insert(crate::security::CspNonce::new());
+                    next.run(request).await
+                },
+            ))
     }
 
     #[tokio::test]

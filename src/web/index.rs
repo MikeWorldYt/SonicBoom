@@ -25,7 +25,10 @@ pub async fn get_ready(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
-pub async fn get_index(State(state): State<AppState>) -> Response {
+pub async fn get_index(
+    State(state): State<AppState>,
+    axum::extract::Extension(nonce): axum::extract::Extension<crate::security::CspNonce>,
+) -> Response {
     if !state.config.get().await.setup_complete {
         return axum::response::Redirect::to("/setup").into_response();
     }
@@ -57,8 +60,11 @@ pub async fn get_index(State(state): State<AppState>) -> Response {
             serde_json::json!({"status": status, "models": models})
         })
         .collect();
-    axum::response::Html(super::static_files::page(serde_json::json!({
-        "page": "home", "modelReady": !voices.is_empty(), "voices": voices, "status": message, "providers": providers,
-    })))
+    axum::response::Html(super::static_files::page(
+        serde_json::json!({
+            "page": "home", "modelReady": !voices.is_empty(), "voices": voices, "status": message, "providers": providers,
+        }),
+        &nonce,
+    ))
     .into_response()
 }

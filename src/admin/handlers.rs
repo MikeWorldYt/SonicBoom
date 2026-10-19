@@ -1,5 +1,5 @@
 use axum::{
-    extract::{ConnectInfo, Form, Path, State},
+    extract::{ConnectInfo, Extension, Form, Path, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
 };
@@ -12,6 +12,7 @@ use crate::{
     admin::{client_ip, lockout::LoginAttemptTracker, session, templates},
     auth::store::TokenStore,
     config::{ConfigManager, SecretStore, secrets},
+    security::CspNonce,
 };
 
 #[derive(Clone)]
@@ -26,11 +27,14 @@ pub struct AdminState {
     pub secrets: Arc<dyn SecretStore>,
 }
 
-pub async fn get_login(session: Session) -> Response {
+pub async fn get_login(
+    session: Session,
+    Extension(nonce): Extension<CspNonce>,
+) -> Response {
     if session::is_authenticated(&session).await {
         return Redirect::to("/admin").into_response();
     }
-    Html(templates::login_page(None)).into_response()
+    Html(templates::login_page(None, &nonce)).into_response()
 }
 
 #[derive(Deserialize)]
@@ -44,6 +48,7 @@ pub async fn post_login(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     session: Session,
+    Extension(nonce): Extension<CspNonce>,
     Form(form): Form<LoginForm>,
 ) -> Response {
     let config = state.config.get().await;
@@ -52,9 +57,10 @@ pub async fn post_login(
     if state.lockout.is_locked(ip) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
-            Html(templates::login_page(Some(
-                "Too many failed attempts. Try again later.",
-            ))),
+            Html(templates::login_page(
+                Some("Too many failed attempts. Try again later."),
+                &nonce,
+            )),
         )
             .into_response();
     }
@@ -80,7 +86,7 @@ pub async fn post_login(
         state.lockout.record_failure(ip);
         (
             StatusCode::UNAUTHORIZED,
-            Html(templates::login_page(Some("Invalid credentials."))),
+            Html(templates::login_page(Some("Invalid credentials."), &nonce)),
         )
             .into_response()
     }
@@ -100,14 +106,18 @@ pub async fn post_logout(session: Session, Form(form): Form<CsrfForm>) -> Respon
     Redirect::to("/admin/login").into_response()
 }
 
-pub async fn get_admin(State(state): State<AdminState>, session: Session) -> Response {
+pub async fn get_admin(
+    State(state): State<AdminState>,
+    session: Session,
+    Extension(nonce): Extension<CspNonce>,
+) -> Response {
     if !session::is_authenticated(&session).await {
         return Redirect::to("/admin/login").into_response();
     }
 
     let tokens = state.token_store.list().await;
     let csrf = session::csrf_token(&session).await;
-    Html(templates::admin_page(&tokens, &csrf, None)).into_response()
+    Html(templates::admin_page(&tokens, &csrf, None, &nonce)).into_response()
 }
 
 #[derive(Deserialize)]
@@ -119,6 +129,7 @@ pub struct CreateTokenForm {
 pub async fn post_create_token(
     State(state): State<AdminState>,
     session: Session,
+    Extension(nonce): Extension<CspNonce>,
     Form(form): Form<CreateTokenForm>,
 ) -> Response {
     if !session::is_authenticated(&session).await {
@@ -134,7 +145,7 @@ pub async fn post_create_token(
         Err(message) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Html(templates::error_page(message)),
+                Html(templates::error_page(message, &nonce)),
             )
                 .into_response();
         }
@@ -152,7 +163,7 @@ pub async fn post_create_token(
     // Show the raw token exactly once; it is never persisted or re-displayed.
     let tokens = state.token_store.list().await;
     let csrf = session::csrf_token(&session).await;
-    Html(templates::admin_page(&tokens, &csrf, Some(&raw))).into_response()
+    Html(templates::admin_page(&tokens, &csrf, Some(&raw), &nonce)).into_response()
 }
 
 /// Parse the admin `datetime-local` expiry field.

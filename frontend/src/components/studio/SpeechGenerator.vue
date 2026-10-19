@@ -4,14 +4,18 @@ import { t, renderMessage } from '../../i18n';
 import { useStudio } from '../../composables/useStudio';
 import { useSynthesis } from '../../composables/useSynthesis';
 import NumberField from '../ui/NumberField.vue';
+import WaveformPlayer from '../audio/WaveformPlayer.vue';
 import VoiceSelector from './VoiceSelector.vue';
 const studio = useStudio();
 const { text, model, voice, language, models, selectedModel, availableVoices, preview, sampling, samplingIssues, info, resetSampling } = studio;
-const { pending, cancelling, jobId, active, snapshot, results, audioUrl, audioFilename, error, complete, canGenerate, generate, regenerate, removeResult, resume, cancel } = useSynthesis(studio);
-const player = ref<HTMLAudioElement | null>(null);
-const comparisons = ref<HTMLElement | null>(null);
-function pauseComparisons(except?: EventTarget | null) { for (const audio of comparisons.value?.querySelectorAll('audio') || []) if (audio !== except) audio.pause(); }
-function comparisonPlay(event: Event) { player.value?.pause(); pauseComparisons(event.target); }
+const { pending, cancelling, jobId, active, snapshot, results, audioUrl, audioFilename, audioBlob, error, complete, canGenerate, generate, regenerate, removeResult, resume, cancel } = useSynthesis(studio);
+type PlayerHandle = { play: () => Promise<unknown> | undefined; pause: () => void };
+const player = ref<PlayerHandle | null>(null);
+const comparisons = new Map<string, PlayerHandle>();
+function registerComparison(id: string, handle: PlayerHandle | null) { if (handle) comparisons.set(id, handle); else comparisons.delete(id); }
+// One recording at a time: starting a preview silences the other versions.
+function pauseComparisons(except?: string) { for (const [id, handle] of comparisons) if (id !== except) handle.pause(); }
+function comparisonPlay(id: string) { player.value?.pause(); pauseComparisons(id); }
 watch(pending, value => { if (value) pauseComparisons(); });
 const advancedOpen = ref(false);
 const predictorOpen = ref(false);
@@ -45,10 +49,8 @@ watch([model, voice, language], ([nextModel, nextVoice, nextLanguage]) => {
 const quality = computed(() => snapshot.value?.quality);
 const qualityIssues = computed(() => quality.value?.issues ?? []);
 watch(preview, () => void generate(true));
-function detachPlayback() { player.value?.pause(); player.value?.removeAttribute('src'); player.value?.load(); }
-// Stop before v-if removes the old element and clears its template ref.
+function detachPlayback() { player.value?.pause(); }
 watch(audioUrl, (_value, previous) => { if (previous) detachPlayback(); }, { flush: 'sync' });
-watch(audioUrl, value => { if (value) void player.value?.play().catch(() => {}); }, { flush: 'post' });
 watch(advancedAvailable, value => { if (!value) advancedOpen.value = false; });
 onBeforeUnmount(() => { detachPlayback(); pauseComparisons(); });
 </script>
@@ -94,11 +96,11 @@ onBeforeUnmount(() => { detachPlayback(); pauseComparisons(); });
   <div id="status" role="status" aria-live="polite"><progress v-if="pending" class="generate-progress" :aria-label="t('Generating…')"/><template v-if="pending && snapshot"><span v-if="snapshot.context">{{ snapshot.context.model }} · {{ snapshot.context.effective_device }} · </span>{{ t(snapshot.stage) }} · {{ t('{seconds}s elapsed', { seconds: Math.floor(snapshot.elapsed_secs || 0) }) }}<span v-if="snapshot.frames"> · {{ t('{count} generated frames', { count: snapshot.frames }) }}</span><p v-if="snapshot.context?.provider === 'qwen3-gguf' && snapshot.context.effective_device === 'cpu'" class="muted">{{ t('CPU inference can be slow.') }}</p></template><span v-if="complete">{{ t('Completed. Audio is ready to play or download.') }}</span></div>
   <details v-if="snapshot?.context" id="generationDiagnostics"><summary>{{ t('Generation diagnostics') }}</summary><p>{{ snapshot.context.provider }} · {{ snapshot.context.model }} · {{ snapshot.context.effective_device }} · {{ snapshot.context.voice }}</p><p v-if="snapshot.audio_secs">{{ t('Generated duration: {seconds}s', { seconds: snapshot.audio_secs.toFixed(2) }) }} · RTF {{ snapshot.rtf?.toFixed(2) ?? '—' }}</p><p v-if="snapshot.context.seed">{{ t('Seed: {seed}', { seed: snapshot.context.seed }) }}</p><p v-else>{{ t('Seed: not exposed by this API') }}</p><p v-if="quality">{{ t('Sampling preset: {preset}', { preset: quality.mode }) }} · {{ t('Quality: {status}', { status: quality.quality_status }) }} · {{ t('Warnings: {count}', { count: qualityIssues.length }) }} · {{ t('Retries: {count}', { count: quality.retries }) }}</p><ul v-if="qualityIssues.length" class="quality-issues"><li v-for="issue in qualityIssues" :key="issue.kind">{{ t('{kind}: {detail}', { kind: issue.kind, detail: issue.detail }) }}</li></ul><p v-if="quality?.echo?.asr_required" class="muted">{{ t('Reference-echo detection needs an offline ASR transcript; none is claimed here.') }}</p></details>
   <p v-if="error" role="alert" class="feedback error">{{ renderMessage(error) }} <span v-if="jobId">{{ t('Use Resume monitoring or Cancel generation.') }}</span></p>
-  <template v-if="audioUrl"><audio id="player" ref="player" :src="audioUrl" controls :aria-label="t('Latest generated audio')" @play="pauseComparisons()"/><a id="downloadAudio" :href="audioUrl" :download="audioFilename">{{ t('Download generated audio') }}</a></template>
+  <template v-if="audioUrl"><WaveformPlayer id="player" ref="player" :blob="audioBlob" :label="t('Latest generated audio')" autoplay @play="pauseComparisons()"/><a id="downloadAudio" :href="audioUrl" :download="audioFilename">{{ t('Download generated audio') }}</a></template>
   <p v-else class="output-hint">{{ t('Your audio will appear here, ready to listen or download.') }}</p>
   <details v-if="results.length > 1" id="resultComparison"><summary>{{ t('Compare generated versions') }}</summary>
-    <ul ref="comparisons" class="result-list"><li v-for="(result, index) in results" :key="result.jobId">
-      <audio :src="result.url" controls :aria-label="t('Generated version {version}', { version: index + 1 })" @play="comparisonPlay"/>
+    <ul class="result-list"><li v-for="(result, index) in results" :key="result.jobId">
+      <WaveformPlayer :ref="handle => registerComparison(result.jobId, handle as PlayerHandle | null)" :blob="result.blob" :label="t('Generated version {version}', { version: index + 1 })" compact @play="comparisonPlay(result.jobId)"/>
       <span class="muted">{{ result.text.slice(0, 80) }} · {{ result.voice }} · {{ t(`language.${result.language}`) }} · {{ result.model }} · {{ t('{seconds}s', { seconds: result.durationSecs.toFixed(2) }) }}<template v-if="result.preset"> · {{ t('Preset: {preset}', { preset: result.preset }) }}</template><template v-if="result.seed"> · {{ t('Seed: {seed}', { seed: result.seed }) }}</template><template v-if="result.quality"> · {{ t('Quality: {status}', { status: result.quality.quality_status }) }}</template></span>
       <a :href="result.url" :download="result.filename">{{ t('Download') }}</a>
       <button type="button" class="btn-inline" @click="removeResult(index)">{{ t('Remove') }}</button>

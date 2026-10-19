@@ -37,6 +37,24 @@ describe('cloning wizard', () => {
     expect(document.activeElement?.id).toBe('cloneFile');
     expect(mock.studio.api.createVoice).not.toHaveBeenCalled();
   });
+  it('describes the mode in plain words and reports the recording details', async () => {
+    await reference(wav(5));
+    const mode = wrapper.get('.mode-option');
+    expect(mode.text()).toContain('Audio prompt');
+    expect(mode.text()).toContain('No transcript is needed');
+    expect(wrapper.get('.file-name').text()).toBe('ref.wav');
+    expect(wrapper.get('.file-meta').text()).toContain('5.00 s · 8000 Hz');
+    expect(wrapper.get('.status-pill').text()).toContain('Good length');
+  });
+  it('returns to the empty drop zone when the recording is removed', async () => {
+    await reference(wav(5));
+    const remove = wrapper.findAll('.file-actions button').find(button => button.text() === 'Remove file')!;
+    await remove.trigger('click');
+    await flushPromises();
+    expect(wrapper.find('.dropzone-empty').exists()).toBe(true);
+    expect(wrapper.find('.file-name').exists()).toBe(false);
+    expect(wrapper.find('.reference-preview').exists()).toBe(false);
+  });
   it('retains draft on failure and successful report until explicit next action', async () => {
     await reference(wav());
     expect(wrapper.text()).toContain('8000 Hz');

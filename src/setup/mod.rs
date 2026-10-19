@@ -33,7 +33,11 @@ use crate::{AppState, auth::AuthenticatedToken};
 /// `GET /setup` — the wizard page.
 ///
 /// Redirects to the admin page once setup is done.
-pub async fn get_setup(_token: AuthenticatedToken, State(state): State<AppState>) -> Response {
+pub async fn get_setup(
+    _token: AuthenticatedToken,
+    State(state): State<AppState>,
+    axum::extract::Extension(nonce): axum::extract::Extension<crate::security::CspNonce>,
+) -> Response {
     if state.config.get().await.setup_complete {
         return axum::response::Redirect::to("/").into_response();
     }
@@ -41,6 +45,7 @@ pub async fn get_setup(_token: AuthenticatedToken, State(state): State<AppState>
         [(axum::http::header::CACHE_CONTROL, "no-store")],
         Html(crate::web::static_files::page(
             serde_json::json!({"page": "setup"}),
+            &nonce,
         )),
     )
         .into_response()

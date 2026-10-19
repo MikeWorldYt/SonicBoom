@@ -1,5 +1,5 @@
 import { computed, ref, watch, onBeforeUnmount, reactive, nextTick } from 'vue';
-import { t, uiError, msg, renderMessage, errorMessage, type Message } from '../../i18n';
+import { t, uiError, msg, renderMessage, errorMessage, computedMessage, type Message } from '../../i18n';
 import { useStudio } from '../../composables/useStudio';
 import { modelLanguages } from '../../services/providerLanguages';
 import { ApiError } from '../../services/http';
@@ -16,6 +16,7 @@ let serial = 0;
 let revalidate = false;
 async function invalid(field: string, message: Message): Promise<never> {
   fieldIssues[field] = message;
+  fieldFailure = true;
   step.value = ['cloneName', 'cloneConsent'].includes(field) ? 2 : field === 'cloneProvider' ? 0 : 1;
   await nextTick();
   document.getElementById(field)?.focus();
@@ -24,16 +25,21 @@ async function invalid(field: string, message: Message): Promise<never> {
 function cancelAnalysis() { ++serial; analysis?.abort(); }
 const limits = ref<VoiceConstraints | null>(null);
 const metadata = ref<ReferenceMetadata | null>(null);
-const previewUrl = ref('');
-watch(previewUrl, (value, old) => { if (old) URL.revokeObjectURL(old); });
 let disposed = false;
-onBeforeUnmount(() => { disposed = true; cancelAnalysis(); if (previewUrl.value) URL.revokeObjectURL(previewUrl.value); });
+onBeforeUnmount(() => { disposed = true; cancelAnalysis(); });
 const studio = useStudio();
 const { capabilities, providers } = studio;
 const identity = () => studio.scopeEpoch?.value ?? studio.token?.value;
 const task = useTask(); const { pending, feedback } = task;
+let fieldFailure = false;
+// A failure attached to a field is shown next to that field, so the summary banner stays out of the way.
+async function runWizard(action: () => Promise<unknown>) {
+  fieldFailure = false;
+  await task.run(action);
+  if (fieldFailure) feedback.value = null;
+}
 watch(pending, async value => {
-  if (!value && revalidate && file.value && !created.value) { revalidate = false; void task.run(() => validateRecording(false)); return; }
+  if (!value && revalidate && file.value && !created.value) { revalidate = false; void runWizard(() => validateRecording(false)); return; }
   if (!value && Object.keys(fieldIssues).length) {
     await nextTick(); document.getElementById(Object.keys(fieldIssues)[0])?.focus();
   }
@@ -82,11 +88,11 @@ watch(needsTranscript, value => { if (!value) transcript.value = ''; });
 async function selectFile(selected: File | null, trimmed = false) {
   if (!trimmed) originalFile.value = selected;
   cancelAnalysis();
-  metadata.value = null; previewUrl.value = '';
+  metadata.value = null;
   referenceWarnings.value = []; referenceDefects.value = []; referenceGuidance.value = [];
   file.value = selected;
   delete fieldIssues.cloneFile;
-  if (selected) await task.run(() => validateRecording(false));
+  if (selected) await runWizard(() => validateRecording(false));
 }
 async function validateRecording(checkTranscript = true) {
   for (const key of Object.keys(fieldIssues)) delete fieldIssues[key];
@@ -104,14 +110,13 @@ async function validateRecording(checkTranscript = true) {
   }
   if (disposed || current !== serial || file.value !== selected) throw uiError('Reference selection changed. Please try again.');
   metadata.value = result;
-  if (!previewUrl.value) previewUrl.value = URL.createObjectURL(selected);
   const constraint = limits.value.providers[provider.value];
   if (!constraint?.models.includes(model.value) || !constraint.clone_modes.includes(mode.value) || !languages.value.includes(language.value)) return invalid('cloneProvider', msg('Engine selection changed. Choose a supported model, mode and language.'));
   if ([...transcript.value.trim()].length > limits.value.transcript_max_chars) return invalid('cloneTranscript', msg('Transcript exceeds {max} characters.', { max: limits.value.transcript_max_chars }));
   if (checkTranscript && needsTranscript.value && !transcript.value.trim()) return invalid('cloneTranscript', msg('ICL mode needs the exact reference transcript.'));
 }
 async function next() {
-  await task.run(async () => {
+  await runWizard(async () => {
     if (step.value === 0) { if (!cap.value) throw uiError('No cloning engine is available right now.'); if (!model.value) throw uiError('Pick a model.'); }
     else {
       await validateRecording();
@@ -122,7 +127,7 @@ async function next() {
 }
 async function save() {
   const owner = identity();
-  await task.run(async () => {
+  await runWizard(async () => {
     await validateRecording();
     if (disposed || owner !== identity()) return;
     if (!name.value.trim() || [...name.value.trim()].length > limits.value!.name_max_chars) return invalid('cloneName', msg('Name must be 1–{max} characters.', { max: limits.value!.name_max_chars }));
@@ -136,16 +141,19 @@ async function save() {
       if (disposed || owner !== identity()) return;
       if (error instanceof ApiError && error.fields) {
         const ids: Record<string, string> = { name: 'cloneName', transcript: 'cloneTranscript', consent_basis: 'cloneConsent', provider: 'cloneProvider', model: 'cloneModel', language: 'cloneLang', mode: 'cloneMode', file: 'cloneFile' };
+        const trace = error.requestId ? ` (${t('Request ID: {id}', { id: error.requestId })})` : '';
         for (const issue of error.fields) {
           const id = ids[issue.field];
           if (!id) continue;
-          fieldIssues[id] = issue.field === 'transcript' && issue.code === 'required' ? msg('ICL mode needs the exact reference transcript.') :
+          const base = issue.field === 'transcript' && issue.code === 'required' ? msg('ICL mode needs the exact reference transcript.') :
             issue.field === 'transcript' && issue.code === 'too_long' && typeof issue.expected === 'number' ? msg('Transcript exceeds {max} characters.', { max: issue.expected }) :
             issue.field === 'name' ? msg('Name must be 1–{max} characters.', { max: limits.value!.name_max_chars }) :
             issue.field === 'consent_basis' ? msg('Consent basis is required (e.g. owner).') : msg(issue.message);
+          // The field shows the message, so the correlation id travels with it.
+          fieldIssues[id] = trace ? computedMessage(() => renderMessage(base) + trace) : base;
         }
         const id = Object.keys(fieldIssues)[0];
-        if (id) step.value = ['cloneName', 'cloneConsent'].includes(id) ? 2 : ['cloneProvider', 'cloneModel', 'cloneLang'].includes(id) ? 0 : 1;
+        if (id) { fieldFailure = true; step.value = ['cloneName', 'cloneConsent'].includes(id) ? 2 : ['cloneProvider', 'cloneModel', 'cloneLang'].includes(id) ? 0 : 1; }
       }
       throw error;
     }
@@ -164,18 +172,19 @@ async function save() {
   if (owner !== identity()) feedback.value = null;
 }
 watch(identity, () => {
-  cancelAnalysis(); created.value = null; previewUrl.value = ''; metadata.value = null;
+  cancelAnalysis(); created.value = null; metadata.value = null;
   referenceWarnings.value = []; referenceDefects.value = []; referenceGuidance.value = [];
 }, { flush: 'sync' });
 async function applyTrim(selected: File) { await selectFile(selected, true); }
 async function restoreOriginal() { if (originalFile.value) await selectFile(originalFile.value, true); }
-function createAnother() { created.value = null; originalFile.value = null; step.value = 0; name.value = ''; consent.value = ''; transcript.value = ''; file.value = null; metadata.value = null; previewUrl.value = ''; }
+function createAnother() { created.value = null; originalFile.value = null; step.value = 0; name.value = ''; consent.value = ''; transcript.value = ''; file.value = null; metadata.value = null; }
 function tryVoice() { if (created.value) { studio.selectProfile(created.value, true); emit('created'); } }
 watch([provider, model, mode, language], () => {
-  cancelAnalysis(); metadata.value = null;
+  // The recording does not change, so its measurements stay visible while the new selection is checked.
+  cancelAnalysis();
   if (!file.value || created.value) return;
   if (pending.value) revalidate = true;
-  else { revalidate = false; void task.run(() => validateRecording(false)); }
+  else { revalidate = false; void runWizard(() => validateRecording(false)); }
 });
-return { originalFile, applyTrim, restoreOriginal, created, fieldErrors, cancelAnalysis, createAnother, tryVoice, limits, metadata, previewUrl, pending, feedback, step, provider, model, language, mode, referenceWarnings, referenceDefects, referenceGuidance, referenceMessage, name, consent, transcript, file, choices, cap, languages, needsTranscript, engineReady, selectFile, next, save };
+return { originalFile, applyTrim, restoreOriginal, created, fieldErrors, cancelAnalysis, createAnother, tryVoice, limits, metadata, pending, feedback, step, provider, model, language, mode, referenceWarnings, referenceDefects, referenceGuidance, referenceMessage, name, consent, transcript, file, choices, cap, languages, needsTranscript, engineReady, selectFile, next, save };
 }

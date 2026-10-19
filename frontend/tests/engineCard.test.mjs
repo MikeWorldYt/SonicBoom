@@ -26,29 +26,39 @@ async function render(provider, selected = 'pocket-tts-en') {
   return renderToString(app);
 }
 
-test('ready English exposes activation buttons for all five other languages', async () => {
+function selectedOption(html) {
+  const matches = html.match(/<option[^>]*selected[^>]*>/g) || [];
+  assert.equal(matches.length, 1, `exactly one model must be selected: ${matches.join(' ')}`);
+  return matches[0];
+}
+function activateButton(html) {
+  const match = html.match(/<button[^>]*class="engine-activate"[^>]*>[\s\S]*?<\/button>/);
+  assert.ok(match, 'a single Activate control must exist');
+  return match[0];
+}
+test('ready English lists every model once with the active one selected', async () => {
   const html = await render({ provider_id: 'pocket-tts', enabled: true, state: 'ready', active_model: models[0] });
-  for (const model of models.slice(1)) assert.ok(html.includes(`aria-label="Activate ${model}"`));
-  assert.ok(!html.includes('aria-label="Activate pocket-tts-en"'));
-  assert.ok(html.includes('>Active</span>'));
+  for (const model of models) assert.ok(html.includes(`value="${model}"`), `missing option ${model}`);
+  assert.ok(selectedOption(html).includes(`value="${models[0]}"`));
+  assert.ok(/disabled/.test(activateButton(html)), 'activating the already-active model must be disabled');
 });
-test('disabled provider offers activation for every supported model', async () => {
+test('disabled provider offers every model with an enabled Activate control', async () => {
   const html = await render({ provider_id: 'pocket-tts', enabled: false, state: 'disabled' });
-  for (const model of models) assert.ok(html.includes(`aria-label="Activate ${model}"`));
+  for (const model of models) assert.ok(html.includes(`value="${model}"`), `missing option ${model}`);
+  assert.ok(!/disabled/.test(activateButton(html)));
   assert.ok(!html.includes('>Active</span>'));
 });
-test('loading selection is not labeled active and prevents overlapping switches', async () => {
+test('loading selection is marked selected and blocks overlapping switches', async () => {
   const html = await render({ provider_id: 'pocket-tts', enabled: true, state: 'loading', active_model: models[1] }, models[1]);
-  assert.ok(html.includes('>Loading…</span>'));
-  assert.ok(!html.includes('>Active</span>'));
-  assert.equal((html.match(/disabled aria-label="Activate /g) || []).length, 5);
+  assert.ok(selectedOption(html).includes(`value="${models[1]}"`));
+  assert.ok(/disabled/.test(activateButton(html)));
+  assert.ok(html.includes('Preparing the selected model.'));
 });
 test('Spanish activation controls and loading help are localized', async () => {
   setLocale('es');
   try {
     const html = await render({ provider_id: 'pocket-tts', enabled: true, state: 'loading', active_model: models[1] }, models[1]);
-    assert.ok(html.includes('aria-label="Activar pocket-tts-pt"'));
-    assert.ok(html.includes('>Cargando…</span>'));
+    assert.ok(html.includes('>Activar</button>') || html.includes('>Cargando…</button>'));
     assert.ok(html.includes('Preparando el modelo seleccionado.'));
   } finally { setLocale('en'); }
 });
