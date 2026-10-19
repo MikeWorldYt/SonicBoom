@@ -27,7 +27,6 @@ use axum::{
 pub async fn router(state: AppState) -> Router {
     let tts_body_limit = state.config.get().await.tts.max_body_bytes;
     let openai_body_limit = state.config.get().await.tts.openai_max_body_bytes;
-    let voices_body_limit = state.config.get().await.voices.max_upload_bytes;
     #[cfg(feature = "playback")]
     let queue_body_limit = state.config.get().await.tts.queue_max_body_bytes;
 
@@ -82,8 +81,9 @@ pub async fn router(state: AppState) -> Router {
         // Managed cloning voice profiles (reference upload + preview).
         .route(
             "/api/voices/clones",
-            post(voices::post_clones).route_layer(DefaultBodyLimit::max(voices_body_limit)),
+            post(voices::post_clones).route_layer(DefaultBodyLimit::disable()),
         )
+        .route("/api/voices/constraints", get(voices::get_constraints))
         .route("/api/voices", get(voices::get_voices))
         .route(
             "/api/voices/{id}",
@@ -639,6 +639,11 @@ mod tests {
     }
 
     async fn voices_test_app() -> (Router, String, String) {
+        let (app, token, dir, _) = voices_test_app_with_state().await;
+        (app, token, dir)
+    }
+
+    async fn voices_test_app_with_state() -> (Router, String, String, AppState) {
         let path = std::env::temp_dir().join(format!(
             "sonicboom-voices-auth-test-{}-{}.json",
             std::process::id(),
@@ -646,11 +651,12 @@ mod tests {
         ));
         let store = TokenStore::load(path.to_str().unwrap()).await.unwrap();
         let (_token, raw) = store.create(None).await.unwrap();
-        let config = voices_test_config();
+        let mut config = voices_test_config();
+        config.setup_complete = true;
         let store_dir = config.voices.store_dir.clone();
         let state = test_state(config, Arc::new(store), Arc::new(None));
         let _ = std::fs::remove_file(&path);
-        (router(state).await, raw, store_dir)
+        (router(state.clone()).await, raw, store_dir, state)
     }
 
     fn raw_request(
@@ -929,6 +935,252 @@ mod tests {
         let body = String::from_utf8_lossy(&bytes);
         assert!(body.contains("language") && body.contains("pt"), "{body}");
         let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    fn multipart_body(metadata: &str, wav: &[u8], mime: &str, extra: &str) -> Vec<u8> {
+        let mut body = format!("--bound\r\nContent-Disposition: form-data; name=\"metadata\"\r\nContent-Type: application/json\r\n\r\n{metadata}\r\n--bound\r\nContent-Disposition: form-data; name=\"file\"; filename=\"ref.wav\"\r\nContent-Type: {mime}\r\n\r\n").into_bytes();
+        body.extend(wav);
+        body.extend(format!("\r\n{extra}--bound--\r\n").as_bytes());
+        body
+    }
+
+    #[tokio::test]
+    async fn legacy_upload_still_tolerates_unknown_query_parameters() {
+        let (app, token, dir) = voices_test_app().await;
+        let wav = sonicboom::tts::audio::encode_audio(
+            &vec![0.1; 8000],
+            8000,
+            sonicboom::tts::audio::AudioFormat::Wav,
+        )
+        .unwrap();
+        let response = app.oneshot(raw_request("POST", "/api/voices/clones?name=legacy&provider=pocket-tts&model=pocket-tts-en&language=en&mode=audio_prompt&consent_basis=owner&client_hint=legacy", Some(&token), "audio/wav", &wav)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn multipart_reserves_memory_before_parsing_the_request_body() {
+        let (app, token, _, state) = voices_test_app_with_state().await;
+        let slots = state.inference_gate.reference_slots.clone();
+        let count = slots.available_permits() as u32;
+        let _held = slots.acquire_many_owned(count).await.unwrap();
+        let response = app
+            .oneshot(raw_request(
+                "POST",
+                "/api/voices/clones",
+                Some(&token),
+                "multipart/form-data; boundary=bound",
+                b"malformed multipart",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(
+            body_json(response).await["message"]
+                .as_str()
+                .unwrap()
+                .contains("Reference preparation capacity")
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_rejects_stale_constraint_revision_without_storing_audio() {
+        let (app, token, dir) = voices_test_app().await;
+        let metadata = serde_json::json!({"name":"test","provider":"pocket-tts","model":"pocket-tts-en","language":"en","mode":"audio_prompt","consent_basis":"owner","expected_revision":0}).to_string();
+        let body = multipart_body(&metadata, b"invalid", "audio/wav", "");
+        let response = app
+            .clone()
+            .oneshot(raw_request(
+                "POST",
+                "/api/voices/clones",
+                Some(&token),
+                "multipart/form-data; boundary=bound",
+                &body,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let list = app
+            .oneshot(raw_request(
+                "GET",
+                "/api/voices",
+                Some(&token),
+                "application/json",
+                &[],
+            ))
+            .await
+            .unwrap();
+        assert!(body_json(list).await["data"].as_array().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn multipart_rejects_malformed_duplicate_and_unknown_metadata() {
+        let (app, token, _) = voices_test_app().await;
+        let valid = r#"{"name":"test","provider":"pocket-tts","model":"pocket-tts-en","language":"en","mode":"audio_prompt","consent_basis":"owner"}"#;
+        let wav = sonicboom::tts::audio::encode_audio(
+            &vec![0.1; 8000],
+            8000,
+            sonicboom::tts::audio::AudioFormat::Wav,
+        )
+        .unwrap();
+        let duplicate =
+            "--bound\r\nContent-Disposition: form-data; name=\"metadata\"\r\n\r\n{}\r\n";
+        for (metadata, mime, extra, status) in [
+            ("{}", "audio/wav", "", StatusCode::BAD_REQUEST),
+            ("not-json", "audio/wav", "", StatusCode::BAD_REQUEST),
+            (valid, "audio/wav", duplicate, StatusCode::BAD_REQUEST),
+            (valid, "audio/mpeg", "", StatusCode::UNSUPPORTED_MEDIA_TYPE),
+        ] {
+            let body = multipart_body(metadata, &wav, mime, extra);
+            let response = app
+                .clone()
+                .oneshot(raw_request(
+                    "POST",
+                    "/api/voices/clones",
+                    Some(&token),
+                    "multipart/form-data; boundary=bound",
+                    &body,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+        }
+    }
+
+    #[tokio::test]
+    async fn multipart_limit_updates_without_recreating_router_and_counts_unicode_scalars() {
+        let (app, token, dir, state) = voices_test_app_with_state().await;
+        let wav = sonicboom::tts::audio::encode_audio(
+            &vec![0.1; 8000],
+            8000,
+            sonicboom::tts::audio::AudioFormat::Wav,
+        )
+        .unwrap();
+        let metadata = |transcript: String| {
+            serde_json::json!({"name":"test","provider":"pocket-tts","model":"pocket-tts-en","language":"en","mode":"audio_prompt","consent_basis":"owner","transcript":transcript}).to_string()
+        };
+        state
+            .config
+            .update(None, |config| config.voices.max_upload_bytes = 1024)
+            .await
+            .unwrap();
+        let body = multipart_body(&metadata(String::new()), &wav, "audio/wav", "");
+        let too_large = app
+            .clone()
+            .oneshot(raw_request(
+                "POST",
+                "/api/voices/clones",
+                Some(&token),
+                "multipart/form-data; boundary=bound",
+                &body,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(too_large.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        state
+            .config
+            .update(None, |config| config.voices.max_upload_bytes = wav.len())
+            .await
+            .unwrap();
+        let constraints = app
+            .clone()
+            .oneshot(raw_request(
+                "GET",
+                "/api/voices/constraints",
+                Some(&token),
+                "application/json",
+                &[],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(body_json(constraints).await["max_upload_bytes"], wav.len());
+        for (count, status) in [
+            (10_000, StatusCode::CREATED),
+            (10_001, StatusCode::BAD_REQUEST),
+        ] {
+            let body = multipart_body(&metadata("語".repeat(count)), &wav, "audio/wav", "");
+            let response = app
+                .clone()
+                .oneshot(raw_request(
+                    "POST",
+                    "/api/voices/clones",
+                    Some(&token),
+                    "multipart/form-data; boundary=bound",
+                    &body,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn multipart_clone_keeps_private_metadata_out_of_responses() {
+        let (app, valid, store_dir) = voices_test_app().await;
+        let limits = app
+            .clone()
+            .oneshot(raw_request(
+                "GET",
+                "/api/voices/constraints",
+                Some(&valid),
+                "application/json",
+                &[],
+            ))
+            .await
+            .unwrap();
+        let limits = body_json(limits).await;
+        assert_eq!(limits["max_upload_bytes"], 8_388_608);
+        assert_eq!(
+            limits["providers"]["pocket-tts"]["transcript_required_for"],
+            serde_json::json!([])
+        );
+        let wav = sonicboom::tts::audio::encode_audio(
+            &vec![0.1; 24000],
+            24000,
+            sonicboom::tts::audio::AudioFormat::Wav,
+        )
+        .unwrap();
+        let metadata = r#"{"name":"multipart","provider":"pocket-tts","model":"pocket-tts-en","language":"en","mode":"audio_prompt","consent_basis":"owner","transcript":"private words"}"#;
+        let mut body = format!("--testboundary\r\nContent-Disposition: form-data; name=\"metadata\"\r\nContent-Type: application/json\r\n\r\n{metadata}\r\n--testboundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"ref.wav\"\r\nContent-Type: audio/wav\r\n\r\n").into_bytes();
+        body.extend(wav);
+        body.extend(b"\r\n--testboundary--\r\n");
+        let response = app
+            .clone()
+            .oneshot(raw_request(
+                "POST",
+                "/api/voices/clones",
+                Some(&valid),
+                "multipart/form-data; boundary=testboundary",
+                &body,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let result = body_json(response).await;
+        for key in [
+            "transcript",
+            "owner_token_hash",
+            "consent",
+            "reference_hash",
+        ] {
+            assert!(result.get(key).is_none(), "{key}");
+        }
+        let list = app
+            .oneshot(raw_request(
+                "GET",
+                "/api/voices",
+                Some(&valid),
+                "application/json",
+                &[],
+            ))
+            .await
+            .unwrap();
+        let list = body_json(list).await;
+        assert_eq!(list["data"][0]["name"], "multipart");
+        assert!(list["data"][0].get("transcript").is_none());
+        std::fs::remove_dir_all(store_dir).unwrap();
     }
 
     #[tokio::test]

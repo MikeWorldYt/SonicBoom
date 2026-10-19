@@ -21,6 +21,7 @@ const visibleCount = computed(() => entries.value.filter(visible).length);
 async function action(value: 'reload' | 'validate' | 'open') { await task.run(async () => { await studio.api.configAction(value); if (value === 'reload') await studio.refreshConfig(true); }, value === 'validate' ? 'Configuration file is valid.' : value === 'reload' ? 'Reloaded from disk.' : undefined); }
 </script>
 <template>
+  <p v-if="status" role="status">{{ t('Configured revision: {revision}', { revision: status.revision }) }} · {{ status.pending_restart ? t('Restart required') : status.pending_applies?.length ? t('Applying…') : t('No pending changes') }}</p>
   <p class="settings-guide">{{ t('Choose a category or search for a setting. Each change is saved individually; its badge explains when it takes effect.') }}</p>
   <div class="config-filters"><input id="configSearch" v-model="query" type="search" :placeholder="t('Search settings')" :aria-label="t('Search settings')"><select id="configCategory" v-model="category" :aria-label="t('Filter by category')"><option value="common">{{ t('Frequently used') }}</option><option value="all">{{ t('All settings') }}</option><option v-for="group in groups" :key="group" :value="group">{{ t(categories[group] || group) }}</option></select></div>
   <FeedbackNotice :feedback="errors.settings ? { kind: 'error', message: errors.settings } : feedback"/>

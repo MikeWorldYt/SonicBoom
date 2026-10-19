@@ -1,17 +1,19 @@
-import { computed, getCurrentScope, onScopeDispose, ref, shallowRef } from 'vue';
+import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, watch } from 'vue';
 import { ApiError } from '../services/http';
 import { monitorJob } from '../services/jobs';
 import { t, msg, uiError, errorMessage, type Message } from '../i18n';
 import type { Job, QualityReport } from '../services/contracts';
 import type { Studio } from './useStudio';
 export type GenerationInput = Readonly<{ text: string; model: string; voice: string; language: string; cloned: boolean }>;
-type ActiveGeneration = Readonly<{ jobId: string; input: GenerationInput; requestEpoch: number }>;
+type ActiveGeneration = Readonly<{ jobId: string; input: GenerationInput; requestEpoch: number; preset: string }>;
 /** One completed generation, retained for side-by-side comparison. */
 export interface GenerationResult {
   jobId: string;
   url: string;
   filename: string;
   durationSecs: number;
+  text: string;
+  language: string;
   preset: string;
   seed?: string;
   quality?: QualityReport;
@@ -53,9 +55,11 @@ export function useSynthesis(studio: Studio) {
   }
   function publish(result: GenerationResult) {
     const next = [result, ...results.value].slice(0, MAX_RESULTS);
+    const evicted = results.value.filter(previous => !next.includes(previous));
     results.value = next;
     audioUrl.value = result.url;
     audioFilename.value = result.filename;
+    for (const previous of evicted) release(previous);
   }
   function removeResult(index: number) {
     const target = results.value[index];
@@ -85,7 +89,8 @@ export function useSynthesis(studio: Studio) {
         url: URL.createObjectURL(audio),
         filename: `sonicboom-${generation.jobId}.wav`,
         durationSecs: result.audio_secs ?? 0,
-        preset: studio.sampling.value.preset,
+        text: generation.input.text, language: generation.input.language,
+        preset: generation.preset,
         seed: result.context?.seed,
         quality: result.quality,
         model: generation.input.model,
@@ -102,6 +107,10 @@ export function useSynthesis(studio: Studio) {
     }
   }
   async function run(input: GenerationInput) {
+    const limits = studio.info.value?.synthesis;
+    if (limits && ([...input.text].length > limits.max_text_chars || new TextEncoder().encode(input.text).length > limits.max_body_bytes)) {
+      error.value = msg('Text exceeds the server limit of {chars} characters or {bytes} bytes.', { chars: limits.max_text_chars, bytes: limits.max_body_bytes }); return;
+    }
     if (disposed || pending.value) return;
     // An unresolved job is resumed only by the explicit resume action.
     if (active.value) { error.value = msg('Use Resume monitoring or Cancel generation.'); return; }
@@ -117,9 +126,10 @@ export function useSynthesis(studio: Studio) {
     control = new AbortController();
     const signal = control.signal;
     try {
+      const preset = studio.sampling.value.preset;
       const job = await studio.api.createJob(input.text, input.language, input.voice, input.cloned, samplingFor(input.model), signal);
       if (disposed || requestEpoch !== epoch) return;
-      const generation = Object.freeze({ jobId: job.id, input, requestEpoch });
+      const generation = Object.freeze({ jobId: job.id, input, requestEpoch, preset });
       active.value = generation;
       await monitor(generation, signal);
     } catch (failure) {
@@ -160,7 +170,11 @@ export function useSynthesis(studio: Studio) {
       if (!disposed && generation.requestEpoch === epoch) { error.value = errorMessage(failure); cancelling.value = false; }
     }
   }
-  function dispose() { disposed = true; ++epoch; control?.abort(); clearAudio(); }
+  const stopTokenWatch = watch([() => studio.scopeEpoch?.value, studio.token], () => {
+    ++epoch; control?.abort(); active.value = null; pending.value = false; cancelling.value = false;
+    snapshot.value = null; complete.value = false; lastInput = null; clearAudio(); error.value = null;
+  }, { flush: 'sync' });
+  function dispose() { stopTokenWatch(); disposed = true; ++epoch; control?.abort(); clearAudio(); }
   if (getCurrentScope()) onScopeDispose(dispose);
   return { pending, cancelling, jobId, active, snapshot, results, audioUrl, audioFilename, error, complete, canGenerate, generate, regenerate, removeResult, resume, cancel, dispose };
 }

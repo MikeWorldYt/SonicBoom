@@ -11,10 +11,27 @@ fn correlation_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// Field issues contain bounds/counts, never transcript or audio contents.
+#[derive(Debug, serde::Serialize)]
+pub struct FieldIssue {
+    pub field: &'static str,
+    pub code: &'static str,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub received: Option<serde_json::Value>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("invalid input: {message}")]
+    Validation {
+        message: String,
+        fields: Vec<FieldIssue>,
+    },
     #[error("not found: {0}")]
     NotFound(String),
     /// The request conflicts with existing state. For synthesis jobs this is
@@ -52,6 +69,26 @@ pub enum AppError {
 impl AppError {
     /// Internal errors carry a server-side detail that is logged but never
     /// sent to the client.
+    pub fn field(
+        field: &'static str,
+        code: &'static str,
+        message: impl Into<String>,
+        expected: Option<serde_json::Value>,
+        received: Option<serde_json::Value>,
+    ) -> Self {
+        let message = message.into();
+        Self::Validation {
+            message: message.clone(),
+            fields: vec![FieldIssue {
+                field,
+                code,
+                message,
+                expected,
+                received,
+            }],
+        }
+    }
+
     pub fn internal(detail: impl Into<String>) -> Self {
         AppError::Internal(detail.into())
     }
@@ -61,6 +98,9 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let request_id = correlation_id();
         let (status, error_code, message) = match &self {
+            AppError::Validation { message, .. } => {
+                (StatusCode::BAD_REQUEST, "bad_request", message.clone())
+            }
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg.clone()),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found", msg.clone()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, "conflict", msg.clone()),
@@ -101,14 +141,24 @@ impl IntoResponse for AppError {
             }
         };
 
-        let body = Json(json!({
+        let mut body = json!({
             "error": error_code,
+            "code": error_code,
             "message": message,
             "status": status.as_u16(),
             "request_id": request_id,
-        }));
+        });
+        if let AppError::Validation { fields, .. } = &self {
+            body["fields"] = json!(fields);
+        }
+        if let AppError::RateLimited {
+            retry_after_secs, ..
+        } = &self
+        {
+            body["retry_after_secs"] = json!(retry_after_secs.max(&1));
+        }
 
-        let mut response = (status, body).into_response();
+        let mut response = (status, Json(body)).into_response();
         // Token-bucket rejections carry live retry metadata; the other 429
         // sources (inference/queue saturation) intentionally have no headers.
         if let AppError::RateLimited {
@@ -158,6 +208,25 @@ mod tests {
             .await
             .unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn field_errors_preserve_legacy_code_and_expose_only_bounds_and_counts() {
+        let response = AppError::field(
+            "transcript",
+            "too_long",
+            "Transcript exceeds its bound",
+            Some(json!(10000)),
+            Some(json!(10001)),
+        )
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(response).await;
+        assert_eq!(body["error"], "bad_request");
+        assert_eq!(body["code"], "bad_request");
+        assert_eq!(body["fields"][0]["expected"], 10000);
+        assert_eq!(body["fields"][0]["received"], 10001);
+        assert!(body["request_id"].as_str().is_some());
     }
 
     #[tokio::test]

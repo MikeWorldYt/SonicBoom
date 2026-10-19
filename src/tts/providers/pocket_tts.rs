@@ -66,8 +66,8 @@ pub fn pocket_model_language(model: &str) -> Option<&'static str> {
 /// Native sample rate of every validated bundle.
 pub const POCKET_TTS_SAMPLE_RATE: u32 = 24_000;
 /// Reference window (mirrors the upstream Python runtime's soft 1–30 s).
-pub const POCKET_REF_MIN_SECS: f64 = 1.0;
-pub const POCKET_REF_MAX_SECS: f64 = 30.0;
+pub const POCKET_REF_MIN_SECS: f64 = crate::tts::voices::REFERENCE_MIN_SECS;
+pub const POCKET_REF_MAX_SECS: f64 = crate::tts::voices::REFERENCE_MAX_SECS;
 /// Reference audio is consumed as 24 kHz mono PCM (resampled on load).
 pub const POCKET_REFERENCE_RATE: u32 = 24_000;
 /// Hard output bound (ten minutes at 24 kHz), mirroring GPT-SoVITS policy.

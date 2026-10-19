@@ -17,6 +17,13 @@ use super::types::{
 pub const SUPERTONIC_MODEL_ID: &str = "supertonic-3";
 /// Legacy OpenAI aliases that select Supertonic (preserved behavior).
 pub const SUPERTONIC_ALIASES: &[&str] = &["tts-1", "tts-1-hd", "supertonic-3"];
+/// Existing studio language choices, advertised as metadata. Native language
+/// tag acceptance and inference preprocessing remain unchanged.
+pub const SUPERTONIC_LANGUAGE_CHOICES: &[&str] = &[
+    "en", "ko", "ja", "zh", "es", "pt", "fr", "de", "it", "ru", "ar", "hi", "nl", "pl", "tr", "vi",
+    "id", "th", "sv", "da", "fi", "el", "cs", "sk", "sl", "hr", "ro", "hu", "bg", "uk", "lt", "lv",
+    "et",
+];
 /// All ten built-in style voices.
 pub const SUPERTONIC_VOICES: &[&str] =
     &["F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5"];
@@ -114,7 +121,10 @@ impl TtsProvider for SupertonicProvider {
         ProviderCapabilities {
             provider_id: "supertonic".to_string(),
             models: SUPERTONIC_ALIASES.iter().map(|s| s.to_string()).collect(),
-            languages: vec!["en".to_string()],
+            languages: SUPERTONIC_LANGUAGE_CHOICES
+                .iter()
+                .map(|language| language.to_string())
+                .collect(),
             clone_modes: vec![],
             devices: vec!["cpu".to_string(), "auto".to_string()],
             requires_reference_audio: false,

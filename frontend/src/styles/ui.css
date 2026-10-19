@@ -195,3 +195,24 @@ th { color: var(--text-secondary); background: var(--surface-raised); }
 @media (max-width: 640px) { .stepper { flex-direction: column; } .stepper li:not(.current) { display: none; } .voice-options { grid-template-columns: 1fr; } }
 
 .engine-activate { margin-left: auto; padding: 6px 10px; font-size: 12px; }
+
+.field-error { color: var(--danger); margin-top: 6px; }
+[aria-invalid="true"] { border-color: var(--danger) !important; }
+.dialog-overlay { position: fixed; inset: 0; background: rgb(0 0 0 / .55); z-index: 100; }
+.dialog-content { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); width: min(92vw, 540px); max-height: 85vh; overflow: auto; background: var(--surface); color: var(--text); padding: 24px; border: 1px solid var(--border); border-radius: var(--radius); z-index: 101; }
+.file-dropzone { padding: 16px; border: 2px dashed var(--border); border-radius: var(--radius); }
+.file-dropzone.dragging { border-color: var(--accent); background: var(--accent-surface); }
+.clone-report { overflow-wrap: anywhere; }
+.clone-report dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.voice-combobox-anchor { display: flex; gap: 8px; }
+.voice-combobox-content { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); width: var(--reka-combobox-trigger-width); max-width: 94vw; z-index: 50; }
+.voice-combobox-viewport { position: relative; max-height: min(360px, 50vh); overflow-y: auto; padding: 4px; }
+.voice-combobox-item { min-height: 64px; padding: 8px 12px; cursor: pointer; border-radius: var(--radius-control); display: flex; flex-direction: column; justify-content: center; }
+.voice-combobox-item small { color: var(--text-secondary); }
+.voice-combobox-item[data-highlighted] { outline: 2px solid var(--focus); outline-offset: -2px; background: var(--surface-raised); }
+.voice-combobox-item[data-state="checked"] { background: var(--accent-surface); }
+.reference-editor { border: 1px solid var(--border); padding: 16px; border-radius: var(--radius); margin-block: 16px; }
+.audio-waveform { display: block; width: 100%; height: 120px; color: var(--accent); background: var(--surface-raised); border-radius: var(--radius-control); }
+.button-spinner { display: inline-block; width: 1em; height: 1em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -.1em; margin-inline-end: .5em; animation: spinner-turn .8s linear infinite; }
+@keyframes spinner-turn { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .button-spinner { animation: none; } }

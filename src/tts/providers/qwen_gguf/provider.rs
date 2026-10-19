@@ -36,8 +36,8 @@ pub const QWEN_GGUF_LANGUAGES: &[&str] =
 /// Output sample rate of the GGUF/ONNX codec path.
 pub const QWEN_GGUF_SAMPLE_RATE: u32 = 24_000;
 /// Minimum/maximum reference duration (seconds, matches worker bounds).
-pub const QWEN_GGUF_REF_MIN_SECS: f64 = 1.0;
-pub const QWEN_GGUF_REF_MAX_SECS: f64 = 30.0;
+pub const QWEN_GGUF_REF_MIN_SECS: f64 = crate::tts::voices::REFERENCE_MIN_SECS;
+pub const QWEN_GGUF_REF_MAX_SECS: f64 = crate::tts::voices::REFERENCE_MAX_SECS;
 
 pub fn is_gguf_model(model: &str) -> bool {
     QWEN_GGUF_MODELS.contains(&model)

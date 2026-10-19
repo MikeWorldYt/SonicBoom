@@ -64,8 +64,9 @@ builds without the `server` feature do not build or embed the frontend. Docker
 builds the UI in a Node stage and copies its output into each Rust builder;
 CI and release workflows install Node before Cargo builds.
 
-`npm run typecheck` checks TypeScript with the current TypeScript compiler;
-Vite's Vue plugin compiles and validates the single-file component templates.
+`npm run typecheck` runs catalog parity checks and `vue-tsc --noEmit`, including
+Vue single-file components and template expressions. The production build runs
+these checks before Vite compilation.
 
 ## Workspace and languages
 
@@ -109,11 +110,16 @@ The UI uses the English catalog as a fallback for future untranslated messages.
 - `AppShell` owns the shared header, language switcher, skip link and footer.
 - `StudioLayout` owns responsive navigation, keyboard focus and stable panels.
 - `SpeechGenerator` / `VoiceSelector` own synthesis and searchable voice choices.
-- `VoiceLibrary` / `CloneWizard` manage profiles and progressive raw-WAV upload.
+- `VoiceLibrary` / `CloneWizard` manage profiles and multipart cloning;
+  `features/cloning/useCloneWizard` coordinates the engine/reference/review steps.
+  Server-discovered limits drive local WAV inspection and transcript validation.
+  The lazy reference editor offers explicit waveform preview, exact sample-frame
+  cropping and WAV export while retaining the original recording.
 - `EnginesPanel` / `EngineCard` consolidate provider status, models and toggles.
 - `SettingsPanel` / `SettingField` group frequent and advanced settings and keep
   unsaved values during polling, language changes and filtering.
-- `useStudio` shares API data; `useSynthesis` owns job monitoring and object URLs;
+- `useStudio` shares API data through an epoch-scoped TanStack Query cache;
+  `useSynthesis` owns job monitoring and object URLs;
   `useTask` / `FeedbackNotice` share loading and feedback behavior.
 - `services/http.ts` attaches same-origin credentials and optional bearer auth;
   `services/api.ts` defines typed endpoints; `services/jobs.ts` reconciles dropped
@@ -122,3 +128,29 @@ The UI uses the English catalog as a fallback for future untranslated messages.
 No frontend code outside `services/http.ts` calls `fetch`. Theme colors are
 semantic variables in `styles/tokens.css`; `prefers-color-scheme` updates all
 pages and native controls immediately. There is no theme override in storage.
+
+API responses are validated with Zod at the boundary. Structured failures retain
+status, code, field issues, request correlation and retry advice. The schema
+module disables Zod's optional JIT so the production CSP requires no eval.
+Reka primitives provide dialog/combobox focus behavior without injected inline
+styles. Shared fields expose accessible help and error associations.
+
+## Verification
+
+```sh
+cd frontend
+npm ci
+npm run build
+npm test
+npm run test:unit
+npx playwright install --with-deps chromium firefox
+npm run test:e2e
+```
+
+The browser suite builds production assets and serves them using the exact CSP
+from `src/security.rs`. Mock APIs exercise desktop Chromium, Firefox and mobile
+Chromium without model downloads. Tests cover all studio tabs, setup/admin,
+keyboard interactions, axe checks, English/Spanish, light/dark, reduced motion
+and narrow/wide layouts. They do not measure inference quality or GPU behavior.
+See [audit implementation evidence](ui/AUDIT-IMPLEMENTATION.md) for scope and
+native hardware verification limits.

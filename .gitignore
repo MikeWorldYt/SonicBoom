@@ -13,3 +13,6 @@ temp_audio/**
 
 # Python preflight and release validation caches.
 __pycache__/
+
+/frontend/test-results/
+/frontend/playwright-report/

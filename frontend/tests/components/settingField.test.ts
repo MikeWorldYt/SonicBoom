@@ -1,0 +1,33 @@
+import { it, expect, vi, beforeEach } from 'vitest';
+import { mount, flushPromises } from '@vue/test-utils';
+import { ref } from 'vue';
+import SettingField from '../../src/components/studio/SettingField.vue';
+const mock = vi.hoisted(() => ({ studio: null as any }));
+vi.mock('../../src/composables/useStudio', () => ({ useStudio: () => mock.studio }));
+const meta = { path: 'voices.max_upload_bytes', description: 'Upload limit', type: 'integer' as const, apply: 'hot' as const, min: 1024, max: 67108864, nullable: false, secret: false };
+beforeEach(() => { mock.studio = { status: ref({ pending_applies: [] }), devices: ref([]), saveSetting: vi.fn(async () => {}) }; });
+it('associates local range errors, blocks save, and preserves conflicting drafts', async () => {
+  const wrapper = mount(SettingField, { props: { meta, value: 4096 } });
+  await wrapper.get('input').setValue('1023');
+  expect(wrapper.get('input').attributes('aria-invalid')).toBe('true');
+  expect(wrapper.get('input').attributes('aria-describedby')).toContain('-error');
+  await wrapper.get('form').trigger('submit'); await flushPromises();
+  expect(mock.studio.saveSetting).not.toHaveBeenCalled();
+  await wrapper.get('input').setValue('8192');
+  await wrapper.setProps({ value: 16384 });
+  expect((wrapper.get('input').element as HTMLInputElement).value).toBe('8192');
+  expect(wrapper.text()).toContain('Review the new value');
+  await wrapper.findAll('button').find(button => button.text() === 'Keep my draft')!.trigger('click');
+  await wrapper.get('form').trigger('submit'); await flushPromises();
+  expect(mock.studio.saveSetting).toHaveBeenCalledWith('voices.max_upload_bytes', 8192);
+  wrapper.unmount();
+});
+it('supports clearing nullable enum fields and shows restart status', async () => {
+  mock.studio.status.value.pending_restart = true;
+  const wrapper = mount(SettingField, { props: { meta: { ...meta, type: 'string', apply: 'restart_process', nullable: true, allowed_values: ['a', 'b'] }, value: 'a' } });
+  expect(wrapper.text()).toContain('Restart required');
+  await wrapper.get('select').setValue('');
+  await wrapper.get('form').trigger('submit'); await flushPromises();
+  expect(mock.studio.saveSetting).toHaveBeenCalledWith(meta.path, null);
+  wrapper.unmount();
+});

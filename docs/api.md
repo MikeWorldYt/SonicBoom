@@ -633,3 +633,45 @@ decimal **string**, so browser clients preserve all 64 bits. It is read-only
 metadata, not a new HTTP generation parameter. Reproduce it through the native
 `ProviderRequest.seed` API or offline runner `AUDIT_SEED=<decimal-u64>`. Omitted
 seeds are selected once per request and sampling state remains request-local.
+
+### Voice cloning multipart migration
+
+The studio sends `POST /api/voices/clones` as multipart form data. Include exactly
+one `metadata` JSON part (`name`, `provider`, `model`, `language`, `mode`,
+optional `transcript`, `consent_basis`, optional `consent_note`, optional
+`expected_revision`) and one `file`
+part containing WAV bytes. Let the HTTP client generate the multipart boundary.
+Transcript and consent belong in this body, never in a URL.
+
+The raw-WAV/query protocol remains supported for existing clients, but is
+deprecated for new integrations. No removal date is set. Migrate sensitive
+metadata to multipart before legacy query semantics are retired.
+
+Authenticated `GET /api/voices/constraints` returns version 1 constraints,
+including the current upload cap and registered provider modes/models/languages.
+Its `revision` may be sent as `expected_revision`; a changed configuration
+returns 409 so clients can refresh and revalidate their retained draft. Creation
+also returns the observed revision. This is optimistic conflict detection,
+not a transaction spanning configuration and profile storage.
+The upload byte cap applies immediately to each request; the clone route does
+not capture a stale router-level body limit. The complete multipart envelope is
+bounded to the current WAV cap plus 64 KiB, with a 60,000-byte metadata part cap.
+The WAV itself must still fit `voices.max_upload_bytes`. Duplicate, missing and
+unexpected parts are rejected. Rust remains authoritative.
+
+List and create responses contain public summary metadata and no transcript,
+consent declaration, owner hash or reference hash. Creation additionally returns
+the existing reference health, warning, defect and guidance report. The explicit
+owner-authorized detail endpoint includes the transcript for editing, but omits
+internal owner and reference hashes.
+
+```sh
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  -F 'metadata={"name":"Reference","provider":"pocket-tts","model":"pocket-tts-en","language":"en","mode":"audio_prompt","consent_basis":"owner"};type=application/json' \
+  -F 'file=@reference.wav;type=audio/wav' \
+  http://127.0.0.1:17842/api/voices/clones
+```
+
+For ICL, include the exact reference transcript inside the metadata JSON body.
+Do not log that body or embed it in command history when it contains private
+material; applications should construct the multipart body in memory.

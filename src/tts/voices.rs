@@ -33,6 +33,14 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+pub const NAME_MAX_CHARS: usize = 64;
+pub const TRANSCRIPT_MAX_CHARS: usize = 10_000;
+pub const REFERENCE_MIN_SECS: f64 = 1.0;
+pub const REFERENCE_MAX_SECS: f64 = 30.0;
+pub const REFERENCE_MIN_RATE: u32 = 8_000;
+pub const REFERENCE_MAX_RATE: u32 = 192_000;
+pub const REFERENCE_MAX_CHANNELS: u16 = 2;
+
 /// Authorization/license/consent declaration stored with every profile.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoiceConsent {
@@ -82,13 +90,13 @@ pub struct NewVoiceProfile {
 
 impl NewVoiceProfile {
     pub fn validate(&self) -> Result<(), String> {
-        if self.name.trim().is_empty() || self.name.chars().count() > 64 {
+        if self.name.trim().is_empty() || self.name.chars().count() > NAME_MAX_CHARS {
             return Err("profile name must be 1-64 characters".to_string());
         }
         if self
             .transcript
             .as_ref()
-            .is_some_and(|t| t.chars().count() > 10_000)
+            .is_some_and(|t| t.chars().count() > TRANSCRIPT_MAX_CHARS)
             || self.consent_note.len() > 4096
         {
             return Err("reference transcript or consent note exceeds its bound".into());
@@ -96,7 +104,8 @@ impl NewVoiceProfile {
         if self.reference_pcm.iter().any(|s| !s.is_finite()) {
             return Err("reference samples must be finite".into());
         }
-        if self.clone_mode == "icl"
+        if super::providers::types::CloneMode::parse(&self.clone_mode)
+            .is_some_and(super::providers::types::CloneMode::requires_transcript)
             && self
                 .transcript
                 .as_deref()
@@ -123,7 +132,7 @@ impl NewVoiceProfile {
             return Err("reference sample rate must be nonzero".to_string());
         }
         let secs = self.reference_pcm.len() as f64 / f64::from(self.reference_sample_rate);
-        if secs < 1.0 || secs > 30.0 {
+        if !(REFERENCE_MIN_SECS..=REFERENCE_MAX_SECS).contains(&secs) {
             return Err(format!(
                 "reference audio duration {secs:.1}s is outside the 1-30 s window"
             ));

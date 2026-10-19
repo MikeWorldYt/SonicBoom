@@ -746,7 +746,7 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
         (
             "voices.max_upload_bytes",
             "Maximum voice reference upload size in bytes",
-            1.0,
+            1024.0,
             67_108_864.0,
         ),
     ] {

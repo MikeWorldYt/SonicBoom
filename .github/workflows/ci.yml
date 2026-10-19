@@ -17,6 +17,32 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  frontend:
+    name: Web types, components, browser accessibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - run: npm run test
+        working-directory: frontend
+      - run: npm run test:unit
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium firefox
+        working-directory: frontend
+      - run: npm run test:e2e
+        working-directory: frontend
+
   validate:
     name: Format, Lint, Test, Audit
     runs-on: ubuntu-24.04

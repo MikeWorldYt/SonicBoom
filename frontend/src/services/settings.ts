@@ -7,9 +7,13 @@ export function formatSetting(value: Json | undefined): string | boolean {
 }
 export function parseSetting(meta: SettingSchema, raw: string | number | boolean): Json {
   if (meta.nullable && (raw === '' || raw === 'null')) return null;
-  if (meta.type === 'boolean') return raw === true || raw === 'true';
+  if (meta.allowed_values?.length && !meta.allowed_values.includes(String(raw))) throw uiError('Choose an allowed value.');
+  if (meta.type === 'boolean') {
+    if (![true, false, 'true', 'false'].includes(raw as boolean | string)) throw uiError('Choose an allowed value.');
+    return raw === true || raw === 'true';
+  }
   if (meta.type === 'number' || meta.type === 'integer') {
-    if (raw === '') throw uiError('Enter a number');
+    if (String(raw).trim() === '') throw uiError('Enter a number');
     const value = Number(raw);
     if (!Number.isFinite(value)) throw uiError('Enter a valid number');
     if (meta.type === 'integer' && !Number.isInteger(value)) throw uiError('Enter a whole number');

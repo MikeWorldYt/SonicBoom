@@ -8,7 +8,7 @@
 
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{FromRequest, Multipart, Path, Query, State},
     http::{StatusCode, header},
     response::IntoResponse,
 };
@@ -16,6 +16,10 @@ use serde::Deserialize;
 
 use sonicboom::tts::providers::types::{
     CloneMode, DevicePreference, ProviderRequest, ReferenceAudio,
+};
+use sonicboom::tts::voices::{
+    NAME_MAX_CHARS, REFERENCE_MAX_CHANNELS, REFERENCE_MAX_RATE, REFERENCE_MAX_SECS,
+    REFERENCE_MIN_RATE, REFERENCE_MIN_SECS, TRANSCRIPT_MAX_CHARS,
 };
 use sonicboom::tts::voices::{NewVoiceProfile, VoiceProfileStore};
 
@@ -26,6 +30,8 @@ use crate::error::AppError;
 
 #[derive(Deserialize)]
 pub struct CloneQuery {
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
     pub name: String,
     pub provider: String,
     pub model: String,
@@ -68,7 +74,7 @@ fn decode_wav_bytes(bytes: &[u8]) -> Result<(Vec<f32>, u32), AppError> {
         )
     })?;
     let spec = reader.spec();
-    if spec.channels == 0 || spec.channels > 2 {
+    if spec.channels == 0 || spec.channels > REFERENCE_MAX_CHANNELS {
         return Err(AppError::BadRequest(format!(
             "reference WAV has {} channels; mono or stereo is required",
             spec.channels
@@ -79,8 +85,8 @@ fn decode_wav_bytes(bytes: &[u8]) -> Result<(Vec<f32>, u32), AppError> {
             "reference WAV sample rate must be nonzero".to_string(),
         ));
     }
-    if !(8000..=192000).contains(&spec.sample_rate)
-        || reader.duration() as f64 / f64::from(spec.sample_rate) > 30.0
+    if !(REFERENCE_MIN_RATE..=REFERENCE_MAX_RATE).contains(&spec.sample_rate)
+        || reader.duration() as f64 / f64::from(spec.sample_rate) > REFERENCE_MAX_SECS
         || reader.len() > 16_000_000
         || u64::from(reader.len()) * u64::from(spec.bits_per_sample.div_ceil(8))
             > bytes.len() as u64
@@ -532,23 +538,202 @@ pub(crate) async fn owned_reference(
     Ok((profile, reference))
 }
 
+/// Public profile metadata. Ownership hashes, transcript and consent are
+/// intentionally absent from this response DTO.
+#[derive(serde::Serialize)]
+struct VoiceSummary {
+    id: String,
+    name: String,
+    provider: String,
+    model: String,
+    model_revision: String,
+    language: String,
+    clone_mode: String,
+    reference_duration_secs: f64,
+    reference_sample_rate: u32,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<&sonicboom::tts::voices::VoiceProfile> for VoiceSummary {
+    fn from(p: &sonicboom::tts::voices::VoiceProfile) -> Self {
+        Self {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            provider: p.provider.clone(),
+            model: p.model.clone(),
+            model_revision: p.model_revision.clone(),
+            language: p.language.clone(),
+            clone_mode: p.clone_mode.clone(),
+            reference_duration_secs: p.reference_duration_secs,
+            reference_sample_rate: p.reference_sample_rate,
+            created_at: p.created_at,
+            updated_at: p.updated_at,
+        }
+    }
+}
+
+fn voice_summary(p: &sonicboom::tts::voices::VoiceProfile) -> serde_json::Value {
+    // Only fixed, serializable DTO fields; no private profile serialization.
+    serde_json::to_value(VoiceSummary::from(p)).expect("voice summary is serializable")
+}
+
+/// Authenticated, current limits; provider modes come from the live registry.
+pub async fn get_constraints(
+    _token: AuthenticatedToken,
+    State(state): State<crate::AppState>,
+) -> axum::Json<serde_json::Value> {
+    let registry = build_registry_for_state(&state).await;
+    let config = state.config.get().await;
+    let mut providers = serde_json::Map::new();
+    for id in registry.provider_ids() {
+        if let Some(provider) = registry.get(&id) {
+            let cap = provider.capabilities();
+            if cap.requires_reference_audio {
+                let transcript_modes: Vec<_> = cap
+                    .clone_modes
+                    .iter()
+                    .filter(|mode| {
+                        cap.requires_reference_transcript
+                            || CloneMode::parse(mode).is_some_and(CloneMode::requires_transcript)
+                    })
+                    .collect();
+                providers.insert(id, serde_json::json!({
+                    "duration_seconds":[REFERENCE_MIN_SECS,REFERENCE_MAX_SECS], "clone_modes":cap.clone_modes,
+                    "models":cap.models,"languages":cap.languages,
+                    "transcript_required_for":transcript_modes
+                }));
+            }
+        }
+    }
+    axum::Json(serde_json::json!({"version":1,
+        "revision":config.revision, "max_upload_bytes":config.voices.max_upload_bytes,
+        "min_sample_rate":REFERENCE_MIN_RATE,"max_sample_rate":REFERENCE_MAX_RATE,"max_channels":REFERENCE_MAX_CHANNELS,
+        "name_max_chars":NAME_MAX_CHARS,"transcript_max_chars":TRANSCRIPT_MAX_CHARS,
+        "recommended_audio_seconds":[5,10],"providers":providers}))
+}
+
 /// `POST /api/voices/clones?name=..&provider=..&model=..&language=..`: upload
 /// a reference WAV (`Content-Type: audio/wav`) and create a voice profile.
 pub async fn post_clones(
     token: AuthenticatedToken,
     State(state): State<crate::AppState>,
-    Query(query): Query<CloneQuery>,
-    headers: axum::http::HeaderMap,
-    body: Body,
+    request: axum::extract::Request,
 ) -> Result<impl IntoResponse, AppError> {
+    check_rate_limit(&state, &token)?;
     super::jobs::with_admission(
         &state,
         super::jobs::with_reference_memory(
             &state,
-            post_clones_inner(token, State(state.clone()), Query(query), headers, body),
+            post_clone_upload(token, State(state.clone()), request),
         ),
     )
     .await
+}
+
+async fn post_clone_upload(
+    token: AuthenticatedToken,
+    State(state): State<crate::AppState>,
+    request: axum::extract::Request,
+) -> Result<impl IntoResponse, AppError> {
+    let (parts, body) = request.into_parts();
+    let mut headers = parts.headers.clone();
+    let multipart = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("multipart/form-data"));
+    let limit = state.config.get().await.voices.max_upload_bytes;
+    // Bound the complete envelope before multipart parsing or allocation.
+    let bytes = axum::body::to_bytes(body, limit + 65_536)
+        .await
+        .map_err(|_| {
+            AppError::PayloadTooLarge("voice upload exceeds its aggregate bound".into())
+        })?;
+    let (query, body) = if multipart {
+        let request = axum::extract::Request::from_parts(parts, Body::from(bytes));
+        let mut form = Multipart::from_request(request, &state)
+            .await
+            .map_err(|_| AppError::BadRequest("invalid multipart upload".into()))?;
+        let mut metadata = None;
+        let mut audio = None;
+        while let Some(field) = form
+            .next_field()
+            .await
+            .map_err(|_| AppError::BadRequest("invalid multipart field".into()))?
+        {
+            let name = field.name().unwrap_or("").to_string();
+            if name == "file"
+                && !matches!(
+                    field.content_type(),
+                    None | Some("audio/wav" | "audio/x-wav" | "application/octet-stream")
+                )
+            {
+                return Err(AppError::UnsupportedMediaType(
+                    "reference file part must contain WAV audio".into(),
+                ));
+            }
+            let value = field
+                .bytes()
+                .await
+                .map_err(|_| AppError::BadRequest("invalid multipart data".into()))?;
+            match name.as_str() {
+                "metadata" if metadata.is_none() && value.len() <= 60_000 => {
+                    let document: serde_json::Value = serde_json::from_slice(&value)
+                        .map_err(|_| AppError::BadRequest("invalid clone metadata".into()))?;
+                    let object = document.as_object().ok_or_else(|| {
+                        AppError::BadRequest("clone metadata must be an object".into())
+                    })?;
+                    if object.keys().any(|key| {
+                        ![
+                            "name",
+                            "provider",
+                            "model",
+                            "language",
+                            "mode",
+                            "transcript",
+                            "consent_basis",
+                            "consent_note",
+                            "expected_revision",
+                        ]
+                        .contains(&key.as_str())
+                    }) {
+                        return Err(AppError::BadRequest(
+                            "unexpected clone metadata field".into(),
+                        ));
+                    }
+                    // Deserialize the original bytes as well: duplicate JSON keys
+                    // remain errors rather than being collapsed by Value.
+                    metadata = Some(
+                        serde_json::from_slice::<CloneQuery>(&value)
+                            .map_err(|_| AppError::BadRequest("invalid clone metadata".into()))?,
+                    );
+                }
+                "file" if audio.is_none() => {
+                    audio = Some(value);
+                }
+                _ => {
+                    return Err(AppError::BadRequest(
+                        "unexpected, duplicate or oversized multipart field".into(),
+                    ));
+                }
+            }
+        }
+        headers.insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("audio/wav"),
+        );
+        (
+            metadata.ok_or_else(|| AppError::BadRequest("metadata is required".into()))?,
+            Body::from(audio.ok_or_else(|| AppError::BadRequest("file is required".into()))?),
+        )
+    } else {
+        // Deprecated raw-WAV/query protocol retained for existing clients.
+        let query = Query::<CloneQuery>::try_from_uri(&parts.uri)
+            .map_err(|_| AppError::BadRequest("invalid clone parameters".into()))?
+            .0;
+        (query, Body::from(bytes))
+    };
+    post_clones_inner(token, State(state), Query(query), headers, body).await
 }
 
 async fn post_clones_inner(
@@ -558,8 +743,16 @@ async fn post_clones_inner(
     headers: axum::http::HeaderMap,
     body: Body,
 ) -> Result<impl IntoResponse, AppError> {
-    check_rate_limit(&state, &token)?;
     let config = state.config.get().await;
+    if query
+        .expected_revision
+        .is_some_and(|revision| revision != config.revision)
+    {
+        return Err(AppError::Conflict(
+            "Voice constraints changed. Refresh the selection and retry with the preserved draft."
+                .into(),
+        ));
+    }
     let limit = config.voices.max_upload_bytes + 1;
     let body = axum::body::to_bytes(body, limit).await.map_err(|_| {
         AppError::PayloadTooLarge(format!(
@@ -590,9 +783,13 @@ async fn post_clones_inner(
              FLAC/MP3 uploads are not supported by this build)"
         )));
     }
-    if query.name.trim().is_empty() || query.name.chars().count() > 64 {
-        return Err(AppError::BadRequest(
-            "profile name must be 1-64 characters".to_string(),
+    if query.name.trim().is_empty() || query.name.chars().count() > NAME_MAX_CHARS {
+        return Err(AppError::field(
+            "name",
+            "invalid_length",
+            "profile name must be 1-64 characters",
+            Some(serde_json::json!({"min":1,"max":NAME_MAX_CHARS})),
+            Some(serde_json::json!(query.name.chars().count())),
         ));
     }
     let provider = query.provider.trim().to_ascii_lowercase();
@@ -625,11 +822,25 @@ async fn post_clones_inner(
         .as_deref()
         .map(str::trim)
         .filter(|t| !t.is_empty());
-    if mode == CloneMode::Icl && transcript.is_none() {
-        return Err(AppError::BadRequest(format!(
-            "provider '{provider}' icl mode requires the exact reference transcript \
-             (transcript query parameter)"
-        )));
+    if transcript.is_some_and(|t| t.chars().count() > TRANSCRIPT_MAX_CHARS) {
+        return Err(AppError::field(
+            "transcript",
+            "too_long",
+            "reference transcript exceeds its bound",
+            Some(serde_json::json!(TRANSCRIPT_MAX_CHARS)),
+            Some(serde_json::json!(
+                transcript.map(|text| text.chars().count()).unwrap_or(0)
+            )),
+        ));
+    }
+    if mode.requires_transcript() && transcript.is_none() {
+        return Err(AppError::field(
+            "transcript",
+            "required",
+            "ICL mode requires the exact reference transcript",
+            None,
+            None,
+        ));
     }
     if mode == CloneMode::XVector && transcript.is_some() {
         return Err(AppError::BadRequest(
@@ -639,8 +850,12 @@ async fn post_clones_inner(
         ));
     }
     if query.consent_basis.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "consent_basis is required (e.g. owner, licensed, authorized)".to_string(),
+        return Err(AppError::field(
+            "consent_basis",
+            "required",
+            "consent_basis is required (e.g. owner, licensed, authorized)",
+            None,
+            None,
         ));
     }
     // Validate model/language against provider capabilities (no silent
@@ -650,6 +865,15 @@ async fn post_clones_inner(
         .get(&provider)
         .map(|p| p.capabilities())
         .ok_or_else(|| AppError::internal("cloning provider not registered"))?;
+    if !capabilities
+        .clone_modes
+        .iter()
+        .any(|value| value == mode.as_str())
+    {
+        return Err(AppError::BadRequest(
+            "clone mode is not supported by the selected provider".into(),
+        ));
+    }
     if !capabilities.models.iter().any(|m| m == &query.model) {
         return Err(AppError::BadRequest(format!(
             "unsupported model '{}' for provider '{provider}' (expected one of: {})",
@@ -700,6 +924,11 @@ async fn post_clones_inner(
         }
         _ => {}
     }
+    if state.config.get().await.revision != config.revision {
+        return Err(AppError::Conflict(
+            "Configuration changed while preparing the reference. Refresh and retry.".into(),
+        ));
+    }
     let input = NewVoiceProfile {
         name: query.name,
         provider: provider.clone(),
@@ -724,8 +953,8 @@ async fn post_clones_inner(
         store.create(input).map_err(AppError::BadRequest)
     })
     .await?;
-    let mut response =
-        serde_json::to_value(&profile).map_err(|e| AppError::internal(e.to_string()))?;
+    let mut response = voice_summary(&profile);
+    response["revision"] = serde_json::json!(config.revision);
     response["reference_health"] = health;
     response["warnings"] = serde_json::json!(warnings);
     response["defects"] = serde_json::json!(defects);
@@ -765,7 +994,7 @@ pub async fn get_voices(
             .list()
             .into_iter()
             .filter(|p| p.owner_token_hash.as_deref() == Some(owner.as_str()))
-            .cloned()
+            .map(voice_summary)
             .collect::<Vec<_>>())
     })
     .await?;
@@ -796,8 +1025,9 @@ pub async fn get_voice(
         Some(profile)
             if profile.owner_token_hash.as_deref() == Some(token.rate_limit_key().as_str()) =>
         {
-            let body =
-                serde_json::to_string(profile).map_err(|e| AppError::internal(e.to_string()))?;
+            let mut detail = voice_summary(profile);
+            detail["transcript"] = serde_json::json!(profile.transcript);
+            let body = detail.to_string();
             Ok((
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "application/json")],

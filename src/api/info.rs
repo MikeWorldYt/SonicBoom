@@ -23,6 +23,7 @@ pub struct InfoResponse {
     pub features: Features,
     pub config_revision: u64,
     pub model: ModelInfo,
+    pub synthesis: serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -79,6 +80,21 @@ pub async fn get_info(State(state): State<AppState>) -> Json<InfoResponse> {
             hot_reload: true,
         },
         config_revision: config.revision,
+        synthesis: {
+            use sonicboom::tts::providers::types::SamplingParams as Bounds;
+            serde_json::json!({
+                "max_text_chars": config.tts.max_text_length,
+                "max_body_bytes": config.tts.max_body_bytes,
+                "sampling": {
+                    "provider": "qwen3-gguf",
+                    "seed_max": u64::MAX.to_string(),
+                    "temperature": { "min": Bounds::TEMPERATURE_MIN, "max": Bounds::TEMPERATURE_MAX },
+                    "top_k": { "min": 0, "max": Bounds::TOP_K_MAX, "integer": true },
+                    "top_p": { "min": 0, "max": Bounds::TOP_P_MAX, "exclusive_min": true },
+                    "repetition_penalty": { "min": Bounds::REPETITION_MIN, "max": Bounds::REPETITION_MAX }
+                }
+            })
+        },
         model: ModelInfo {
             status: model_status.to_string(),
         },

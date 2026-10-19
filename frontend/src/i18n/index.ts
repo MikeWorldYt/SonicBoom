@@ -42,8 +42,21 @@ export function uiError(key: string, params: Message['params'] = {}) {
 }
 export function errorMessage(error: unknown): Message {
   return computedMessage(() => {
-    if (error instanceof Error && 'localizedMessage' in error) return renderMessage(error.localizedMessage as Message);
-    return t(error instanceof Error ? error.message : String(error));
+    const localized = error instanceof Error && 'localizedMessage' in error;
+    let message = localized ? renderMessage(error.localizedMessage as Message) : t(error instanceof Error ? error.message : String(error));
+    const actions: Record<number, string> = {
+      401: 'Check your API token or sign in again.',
+      403: 'Check the account permissions and server access policy.',
+      409: 'Refresh the current selection and review your draft before retrying.',
+      413: 'Choose a smaller recording or reduce the request size.',
+      415: 'Choose a supported WAV recording.',
+      429: 'Wait before retrying this request.',
+      503: 'Check engine readiness and try again when it is available.',
+    };
+    if (!localized && error instanceof Error && 'status' in error && typeof error.status === 'number' && actions[error.status]) message += ' ' + t(actions[error.status]);
+    if (error instanceof Error && 'retryAfter' in error && typeof error.retryAfter === 'number' && Number.isFinite(error.retryAfter) && error.retryAfter > 0) message += ' ' + t('Try again in {seconds} seconds.', { seconds: Math.ceil(error.retryAfter) });
+    if (error instanceof Error && 'requestId' in error && typeof error.requestId === 'string') message += ' (' + t('Request ID: {id}', { id: error.requestId }) + ')';
+    return message;
   });
 }
 export function languageName(code: string) {

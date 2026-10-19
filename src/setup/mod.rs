@@ -54,6 +54,14 @@ pub async fn get_setup_status(
     let config = state.config.get().await;
     Json(serde_json::json!({
         "setup_complete": config.setup_complete,
+        "constraints": {
+            "version": 1,
+            "password_min_chars": crate::config::model::MIN_ADMIN_PASSWORD_LEN,
+            "rejected_passwords": crate::config::model::REJECTED_PASSWORDS,
+            "max_inference_steps": crate::config::model::MAX_INFERENCE_STEPS,
+            "auth_modes": ["local", "token", "none"],
+            "allow_insecure_remote": config.security.allow_insecure_remote,
+        },
         "audio": config.audio,
         "model": {
             "cache_dir": config.model.cache_dir,

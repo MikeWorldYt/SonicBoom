@@ -53,6 +53,10 @@ impl CloneMode {
         }
     }
 
+    pub fn requires_transcript(self) -> bool {
+        self == Self::Icl
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "icl" => Some(Self::Icl),
@@ -179,20 +183,31 @@ impl SamplingParams {
         }
     }
 
+    pub const TEMPERATURE_MIN: f32 = 0.0;
+    pub const TEMPERATURE_MAX: f32 = 5.0;
+    pub const TOP_K_MAX: usize = 2048;
+    pub const TOP_P_MAX: f32 = 1.0;
+    pub const REPETITION_MIN: f32 = 1.0;
+    pub const REPETITION_MAX: f32 = 4.0;
+
     /// Validate against the bounds every sampler enforces.
     pub fn validate(&self, label: &str) -> Result<(), String> {
-        if !self.temperature.is_finite() || !(0.0..=5.0).contains(&self.temperature) {
+        if !self.temperature.is_finite()
+            || !(Self::TEMPERATURE_MIN..=Self::TEMPERATURE_MAX).contains(&self.temperature)
+        {
             return Err(format!(
                 "{label} temperature must be finite and within 0.0..=5.0"
             ));
         }
-        if self.top_k > 2048 {
+        if self.top_k > Self::TOP_K_MAX {
             return Err(format!("{label} top_k must be within 0..=2048"));
         }
-        if !self.top_p.is_finite() || self.top_p <= 0.0 || self.top_p > 1.0 {
+        if !self.top_p.is_finite() || self.top_p <= 0.0 || self.top_p > Self::TOP_P_MAX {
             return Err(format!("{label} top_p must be finite and within 0.0..=1.0"));
         }
-        if !self.repetition_penalty.is_finite() || !(1.0..=4.0).contains(&self.repetition_penalty) {
+        if !self.repetition_penalty.is_finite()
+            || !(Self::REPETITION_MIN..=Self::REPETITION_MAX).contains(&self.repetition_penalty)
+        {
             return Err(format!(
                 "{label} repetition_penalty must be finite and within 1.0..=4.0"
             ));

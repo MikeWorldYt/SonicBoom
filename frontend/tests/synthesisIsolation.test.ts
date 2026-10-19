@@ -13,7 +13,7 @@ function fixture() {
   let stage = 'completed';
   let release: (() => void) | undefined;
   const studio = {
-    text: ref('hola'), voice: ref('A'), language: ref('es'), token: ref(''),
+    scopeEpoch: ref(0), text: ref('hola'), voice: ref('A'), language: ref('es'), token: ref(''),
     selectedModel: shallowRef({ id: 'pocket-es', ready: true, cloned: true }),
     info: ref(null),
     sampling: ref({ preset: 'balanced' }),
@@ -161,4 +161,53 @@ test('late cancellation acknowledgement cannot resume a newer failed job', async
     assert.equal(f.synthesis.audioUrl.value, '');
     assert.equal(f.synthesis.complete.value, false);
   } finally { release(); f.synthesis.dispose(); }
+});
+
+test('six outputs retain four URLs and revoke evicted audio', async () => {
+  const original = URL.revokeObjectURL;
+  const revoked: string[] = [];
+  URL.revokeObjectURL = value => { revoked.push(value); original(value); };
+  const f = fixture();
+  try {
+    const urls: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      f.studio.text.value = `output ${i}`;
+      await f.synthesis.generate();
+      urls.push(f.synthesis.audioUrl.value);
+    }
+    assert.equal(f.synthesis.results.value.length, 4);
+    assert.deepEqual(revoked, urls.slice(0, 2));
+    assert.equal(await (await fetch(urls[5])).text(), 'job-6');
+    f.synthesis.dispose();
+    assert.equal(new Set(revoked).size, 6);
+  } finally { f.synthesis.dispose(); URL.revokeObjectURL = original; }
+});
+
+test('token change cancels monitoring and discards late audio and previous results', async () => {
+  const f = fixture();
+  try {
+    await f.synthesis.generate();
+    assert.equal(f.synthesis.results.value.length, 1);
+    f.delay();
+    const pending = f.synthesis.generate();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    f.studio.token.value = 'different-owner';
+    f.release();
+    await pending;
+    assert.equal(f.synthesis.audioUrl.value, '');
+    assert.equal(f.synthesis.results.value.length, 0);
+    assert.equal(f.synthesis.jobId.value, null);
+    assert.equal(f.synthesis.pending.value, false);
+  } finally { f.synthesis.dispose(); }
+});
+
+test('authentication-scope changes discard previously owned audio even with unchanged token', async () => {
+  const f = fixture();
+  try {
+    await f.synthesis.generate();
+    assert.equal(f.synthesis.results.value.length, 1);
+    f.studio.scopeEpoch.value++;
+    assert.equal(f.synthesis.results.value.length, 0);
+    assert.equal(f.synthesis.audioUrl.value, '');
+  } finally { f.synthesis.dispose(); }
 });

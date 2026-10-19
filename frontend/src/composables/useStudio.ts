@@ -1,4 +1,8 @@
 import { computed, inject, onMounted, onUnmounted, ref, shallowRef, watch, type InjectionKey } from 'vue';
+import { samplingQuery, samplingErrors, type SamplingDraft } from '../features/speech/generationSchemas';
+export { samplingQuery } from '../features/speech/generationSchemas';
+import { isCancelledError } from '@tanstack/vue-query';
+import { createResourceCache } from '../app/queryClient';
 import { createHttpClient, ApiError } from '../services/http';
 import { createApi, type Api } from '../services/api';
 import { modelLanguages } from '../services/providerLanguages';
@@ -22,19 +26,7 @@ export function slowRefreshDue(tick: number): boolean {
 }
 
 /** Qwen3-TTS advanced generation settings (all optional, string-backed). */
-export interface SamplingState {
-  preset: string;
-  seed: string;
-  quality: string;
-  talkerTemperature: string;
-  talkerTopK: string;
-  talkerTopP: string;
-  talkerRepetitionPenalty: string;
-  predictorTemperature: string;
-  predictorTopK: string;
-  predictorTopP: string;
-  predictorRepetitionPenalty: string;
-}
+export type SamplingState = SamplingDraft;
 export const DEFAULT_SAMPLING: SamplingState = {
   preset: 'balanced', seed: '', quality: '',
   talkerTemperature: '', talkerTopK: '', talkerTopP: '', talkerRepetitionPenalty: '',
@@ -44,34 +36,19 @@ const samplingStorageKey = 'sonicboom.sampling';
 function loadSampling(): SamplingState {
   try {
     const saved = localStorage.getItem(samplingStorageKey);
-    if (saved) return { ...DEFAULT_SAMPLING, ...(JSON.parse(saved) as Partial<SamplingState>) };
+    if (saved) {
+      const value: unknown = JSON.parse(saved);
+      if (value && typeof value === 'object') return Object.fromEntries(Object.entries(DEFAULT_SAMPLING).map(([key, fallback]) => [key, typeof (value as Record<string, unknown>)[key] === 'string' ? (value as Record<string, string>)[key] : fallback])) as unknown as SamplingState;
+    }
   } catch { /* Storage can be unavailable in restricted contexts. */ }
   return { ...DEFAULT_SAMPLING };
 }
 function persistSampling(sampling: SamplingState) {
   try { localStorage.setItem(samplingStorageKey, JSON.stringify(sampling)); } catch { /* session-only */ }
 }
-/** Maps the UI state to API query parameters, omitting empty values. */
-export function samplingQuery(sampling: SamplingState): Record<string, string> {
-  const pairs: [string, string][] = [
-    ['sampling_preset', sampling.preset],
-    ['seed', sampling.seed],
-    ['quality', sampling.quality],
-    ['talker_temperature', sampling.talkerTemperature],
-    ['talker_top_k', sampling.talkerTopK],
-    ['talker_top_p', sampling.talkerTopP],
-    ['talker_repetition_penalty', sampling.talkerRepetitionPenalty],
-    ['predictor_temperature', sampling.predictorTemperature],
-    ['predictor_top_k', sampling.predictorTopK],
-    ['predictor_top_p', sampling.predictorTopP],
-    ['predictor_repetition_penalty', sampling.predictorRepetitionPenalty],
-  ];
-  const query: Record<string, string> = {};
-  for (const [key, value] of pairs) { const trimmed = value.trim(); if (trimmed) query[key] = trimmed; }
-  return query;
-}
 export function createStudio(data: HomeData, overrides?: { api?: Api }) {
   const token = ref('');
+  const scopeEpoch = ref(0);
   const info = shallowRef<ServerInfo | null>(null);
   const providers = shallowRef<ProviderStatus[]>(data.providers.map(entry => entry.status));
   const capabilities = shallowRef<Capabilities[]>([]);
@@ -91,9 +68,12 @@ export function createStudio(data: HomeData, overrides?: { api?: Api }) {
   const preview = ref(0);
   const sampling = ref<SamplingState>(loadSampling());
   watch(sampling, value => persistSampling({ ...value }), { deep: true });
-  const samplingParams = computed(() => samplingQuery(sampling.value));
+  const samplingIssues = computed(() => samplingErrors(sampling.value, info.value?.synthesis?.sampling));
+  const samplingParams = computed(() => samplingQuery(sampling.value, info.value?.synthesis?.sampling));
   function resetSampling() { sampling.value = { ...DEFAULT_SAMPLING }; }
-  const api = overrides?.api ?? createApi(createHttpClient(() => token.value, () => info.value?.auth.required ?? true));
+  let session = new AbortController();
+  const cache = createResourceCache();
+  const api = overrides?.api ?? createApi(createHttpClient(() => token.value, () => info.value?.auth.required ?? true, () => session.signal));
   let disposed = false;
   let refreshing = false;
   let queued = false;
@@ -102,25 +82,31 @@ export function createStudio(data: HomeData, overrides?: { api?: Api }) {
   // Generation guard: responses from an older token (or a disposed studio)
   // never overwrite newer state. Bumped on token change and disposal.
   let generation = 0;
+  let authScope: string | null = null;
   // Last model status that triggered a built-in voices fetch. Immutable
   // voices are re-fetched only when readiness changes, not every tick.
   let lastVoicesStatus: string | null = null;
   async function load(area: string, action: () => Promise<void>) {
     const gen = generation;
     try { await action(); if (gen !== generation || disposed) return; errors.value[area] = undefined; }
-    catch (error) { if (gen !== generation || disposed) return; errors.value[area] = errorMessage(error); }
+    catch (error) { if (gen !== generation || disposed || isCancelledError(error)) return; errors.value[area] = errorMessage(error); }
   }
   async function refreshInfo() {
     const gen = generation;
     await load('info', async () => {
-      const result = await api.info();
+      const result = await cache.read(gen, 'info', signal => api.info(signal));
       if (gen !== generation || disposed) return;
+      const nextAuth = `${result.auth.mode}:${result.auth.required}`;
+      if (authScope !== null && authScope !== nextAuth) {
+        authScope = nextAuth; info.value = result; invalidateSession(); void refresh(); return;
+      }
+      authScope = nextAuth;
       info.value = result;
       // Built-in voices are immutable for a model state: refetch only when
       // readiness changes (first load, or a ready transition), never on
       // every ready-state tick.
       if (result.model.status === 'ready' && lastVoicesStatus !== 'ready') {
-        const voices = await api.builtinVoices();
+        const voices = await cache.read(gen, `builtin-${result.model.status}`, signal => api.builtinVoices(signal));
         if (gen !== generation || disposed) return;
         builtinVoices.value = voices;
       }
@@ -129,17 +115,28 @@ export function createStudio(data: HomeData, overrides?: { api?: Api }) {
   }
   async function refreshProviders() {
     const gen = generation;
-    await load('providers', async () => { const result = await api.providers(); if (gen !== generation || disposed) return; providers.value = result.providers; capabilities.value = result.capabilities; diagnostics.value = result.diagnostics; });
+    await load('providers', async () => { const result = await cache.read(gen, 'providers', signal => api.providers(signal)); if (gen !== generation || disposed) return; providers.value = result.providers; capabilities.value = result.capabilities; diagnostics.value = result.diagnostics; });
   }
-  async function refreshVoices() { const gen = generation; await load('voices', async () => { const result = await api.voices(); if (gen !== generation || disposed) return; voices.value = result; }); }
+  async function refreshVoices(force = true) { const gen = generation; await load('voices', async () => { if (force) await cache.invalidate('voices', true); const result = await cache.read(gen, 'voices', signal => api.voices(signal)); if (gen !== generation || disposed) return; voices.value = result; }); }
+  async function refreshDevices() {
+    const gen = generation;
+    await load('devices', async () => {
+      const value = await cache.read(gen, 'devices', signal => api.audioDevices(signal), 30000);
+      if (gen === generation && !disposed) devices.value = value;
+    });
+  }
   async function refreshConfig(force = false) {
     const gen = generation;
     await load('settings', async () => {
-      const result = await api.configStatus();
+      const result = await cache.read(gen, 'config-status', signal => api.configStatus(signal));
       if (gen !== generation || disposed) return;
       status.value = result;
       if (force || !config.value || result.revision !== config.value.revision || !Object.keys(schema.value).length) {
-        const [snapshot, definitions] = await Promise.all([api.config(), api.schema()]);
+        if (force || result.revision !== config.value?.revision) await cache.invalidate('config');
+        const [snapshot, definitions] = await Promise.all([
+          cache.read(gen, 'config', signal => api.config(signal), force ? 0 : 1000),
+          cache.read(gen, 'schema', signal => api.schema(signal), Infinity),
+        ]);
         if (gen !== generation || disposed) return;
         config.value = snapshot; schema.value = definitions;
       }
@@ -151,7 +148,7 @@ export function createStudio(data: HomeData, overrides?: { api?: Api }) {
   }
   async function refreshSlow() {
     // Low-frequency metadata: voice list plus the conditional snapshot.
-    await Promise.all([refreshVoices(), refreshConfig()]);
+    await Promise.all([refreshVoices(false), refreshDevices()]);
   }
   async function refresh(forceSlow = true) {
     if (refreshing) { queued = true; if (forceSlow) slowQueued = true; return; }
@@ -163,7 +160,14 @@ export function createStudio(data: HomeData, overrides?: { api?: Api }) {
     finally { refreshing = false; loading.value = false; if (queued && !disposed) { queued = false; void refresh(slowQueued); } }
   }
   async function saveSetting(path: string, value: Json) {
-    await api.patchConfig(nestedChange(path, value), config.value?.revision);
+    try { await api.patchConfig(nestedChange(path, value), config.value?.revision); }
+    catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        await refreshConfig(true);
+        throw Object.assign(error, { localizedMessage: { key: 'Settings changed on the server. Your draft is preserved. Review the current value before saving again.' } });
+      }
+      throw error;
+    }
     await refreshConfig(true);
     if (errors.value.settings) throw Object.assign(new Error(), { localizedMessage: errors.value.settings });
   }
@@ -186,20 +190,32 @@ export function createStudio(data: HomeData, overrides?: { api?: Api }) {
     if (errors.value.providers) throw Object.assign(new Error(), { localizedMessage: errors.value.providers });
   }
   const models = computed(() => [
-    { id: 'supertonic-3', provider: 'supertonic', cloned: false, languages: [], ready: info.value ? info.value.model.status === 'ready' : data.modelReady },
+    { id: 'supertonic-3', provider: 'supertonic', cloned: false, languages: capabilities.value.find(cap => cap.provider_id === 'supertonic')?.languages || ['en'], ready: info.value ? info.value.model.status === 'ready' : data.modelReady },
     ...capabilities.value.filter(cap => cap.requires_reference_audio).flatMap(cap => cap.models.map(id => ({ id, provider: cap.provider_id, cloned: true, languages: modelLanguages(cap, id), ready: providers.value.some(provider => provider.provider_id === cap.provider_id && provider.state === 'ready' && (cap.provider_id !== 'pocket-tts' || provider.active_model === id)) }))),
   ]);
   const selectedModel = computed(() => models.value.find(item => item.id === model.value) || models.value[0]);
-  const availableVoices = computed(() => selectedModel.value.cloned ? voices.value.filter(item => item.model === model.value).map(item => ({ id: item.id, name: item.name, detail: `${item.provider} · ${item.language}`, cloned: true })) : builtinVoices.value.map(item => ({ ...item, detail: 'Built-in voice', cloned: false })));
+  function profileCompatible(profile: Voice) {
+    const provider = providers.value.find(item => item.provider_id === profile.provider);
+    const cap = capabilities.value.find(item => item.provider_id === profile.provider);
+    return !(provider?.model_revision && profile.model_revision && provider.model_revision !== profile.model_revision)
+      && (!cap || cap.models.includes(profile.model) && cap.clone_modes.includes(profile.clone_mode) && cap.languages.includes(profile.language));
+  }
+  const availableVoices = computed(() => selectedModel.value.cloned ? voices.value.filter(item => item.model === model.value && profileCompatible(item)).map(item => ({ id: item.id, name: item.name, detail: `${item.provider} · ${item.language}`, cloned: true })) : builtinVoices.value.map(item => ({ ...item, detail: 'Built-in voice', cloned: false })));
   watch(availableVoices, value => { if (!value.some(item => item.id === voice.value)) voice.value = value[0]?.id || ''; });
   watch(voice, value => { const profile = voices.value.find(item => item.id === value); if (profile) language.value = profile.language; });
   watch(selectedModel, value => { if (value.languages.length && !value.languages.includes(language.value)) language.value = value.languages[0]; });
-  watch(token, () => { generation++; void refresh(); });
-  function dispose() { disposed = true; generation++; clearInterval(timer); }
+  function invalidateSession() {
+    generation++; scopeEpoch.value = generation;
+    session.abort(); session = new AbortController(); cache.clear();
+    voices.value = []; config.value = null; status.value = null; schema.value = {};
+    providers.value = []; capabilities.value = []; devices.value = []; errors.value = {};
+    lastVoicesStatus = null;
+  }
+  watch(token, () => { invalidateSession(); void refresh(); }, { flush: 'sync' });
+  function dispose() { disposed = true; generation++; session.abort(); cache.clear(); clearInterval(timer); }
   function selectProfile(profile: Voice, previewAudio = false) { model.value = profile.model; voice.value = profile.id; language.value = profile.language; if (previewAudio) preview.value++; }
   onMounted(() => {
     void refresh();
-    void api.audioDevices().then(value => { if (!disposed) devices.value = value; }).catch(() => {});
   });
   // Fast status ticks every 5s while visible; slow metadata every 6th tick.
   // In-flight refreshes are deduped, stale token generations are dropped,
@@ -210,7 +226,7 @@ export function createStudio(data: HomeData, overrides?: { api?: Api }) {
     void refresh(slowRefreshDue(tick));
   }, STUDIO_FAST_MS);
   onUnmounted(dispose);
-  return { api, token, info, providers, capabilities, diagnostics, builtinVoices, voices, config, status, schema, devices, errors, loading, model, voice, language, text, preview, sampling, samplingParams, resetSampling, models, selectedModel, availableVoices, refresh, refreshConfig, refreshProviders, refreshVoices, saveSetting, toggleProvider, activatePocketModel, selectProfile, dispose };
+  return { api, token, scopeEpoch, info, providers, capabilities, diagnostics, builtinVoices, voices, config, status, schema, devices, errors, loading, model, voice, language, text, preview, sampling, samplingIssues, samplingParams, resetSampling, models, selectedModel, availableVoices, refresh, refreshConfig, refreshProviders, refreshVoices, saveSetting, toggleProvider, activatePocketModel, profileCompatible, selectProfile, dispose };
 }
 export type Studio = ReturnType<typeof createStudio>;
 export const studioKey: InjectionKey<Studio> = Symbol('SonicBoom studio');

@@ -34,9 +34,9 @@ function active(model: string) {
     <dl v-if="provider.backend_diagnostics" class="help-note">
       <dt>{{ provider.backend_diagnostics.status }}</dt>
       <dd>{{ provider.backend_diagnostics.vulkan_gpu_name }}</dd>
-      <dt>Compiled / available</dt><dd>{{ provider.backend_diagnostics.compiled_backends.join(', ') }} / {{ provider.backend_diagnostics.available_runtime_backends.join(', ') }}</dd>
-      <dt>Requested / effective</dt><dd>{{ provider.backend_diagnostics.requested_device }} / {{ provider.backend_diagnostics.effective_device || '—' }}</dd>
-      <dt>Model</dt><dd>{{ provider.backend_diagnostics.model_loading_status }}</dd>
+      <dt>{{ t('Compiled / available') }}</dt><dd>{{ provider.backend_diagnostics.compiled_backends.join(', ') }} / {{ provider.backend_diagnostics.available_runtime_backends.join(', ') }}</dd>
+      <dt>{{ t('Requested / effective') }}</dt><dd>{{ provider.backend_diagnostics.requested_device }} / {{ provider.backend_diagnostics.effective_device || '—' }}</dd>
+      <dt>{{ t('Model') }}</dt><dd>{{ provider.backend_diagnostics.model_loading_status }}</dd>
       <dd v-if="provider.backend_diagnostics.cpu_fallback_reason">{{ provider.backend_diagnostics.cpu_fallback_reason }}</dd>
       <dd v-else-if="provider.backend_diagnostics.vulkan_initialization_error">{{ provider.backend_diagnostics.vulkan_initialization_error }}</dd>
     </dl>
