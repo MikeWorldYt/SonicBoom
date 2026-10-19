@@ -53,6 +53,12 @@ if(GGML_CUDA)
   file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/cuda-link-paths.txt" CONTENT
     "${SONICBOOM_CUDA_LINK_FILES}\n")
 endif()
+if(GGML_VULKAN)
+  # Find Vulkan in this scope: the vendored ggml-vulkan find_package() runs
+  # in a subdirectory scope, so Vulkan_INCLUDE_DIRS would otherwise be empty
+  # here (fatal on Windows, where MSVC has no default Vulkan include path).
+  find_package(Vulkan REQUIRED)
+endif()
 add_subdirectory(../../vendor/llama.cpp llama)
 # The pinned llama.cpp revision discovers the SPIRV-Headers CMake package but
 # never links its imported target, so ggml-vulkan.cpp's `#include <spirv/...>`
