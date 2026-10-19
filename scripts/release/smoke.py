@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Extract and run the shipped archive in an isolated, model-free environment."""
 import argparse
+import json
+from package import validate_build_info
 import os
 from pathlib import Path
 import socket
@@ -15,7 +17,7 @@ import zipfile
 
 def smoke(archive):
     windows = archive.suffix == '.zip'
-    with tempfile.TemporaryDirectory(prefix='sonicboom-smoke-') as temporary:
+    with tempfile.TemporaryDirectory(prefix='sonicboom smoke ü-') as temporary:
         root = Path(temporary)
         app = root / 'app'
         app.mkdir()
@@ -67,6 +69,19 @@ def smoke(archive):
                 print(result.stdout)
                 if 'not found' in result.stdout:
                     raise RuntimeError(f'Unresolved shared library in {native}')
+        info = json.loads(subprocess.check_output([str(binary), '--build-info'], cwd=root, env=env, text=True))
+        validate_build_info(info)
+        recorded = json.loads((app / 'BUILD-INFO.json').read_text())
+        for key in ('features', 'native_backends'):
+            if recorded[key] != info[key]:
+                raise RuntimeError(f'Packaged build metadata differs from executable: {key}')
+        # Invalid ICD forces no usable device without relying on hosted GPU availability.
+        env['VK_DRIVER_FILES'] = str(root / 'missing-driver.json')
+        env['VK_ICD_FILENAMES'] = env['VK_DRIVER_FILES']
+        no_gpu = json.loads(subprocess.check_output([str(binary), '--build-info'], cwd=root, env=env, text=True))
+        if 'vulkan: ' in no_gpu['runtime_backends']:
+            raise RuntimeError('Invalid ICD probe unexpectedly found a Vulkan device')
+        validate_build_info(no_gpu)
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0))
             port = sock.getsockname()[1]

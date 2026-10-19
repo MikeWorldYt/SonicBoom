@@ -148,6 +148,7 @@ impl TtsProvider for SupertonicProvider {
             active_model,
             effective_device: Some(EffectiveDevice::Cpu.as_str().to_string()),
             model_revision: None,
+            backend_diagnostics: None,
             detail,
         }
     }

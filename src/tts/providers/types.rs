@@ -335,6 +335,8 @@ pub struct ProviderStatus {
     pub active_model: Option<String>,
     pub effective_device: Option<String>,
     pub model_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_diagnostics: Option<serde_json::Value>,
     pub detail: Option<String>,
 }
 

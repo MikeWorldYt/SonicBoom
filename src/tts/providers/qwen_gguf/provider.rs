@@ -126,6 +126,41 @@ impl QwenGgufProvider {
         })
     }
 
+    fn backend_diagnostics(&self) -> serde_json::Value {
+        let config = self.config_snapshot();
+        let discovery = sonicboom_qwen_llama::runtime_backends();
+        let gpu = discovery
+            .lines()
+            .find_map(|line| line.strip_prefix("vulkan: "));
+        let mut compiled = vec!["cpu"];
+        if cfg!(feature = "qwen-gguf-vulkan") {
+            compiled.push("vulkan");
+        }
+        if cfg!(feature = "qwen-gguf-cuda") {
+            compiled.push("cuda");
+        }
+        let state = self.state.lock().ok();
+        let effective = state.as_ref().and_then(|s| s.effective_device.as_deref());
+        let fallback = state.as_ref().and_then(|s| s.fallback_reason.as_deref());
+        let failed = state.as_ref().is_some_and(|s| s.load_error.is_some());
+        let loading = state.as_ref().is_some_and(|s| s.ensuring);
+        let initialization_error = discovery.lines().find(|line| {
+            line.contains("missing") || line.contains("No usable") || line.contains("failed")
+        });
+        serde_json::json!({
+            "compiled_backends": compiled,
+            "available_runtime_backends": if gpu.is_some() { vec!["cpu", "vulkan"] } else { vec!["cpu"] },
+            "vulkan_gpu_name": gpu,
+            "requested_device": format!("{:?}", config.device).to_ascii_lowercase(),
+            "effective_device": effective,
+            "model_loading_status": if failed { "failed" } else if loading { "loading" } else if effective.is_some() { "loaded" } else { "unloaded" },
+            "vulkan_initialization_error": initialization_error,
+            // Detailed model errors can include file paths. Keep those in local logs.
+            "cpu_fallback_reason": fallback.map(|_| initialization_error.unwrap_or("Vulkan model initialization failed; CPU fallback active")),
+            "status": if effective == Some("vulkan") { "Vulkan running" } else if fallback.is_some() { "CPU fallback active" } else if failed && config.device == Device::Vulkan { "Vulkan model initialization failed" } else if gpu.is_some() { "Vulkan available" } else { initialization_error.unwrap_or("Vulkan not compiled") }
+        })
+    }
+
     fn config_snapshot(&self) -> QwenGgufConfig {
         self.config.lock().map(|c| c.clone()).unwrap_or_default()
     }
@@ -327,6 +362,7 @@ impl super::super::TtsProvider for QwenGgufProvider {
                 active_model: None,
                 effective_device: None,
                 model_revision: Some(models::REVISION.to_string()),
+                backend_diagnostics: Some(self.backend_diagnostics()),
                 detail: Some(
                     "provider disabled in configuration \
                      ([providers.qwen3_gguf] enabled=false)"
@@ -394,6 +430,7 @@ impl super::super::TtsProvider for QwenGgufProvider {
             active_model: loaded.or(Some(QWEN_GGUF_MODELS[0].to_string())),
             effective_device: effective,
             model_revision: Some(models::REVISION.to_string()),
+            backend_diagnostics: Some(self.backend_diagnostics()),
             detail,
         }
     }

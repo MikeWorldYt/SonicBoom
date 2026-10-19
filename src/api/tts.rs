@@ -717,6 +717,7 @@ mod plugin_play_tests {
                 active_model: self.capabilities().models.first().cloned(),
                 effective_device: Some("cpu".into()),
                 model_revision: None,
+                backend_diagnostics: None,
                 detail: None,
             }
         }

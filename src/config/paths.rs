@@ -89,6 +89,35 @@ pub fn resolve_config_path() -> PathBuf {
     config_dir().join("config.toml")
 }
 
+/// Preserve existing relative model directories; otherwise anchor portable paths
+/// to config/executable rather than the caller's working directory.
+pub fn resolve_model_dir(path: &std::path::Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    if path.is_dir()
+        && let Ok(cwd) = std::env::current_dir()
+    {
+        return cwd.join(path);
+    }
+    let config = resolve_config_path();
+    let base = config.parent().unwrap_or(std::path::Path::new("."));
+    let configured = base.join(path);
+    if configured.is_dir() {
+        return configured;
+    }
+    if let Some(exe) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+    {
+        let portable = exe.join(path);
+        if portable.is_dir() {
+            return portable;
+        }
+    }
+    configured
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

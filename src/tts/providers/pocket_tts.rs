@@ -2035,6 +2035,7 @@ impl TtsProvider for PocketTtsProvider {
                 active_model: None,
                 effective_device: None,
                 model_revision: Some(config.revision),
+                backend_diagnostics: None,
                 detail: Some(
                     "provider disabled in configuration ([providers.pocket_tts] enabled=false)"
                         .to_string(),
@@ -2098,6 +2099,7 @@ impl TtsProvider for PocketTtsProvider {
             active_model: loaded.or(Some(config.model_id)),
             effective_device: Some(EffectiveDevice::Cpu.as_str().to_string()),
             model_revision: Some(config.revision),
+            backend_diagnostics: None,
             detail,
         }
     }

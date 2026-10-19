@@ -187,6 +187,15 @@ fn validate_vulkan() {
              Bypass this check: SONICBOOM_SKIP_SDK_CHECK=1.",
         );
     }
+    if target_is_windows()
+        && !keys
+            .iter()
+            .any(|root| root.join("Lib/vulkan-1.lib").is_file())
+    {
+        fail(
+            "Vulkan SDK linker library missing: expected VULKAN_SDK/Lib/vulkan-1.lib; install the x64 LunarG SDK",
+        );
+    }
     // ggml-vulkan includes <spirv/unified1/spirv.hpp> directly. This pinned
     // llama.cpp revision finds the SPIRV-Headers *config* package but never
     // links its imported target, so the headers must either sit in a
@@ -233,6 +242,7 @@ fn main() {
         println!("cargo:rerun-if-env-changed={var}");
     }
     println!("cargo:rerun-if-changed=shim.cpp");
+    println!("cargo:rerun-if-changed=vulkan-loader.cpp");
     println!("cargo:rerun-if-changed=CMakeLists.txt");
     println!("cargo:rerun-if-changed=../../vendor/llama.cpp/include/llama.h");
     let sources = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/llama.cpp");
@@ -326,14 +336,6 @@ fn main() {
     }
     if vulkan {
         println!("cargo:rustc-link-lib=static=ggml-vulkan");
-        println!(
-            "cargo:rustc-link-lib={}",
-            if target_is_windows() {
-                "vulkan-1"
-            } else {
-                "vulkan"
-            }
-        );
     }
     if cuda {
         let paths = std::fs::read_to_string(dst.join("build/cuda-link-paths.txt"))

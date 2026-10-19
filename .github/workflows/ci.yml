@@ -298,7 +298,7 @@ jobs:
         run: python3 scripts/ci/preflight.py
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - name: Install Vulkan SDK build dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake g++ libvulkan-dev glslc spirv-headers
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libvulkan-dev vulkan-tools glslc spirv-headers
       - name: Compile and test explicit Vulkan backend (no GPU inference)
         run: cargo test --locked --no-default-features --features qwen-gguf-vulkan --lib
 
@@ -356,22 +356,27 @@ jobs:
           restore-keys: |
             cargo-v3-${{ runner.os }}-gui-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
 
+      - name: Install pinned Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/install-vulkan.ps1
+
       - name: Install ALSA development libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libssl-dev libopus-dev pkg-config cmake clang
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libssl-dev libopus-dev pkg-config cmake clang g++ libvulkan-dev vulkan-tools glslc spirv-headers
 
       - name: Linux GUI graph must not contain glib
         if: runner.os == 'Linux'
         run: |
           set -e
-          if cargo tree --locked --features gui --target x86_64-unknown-linux-gnu -i glib 2>/dev/null | grep -q 'glib v'; then
+          if cargo tree --locked --features gui,qwen-gguf-vulkan --target x86_64-unknown-linux-gnu -i glib 2>/dev/null | grep -q 'glib v'; then
             echo "ERROR: glib present in Linux GUI dependency graph" >&2
             exit 1
           fi
           echo "OK: no glib in Linux GUI graph"
 
       - name: Clippy (GUI)
-        run: cargo clippy --locked --features gui --target ${{ matrix.target }} --all-targets -- -D warnings
+        run: cargo clippy --locked --features gui,qwen-gguf-vulkan --target ${{ matrix.target }} --all-targets -- -D warnings
 
       # ort/copy-dylibs can copy only beside the profile root when Windows
       # symlinks are unavailable (cache and checkout live on different drives).
@@ -382,10 +387,10 @@ jobs:
         run: '"${{ github.workspace }}/target/${{ matrix.target }}/debug" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append'
 
       - name: Test (GUI)
-        run: cargo test --locked --features gui --target ${{ matrix.target }}
+        run: cargo test --locked --features gui,qwen-gguf-vulkan --target ${{ matrix.target }}
 
       - name: Build release (GUI)
-        run: cargo build --release --locked --features gui --target ${{ matrix.target }}
+        run: cargo build --release --locked --features gui,qwen-gguf-vulkan --target ${{ matrix.target }}
 
       - name: Package release binary (case-sensitive existence check)
         run: python scripts/release/package.py --target ${{ matrix.target }}

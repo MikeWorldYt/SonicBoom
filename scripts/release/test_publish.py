@@ -8,6 +8,10 @@ import unittest
 from unittest.mock import patch
 
 import package
+import io
+import tarfile
+import zipfile
+from test_packaging import BUILD_INFO
 import publish
 
 
@@ -68,7 +72,15 @@ class PublishingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             local = Path(temp)
             for name in package.ASSETS:
-                (local / name).write_bytes(b'tested archive bytes')
+                payload = json.dumps(BUILD_INFO).encode()
+                if name.endswith('.zip'):
+                    with zipfile.ZipFile(local / name, 'w') as z:
+                        z.writestr('BUILD-INFO.json', payload)
+                else:
+                    with tarfile.open(local / name, 'w:gz') as tar:
+                        entry = tarfile.TarInfo('BUILD-INFO.json')
+                        entry.size = len(payload)
+                        tar.addfile(entry, io.BytesIO(payload))
             package.checksums(local)
             tamper = False
             def gh(*args):

@@ -10,8 +10,19 @@ import zipfile
 
 import package
 
+BUILD_INFO = {'features': ['gui', 'qwen-gguf', 'qwen-gguf-vulkan'],
+              'native_backends': ['cpu', 'vulkan'], 'runtime_backends': 'cpu'}
+
 
 class PackagingTests(unittest.TestCase):
+    def test_rejects_cpu_only_or_unregistered_executables(self):
+        package.validate_build_info(BUILD_INFO)
+        for invalid in [{**BUILD_INFO, 'features': ['gui']},
+                        {**BUILD_INFO, 'native_backends': ['cpu']},
+                        {**BUILD_INFO, 'runtime_backends': ''}]:
+            with self.assertRaises(RuntimeError):
+                package.validate_build_info(invalid)
+
     def test_checksums_require_both_archives_and_detect_tampering(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
@@ -43,6 +54,8 @@ class PackagingTests(unittest.TestCase):
             metadata = {'packages': [{'id': 'ort-sys', 'name': 'ort-sys', 'version': 'fixture',
                                      'manifest_path': str(root / 'native/Cargo.toml')}]}
             def output(args, **kwargs):
+                if '--build-info' in args:
+                    return json.dumps(BUILD_INFO)
                 return json.dumps(metadata).encode() if args[0] == 'cargo' else 'build-input\n'
             with patch.object(package, 'ROOT', root), patch.object(package.subprocess, 'check_output', side_effect=output):
                 with self.assertRaises(RuntimeError):
@@ -88,6 +101,8 @@ class PackagingTests(unittest.TestCase):
                 (build / name).write_bytes(b'nonempty native fixture')
                 (build / 'tokens.json').write_text('must never ship')
                 def output(args, **kwargs):
+                    if '--build-info' in args:
+                        return json.dumps(BUILD_INFO)
                     if args[0] == 'cargo':
                         return json.dumps({'packages': []}).encode()
                     return 'fixed-build-input\n'

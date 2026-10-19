@@ -42,6 +42,11 @@ fn main() -> Result<()> {
         "cuda" => 2,
         _ => anyhow::bail!("unknown device {device}"),
     };
+    let discovered = sonicboom_qwen_llama::runtime_backends();
+    eprintln!("Runtime backends: {discovered}");
+    if device == "vulkan" {
+        ensure!(discovered.contains("vulkan: "), "no usable Vulkan device");
+    }
     let started = Instant::now();
     let mut runtime = Runtime::load(&dir, device_id, -1, 4)?;
     let mut codec = Codec::load(&dir)?;
@@ -87,9 +92,15 @@ fn main() -> Result<()> {
     let started = Instant::now();
     let pcm = codec.decode(&generated.codes)?;
     let decode_secs = started.elapsed().as_secs_f64();
+    ensure!(
+        !pcm.is_empty() && pcm.iter().all(|v| v.is_finite()),
+        "empty/non-finite inference output"
+    );
+    runtime.reset()?;
+    drop(runtime); // release both model/context handles before declaring success
     let audio_secs = pcm.len() as f64 / 24_000.0;
     let output = std::env::var("QWEN_GGUF_OUTPUT")
-        .unwrap_or_else(|_| "/tmp/sonicboom-qwen-gguf-smoke.wav".into());
+        .unwrap_or_else(|_| "sonicboom-qwen-gguf-smoke.wav".into());
     let mut writer = hound::WavWriter::create(
         &output,
         hound::WavSpec {
@@ -105,7 +116,7 @@ fn main() -> Result<()> {
     writer.finalize()?;
     println!(
         "{}",
-        serde_json::json!({"device":device,"onnx_device":"cpu","model_revision":models::REVISION,"seed":seed,"frames":generated.codes.len(),"reached_eos":generated.reached_eos,"load_secs":load_secs,"conditioning_secs":conditioning_secs,"generation_secs":generation_secs,"decode_secs":decode_secs,"audio_secs":audio_secs,"rtf":(generation_secs+decode_secs)/audio_secs,"finite":pcm.iter().all(|v| v.is_finite()),"peak":pcm.iter().copied().map(f32::abs).fold(0.0f32,f32::max),"output":output})
+        serde_json::json!({"device":device,"runtime_backends":discovered,"cleanup":true,"onnx_device":"cpu","model_revision":models::REVISION,"seed":seed,"frames":generated.codes.len(),"reached_eos":generated.reached_eos,"load_secs":load_secs,"conditioning_secs":conditioning_secs,"generation_secs":generation_secs,"decode_secs":decode_secs,"audio_secs":audio_secs,"rtf":(generation_secs+decode_secs)/audio_secs,"finite":pcm.iter().all(|v| v.is_finite()),"peak":pcm.iter().copied().map(f32::abs).fold(0.0f32,f32::max),"output":output})
     );
     Ok(())
 }

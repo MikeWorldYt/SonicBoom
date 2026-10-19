@@ -12,7 +12,7 @@ dependency revision):
 
 | Provider | Source | Reviewed revision | Reality |
 |---|---|---|---|
-| Qwen3-TTS GGUF/ONNX | https://huggingface.co/Emerald7664/Qwen3-TTS-ONNX (ref: https://github.com/HaujetZhao/Qwen3-TTS-GGUF) | `0a36d692562f83a862466b0bf8c12154ddf1965d` | Native Rust + llama.cpp GGUF + ONNX INT8; 1.7B Base ICL cloning only (x-vector explicitly rejected); CPU validated, Vulkan functional but output-equivalence unvalidated |
+| Qwen3-TTS GGUF/ONNX | https://huggingface.co/Emerald7664/Qwen3-TTS-ONNX (ref: https://github.com/HaujetZhao/Qwen3-TTS-GGUF) | `0a36d692562f83a862466b0bf8c12154ddf1965d` | Native Rust + llama.cpp GGUF + ONNX INT8; 1.7B Base ICL cloning only (x-vector explicitly rejected); CPU validated; Vulkan compiled into official releases by default, real GPU inference validated on AMD BC-250/RADV (output-equivalence vs CPU unvalidated) |
 | Pocket TTS | https://huggingface.co/KevinAHM/pocket-tts-onnx (export of https://github.com/kyutai-labs/pocket-tts) | `58a6d00cf13d239b6748cb0769f35c580a8f606c` | Pure-Rust driver over 5 ONNX graphs per language; CPU sessions; reference WAV, no transcript (audio-prompt mode) |
 
 ONNX Runtime's packaged native library is the only native-code exception
@@ -128,8 +128,14 @@ supported, and the effective device is always reported.
 
 ## Qwen3-TTS 1.7B GGUF/ONNX setup (CPU smoke test)
 
-1. Default builds include Qwen on CPU. Add `--features qwen-gguf-vulkan`
-   for Vulkan, or `--features qwen-gguf-cuda` for native CUDA.
+1. Default source builds include Qwen on CPU. Official releases add
+   `--features gui,qwen-gguf-vulkan` (Vulkan + CPU in one binary; loader
+   opened at runtime, CPU fallback with `device=auto`); add
+   `--features qwen-gguf-cuda` for native CUDA source builds. Provider
+   status exposes compiled/available backends, Vulkan GPU name, requested
+   vs effective device, model-loading status, Vulkan init error and CPU
+   fallback reason. Verify real GPU use with
+   `cargo run --release --features qwen-gguf-vulkan --example qwen_gguf_smoke -- <model-dir> vulkan`.
 2. Press Enable on the qwen3-gguf card (or set `enabled = true` and
    hot-reload): the server downloads the pinned bundle into
    `[providers.qwen3_gguf] model_dir` (`./models/qwen3-tts-1.7b-gguf`) in

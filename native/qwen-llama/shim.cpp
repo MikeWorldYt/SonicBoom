@@ -11,6 +11,9 @@
 #include <string>
 #include <vector>
 
+#ifdef SONICBOOM_VULKAN
+extern "C" bool sb_vulkan_loader_available() noexcept;
+#endif
 namespace {
 thread_local std::string error;
 std::mutex native_execution;
@@ -28,6 +31,27 @@ void initialize() {
 }
 extern "C" {
 const char * sb_qwen_error() noexcept { return error.c_str(); }
+const char * sb_qwen_backends() noexcept {
+    static thread_local std::string report;
+    try {
+        std::lock_guard<std::mutex> guard(native_execution);
+        initialize();
+        report = "cpu";
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            auto dev = ggml_backend_dev_get(i);
+            if (std::string(ggml_backend_reg_name(ggml_backend_dev_backend_reg(dev))) == "Vulkan") {
+                report += "\nvulkan: ";
+                report += ggml_backend_dev_description(dev);
+            }
+        }
+#ifdef SONICBOOM_VULKAN
+        if (report == "cpu") report += sb_vulkan_loader_available()
+            ? "\nNo usable Vulkan device (check Vulkan 1.2 driver and device support)"
+            : "\nVulkan driver missing: system Vulkan loader unavailable";
+#endif
+    } catch (...) { report = "cpu\nVulkan initialization failed"; }
+    return report.c_str();
+}
 // device: 0 CPU, 1 Vulkan, 2 CUDA. No implicit fallback inside a model handle.
 void * sb_qwen_open(const char * path, int device, int gpu_layers, int threads, int context, int talker) noexcept {
     try {
@@ -44,7 +68,13 @@ void * sb_qwen_open(const char * path, int device, int gpu_layers, int threads, 
                 const char * reg = ggml_backend_reg_name(ggml_backend_dev_backend_reg(dev));
                 if (std::string(reg) == wanted) { devices[0] = dev; break; }
             }
-            if (!devices[0]) throw std::runtime_error(std::string(wanted) + " device unavailable in this build/driver");
+            if (!devices[0]) {
+#ifdef SONICBOOM_VULKAN
+                if (device == 1 && !sb_vulkan_loader_available())
+                    throw std::runtime_error("Vulkan driver missing: install the system Vulkan loader and a compatible GPU driver; CPU remains available");
+#endif
+                throw std::runtime_error(std::string(wanted) + " has no usable device; check Vulkan 1.2 driver/device support");
+            }
             if (gpu_layers == 0) throw std::runtime_error("GPU requested with zero offload layers");
         }
         mp.devices = devices;

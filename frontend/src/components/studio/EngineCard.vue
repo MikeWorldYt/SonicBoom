@@ -31,6 +31,15 @@ function active(model: string) {
       <button v-else-if="isPocket" class="engine-activate" :disabled="pending || switching || !studio.schema.value['providers.pocket_tts.model_id']" :aria-label="t('Activate {model}', { model })" @click="task.run(() => studio.activatePocketModel(model))">{{ t('Activate') }}</button>
     </li></ul>
     <p v-if="switching" role="status" class="help-note">{{ t('Preparing the selected model. This page updates automatically; the first download may take a few minutes.') }}</p>
+    <dl v-if="provider.backend_diagnostics" class="help-note">
+      <dt>{{ provider.backend_diagnostics.status }}</dt>
+      <dd>{{ provider.backend_diagnostics.vulkan_gpu_name }}</dd>
+      <dt>Compiled / available</dt><dd>{{ provider.backend_diagnostics.compiled_backends.join(', ') }} / {{ provider.backend_diagnostics.available_runtime_backends.join(', ') }}</dd>
+      <dt>Requested / effective</dt><dd>{{ provider.backend_diagnostics.requested_device }} / {{ provider.backend_diagnostics.effective_device || '—' }}</dd>
+      <dt>Model</dt><dd>{{ provider.backend_diagnostics.model_loading_status }}</dd>
+      <dd v-if="provider.backend_diagnostics.cpu_fallback_reason">{{ provider.backend_diagnostics.cpu_fallback_reason }}</dd>
+      <dd v-else-if="provider.backend_diagnostics.vulkan_initialization_error">{{ provider.backend_diagnostics.vulkan_initialization_error }}</dd>
+    </dl>
     <p v-if="provider.detail">{{ t(provider.detail) }}</p>
     <p v-if="capabilities?.languages.length" class="muted">{{ t('{count} audio languages', { count: capabilities.languages.length }) }}</p>
     <div v-if="studio.schema.value[togglePath]" class="provider-actions"><button :disabled="pending" @click="task.run(() => studio.toggleProvider(provider))">{{ t(pending ? provider.enabled ? 'Stopping…' : 'Starting…' : provider.enabled ? 'Disable' : 'Enable') }}</button></div>

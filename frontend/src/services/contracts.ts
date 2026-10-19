@@ -1,7 +1,8 @@
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type JsonObject = { [key: string]: Json };
 export interface ServerInfo { version: string; mode: string; setup_complete: boolean; auth: { mode: string; required: boolean }; features: { playback: boolean; audio_devices: boolean; hot_reload: boolean }; config_revision: number; model: { status: string } }
-export interface ProviderStatus { provider_id: string; state: string; enabled: boolean; effective_device?: string | null; active_model?: string | null; detail?: string | null }
+export interface BackendDiagnostics { compiled_backends: string[]; available_runtime_backends: string[]; vulkan_gpu_name?: string | null; requested_device: string; effective_device?: string | null; model_loading_status: string; vulkan_initialization_error?: string | null; cpu_fallback_reason?: string | null; status: string }
+export interface ProviderStatus { backend_diagnostics?: BackendDiagnostics; provider_id: string; state: string; enabled: boolean; effective_device?: string | null; active_model?: string | null; detail?: string | null }
 export interface Capabilities { provider_id: string; models: string[]; languages: string[]; devices: string[]; clone_modes: string[]; requires_reference_audio: boolean; requires_reference_transcript: boolean; sample_rate?: number }
 export interface ProvidersResponse { providers: ProviderStatus[]; capabilities: Capabilities[]; diagnostics?: unknown }
 export interface Voice { id: string; name: string; provider: string; model: string; language: string; clone_mode: string; reference_duration_secs?: number; reference_sample_rate?: number; warnings?: string[]; defects?: string[]; guidance?: string[] }

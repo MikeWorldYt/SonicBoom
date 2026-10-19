@@ -7,6 +7,7 @@ use std::{
 };
 
 unsafe extern "C" {
+    fn sb_qwen_backends() -> *const c_char;
     fn sb_qwen_error() -> *const c_char;
     fn sb_qwen_open(
         path: *const c_char,
@@ -135,5 +136,23 @@ impl Drop for Model {
         unsafe {
             sb_qwen_close(self.handle.as_ptr());
         }
+    }
+}
+
+/// Model-free discovery; contains device descriptions, never local paths.
+pub fn runtime_backends() -> String {
+    // SAFETY: thread-local string copied before the next native call.
+    unsafe {
+        CStr::from_ptr(sb_qwen_backends())
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cpu_registered_in_every_build() {
+        assert!(super::runtime_backends().lines().any(|s| s == "cpu"));
     }
 }

@@ -25,7 +25,7 @@ pub fn map_qwen_gguf_config(
     use sonicboom::tts::providers::qwen_gguf::worker::Device;
     sonicboom::tts::providers::qwen_gguf::provider::QwenGgufConfig {
         enabled: gguf.enabled,
-        model_dir: gguf.model_dir.clone(),
+        model_dir: crate::config::paths::resolve_model_dir(&gguf.model_dir),
         device: match gguf.device.trim().to_ascii_lowercase().as_str() {
             "cpu" => Device::Cpu,
             "vulkan" => Device::Vulkan,

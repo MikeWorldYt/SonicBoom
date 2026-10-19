@@ -135,6 +135,30 @@ enum PrepareOutcome {
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
+    if args.get(1).is_some_and(|arg| arg == "--build-info") {
+        let mut features = Vec::new();
+        let mut backends = vec!["cpu"];
+        if cfg!(feature = "gui") {
+            features.push("gui");
+        }
+        if cfg!(feature = "qwen-gguf") {
+            features.push("qwen-gguf");
+        }
+        if cfg!(feature = "qwen-gguf-vulkan") {
+            features.push("qwen-gguf-vulkan");
+            backends.push("vulkan");
+        }
+        #[cfg(feature = "qwen-gguf")]
+        let runtime = sonicboom_qwen_llama::runtime_backends();
+        #[cfg(not(feature = "qwen-gguf"))]
+        let runtime = "cpu";
+        println!(
+            "{}",
+            serde_json::json!({"features":features,"native_backends":backends,"runtime_backends":runtime})
+        );
+        return Ok(());
+    }
+
     // CLI mode: `sonicboom config …` operates on the
     // configuration file through the same
     // `ConfigManager` the server uses, then exits.
@@ -239,6 +263,7 @@ fn prepare_config(config_path: &std::path::Path) -> Result<PrepareOutcome, Strin
     // relative paths like ./models).
     let mut bootstrap = config::model::AppConfig::default();
     bootstrap.model.cache_dir = data_dir.join("models");
+    bootstrap.providers.qwen3_gguf.model_dir = data_dir.join("models/qwen3-tts-1.7b-gguf");
     bootstrap.paths.logs = data_dir.join("logs").to_string_lossy().to_string();
     bootstrap.paths.temp_audio = data_dir.join("temp_audio").to_string_lossy().to_string();
     bootstrap.paths.audio = Some(data_dir.join("audio").to_string_lossy().to_string());

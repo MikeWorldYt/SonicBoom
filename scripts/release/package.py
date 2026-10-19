@@ -22,6 +22,14 @@ def digest(path):
         return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
+def validate_build_info(info):
+    required = {'gui', 'qwen-gguf', 'qwen-gguf-vulkan'}
+    if not required.issubset(info.get('features', [])) or info.get('native_backends') != ['cpu', 'vulkan']:
+        raise RuntimeError('Official releases require gui,qwen-gguf-vulkan and native CPU + Vulkan')
+    if 'cpu' not in info.get('runtime_backends', '').splitlines():
+        raise RuntimeError('Native CPU backend registration failed')
+
+
 def package(target, output):
     windows = target == 'x86_64-pc-windows-msvc'
     if target not in ('x86_64-pc-windows-msvc', 'x86_64-unknown-linux-gnu'):
@@ -54,7 +62,7 @@ def package(target, output):
         # Carry upstream license/notice files for resolved target dependencies.
         metadata = json.loads(subprocess.check_output([
             'cargo', 'metadata', '--locked', '--format-version', '1',
-            '--features', 'gui', '--filter-platform', target], cwd=ROOT))
+            '--features', 'gui,qwen-gguf-vulkan', '--filter-platform', target], cwd=ROOT))
         notices = stage / 'licenses'
         notices.mkdir()
         native_notices = ROOT / 'licenses/onnxruntime'
@@ -107,9 +115,15 @@ def package(target, output):
                 if destination.exists() and destination.read_bytes() != source.read_bytes():
                     raise RuntimeError(f'Ambiguous native notice: {source}')
                 shutil.copyfile(source, destination)
+        # Query the executable, not the packager's assumptions or stale Cargo outputs.
+        env = dict(__import__('os').environ)
+        env['LD_LIBRARY_PATH'] = str(build.resolve())
+        info = json.loads(subprocess.check_output([str(binary.resolve()), '--build-info'], env=env, text=True))
+        validate_build_info(info)
         (stage / 'BUILD-INFO.json').write_text(json.dumps({
+            **info,
             'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
-            'target': target, 'features': 'default + gui',
+            'target': target,
             'rustc': subprocess.check_output(['rustc', '--version'], text=True).strip(),
         }, indent=2) + '\n')
         files = {p.relative_to(stage).as_posix(): p for p in stage.rglob('*') if p.is_file()}

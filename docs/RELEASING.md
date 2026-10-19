@@ -146,9 +146,20 @@ Initialize sources with `git submodule update --init --recursive`, then run
 `python3 scripts/ci/preflight.py`. It checks the checked-out Gitlink revisions,
 explicit Cargo examples, local path manifests and each Docker builder's manifest
 inputs and feature names. CI runs it before compilation on Linux and Windows.
-Default release binaries include all providers with CPU backends. Vulkan and
-native CUDA remain explicit `qwen-gguf-vulkan` / `qwen-gguf-cuda` opt-ins and
-require their SDKs; ONNX Runtime's `cuda` feature selects a separate stack.
+Official release binaries (exactly `sonicboom-windows-x86_64.zip` and
+`sonicboom-linux-x86_64.tar.gz`) include all providers with CPU + Vulkan
+backends, built with `cargo build --release --locked --features
+gui,qwen-gguf-vulkan`. The Vulkan SDK is a build-time-only requirement
+(Windows: pinned LunarG SDK via `scripts/ci/install-vulkan.ps1`; Linux:
+`libvulkan-dev vulkan-tools glslc spirv-headers`); end users need only the
+system Vulkan loader/driver. The executable opens the loader at runtime,
+so it starts with no usable Vulkan device and falls back to CPU. Native
+CUDA remains an explicit `qwen-gguf-cuda` opt-in; ONNX Runtime's `cuda`
+feature selects a separate stack. `BUILD-INFO.json` reports the actual
+`features`/`native_backends` queried from the built executable (`--build-info`);
+packaging, smoke and publish verification reject CPU-only metadata.
+Hosted CI proves compilation/backend registration only; real GPU inference
+requires the opt-in `qwen_gguf_smoke --device vulkan` hardware test.
 
 Docker's CPU and playback targets select their features explicitly. The CUDA
 target selects both ONNX Runtime CUDA and native GGML CUDA. The locked

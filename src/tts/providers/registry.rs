@@ -160,6 +160,7 @@ mod tests {
                 active_model: self.models.first().cloned(),
                 effective_device: Some("cpu".to_string()),
                 model_revision: None,
+                backend_diagnostics: None,
                 detail: self.fail.as_ref().map(|e| e.message().to_string()),
             }
         }

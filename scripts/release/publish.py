@@ -7,7 +7,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from package import ASSETS, checksums, digest
+from package import ASSETS, checksums, digest, validate_build_info
+import tarfile
+import zipfile
 
 
 def gh(*args):
@@ -61,6 +63,15 @@ def verify(repo, tag, directory):
         for name in expected:
             if digest(downloaded / name) != digest(directory / name):
                 raise RuntimeError(f'GitHub download differs from tested artifact: {name}')
+        for name in ASSETS:
+            archive = downloaded / name
+            if name.endswith('.zip'):
+                with zipfile.ZipFile(archive) as z:
+                    info = json.loads(z.read('BUILD-INFO.json'))
+            else:
+                with tarfile.open(archive) as tar:
+                    info = json.load(tar.extractfile('BUILD-INFO.json'))
+            validate_build_info(info)
     print(f'Verified GitHub API assets and downloaded checksums for {repo}@{tag}')
 
 

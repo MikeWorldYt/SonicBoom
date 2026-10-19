@@ -34,7 +34,8 @@ cd SonicBoom
 git submodule update --init --recursive
 
 # Default build: Supertonic 3 + Pocket TTS + Qwen3-TTS on CPU.
-# GPU backends are explicit opt-ins; no GPU SDK is needed here.
+# GPU backends are explicit opt-ins in source builds; no GPU SDK is needed here.
+# Official releases instead use: --features gui,qwen-gguf-vulkan
 cargo build --release
 
 # Desktop system-tray GUI:
@@ -43,7 +44,12 @@ cargo build --release --features gui
 
 ### GPU acceleration
 
-Qwen's Vulkan backend is opt-in (`--features qwen-gguf-vulkan`). Install the
+Official Windows and Linux releases include Qwen's Vulkan backend by
+default (`--features gui,qwen-gguf-vulkan`); end users need only a system
+Vulkan loader and a compatible GPU driver — no Vulkan SDK. The binary has
+no mandatory `vulkan-1.dll`/`libvulkan.so.1` dependency: the loader is
+opened at runtime, so the app starts and falls back to CPU without a GPU.
+For source builds, install the
 [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) before building. On Windows,
 restart the terminal after installation, or set the SDK path in PowerShell:
 
