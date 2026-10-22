@@ -792,6 +792,8 @@ pub struct PocketNative {
 
 #[cfg(feature = "pocket-tts")]
 fn ort_session(path: PathBuf, cpu_threads: usize) -> Result<Session, ProviderError> {
+    crate::onnx_runtime::initialize()
+        .map_err(|e| ProviderError::inference_failed(format!("{e:#}")))?;
     let threads = cpu_threads.clamp(1, 32);
     Session::builder()
         .map_err(|e| ProviderError::inference_failed(format!("pocket-tts session setup: {e}")))?

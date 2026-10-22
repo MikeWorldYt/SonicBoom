@@ -14,6 +14,7 @@ pub struct Codec {
 }
 
 fn session(dir: &Path, file: &str) -> Result<Session> {
+    crate::onnx_runtime::initialize()?;
     Session::builder()?
         .with_intra_threads(2)
         .map_err(|e| anyhow::anyhow!("{e}"))?

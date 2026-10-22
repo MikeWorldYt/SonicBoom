@@ -136,7 +136,17 @@ fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
     if args.get(1).is_some_and(|arg| arg == "--build-info") {
-        let mut features = Vec::new();
+        let mut features = vec!["server"];
+        for (enabled, name) in [
+            (cfg!(feature = "web-ui"), "web-ui"),
+            (cfg!(feature = "android-ort"), "android-ort"),
+            (cfg!(feature = "playback"), "playback"),
+            (cfg!(feature = "pocket-tts"), "pocket-tts"),
+        ] {
+            if enabled {
+                features.push(name);
+            }
+        }
         let mut backends = vec!["cpu"];
         if cfg!(feature = "gui") {
             features.push("gui");
@@ -154,8 +164,51 @@ fn main() -> anyhow::Result<()> {
         let runtime = "cpu";
         println!(
             "{}",
-            serde_json::json!({"features":features,"native_backends":backends,"runtime_backends":runtime})
+            serde_json::json!({"features":features,"native_backends":backends,"runtime_backends":runtime, "platform":std::env::consts::OS, "architecture":std::env::consts::ARCH, "mode":if cfg!(feature="gui") {"desktop"} else {"headless"}, "playback":cfg!(feature="playback"), "web_ui":cfg!(feature="web-ui"), "onnxruntime":{"status":"unchecked"}})
         );
+        return Ok(());
+    }
+
+    if args.get(1).is_some_and(|arg| arg == "--onnx-self-test") {
+        sonicboom::onnx_runtime::self_test()?;
+        println!(
+            "ONNX Runtime: session creation, inference, output and destruction passed (twice)"
+        );
+        return Ok(());
+    }
+
+    if args.get(1).is_some_and(|arg| arg == "doctor") {
+        return tokio::runtime::Runtime::new()?.block_on(doctor());
+    }
+    if args.get(1).is_some_and(|arg| arg == "init") {
+        anyhow::ensure!(
+            args.get(2).is_some_and(|arg| arg == "--headless"),
+            "usage: SonicBoom init --headless (set SONICBOOM_ADMIN_PW)"
+        );
+        anyhow::ensure!(
+            std::env::var("SONICBOOM_ADMIN_PW").is_ok(),
+            "Set SONICBOOM_ADMIN_PW to a strong password before initialization"
+        );
+        let path = paths::resolve_config_path();
+        prepare_config(&path).map_err(anyhow::Error::msg)?;
+        let rt = tokio::runtime::Runtime::new()?;
+        let manager = rt.block_on(ConfigManager::load(path.clone()))?;
+        if !rt.block_on(manager.get()).setup_complete {
+            let password = std::env::var("SONICBOOM_ADMIN_PW")?;
+            config::validation::validate_admin_password(&password).map_err(anyhow::Error::msg)?;
+            let store = secrets::FileSecretStore::new(
+                path.parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .join("secrets.json"),
+            );
+            secrets::store_admin_password(&store, &password)?;
+            rt.block_on(
+                manager.update_from(None, config::diff::ChangeSource::FirstRun, |c| {
+                    c.setup_complete = true
+                }),
+            )?;
+        }
+        println!("Headless configuration initialized: {}", path.display());
         return Ok(());
     }
 
@@ -263,7 +316,12 @@ fn prepare_config(config_path: &std::path::Path) -> Result<PrepareOutcome, Strin
     // relative paths like ./models).
     let mut bootstrap = config::model::AppConfig::default();
     bootstrap.model.cache_dir = data_dir.join("models");
+    if !cfg!(feature = "web-ui") {
+        bootstrap.server.auth_mode = config::AuthMode::Local;
+    }
+    bootstrap.providers.pocket_tts.model_dir = data_dir.join("models/pocket-tts");
     bootstrap.providers.qwen3_gguf.model_dir = data_dir.join("models/qwen3-tts-1.7b-gguf");
+    bootstrap.voices.store_dir = data_dir.join("voices").to_string_lossy().to_string();
     bootstrap.paths.logs = data_dir.join("logs").to_string_lossy().to_string();
     bootstrap.paths.temp_audio = data_dir.join("temp_audio").to_string_lossy().to_string();
     bootstrap.paths.audio = Some(data_dir.join("audio").to_string_lossy().to_string());
@@ -278,6 +336,11 @@ fn prepare_config(config_path: &std::path::Path) -> Result<PrepareOutcome, Strin
         config::loader::apply_environment(&mut effective, &mut std::collections::HashMap::new())
             .map_err(|e| e.to_string())?;
         config::validation::validate(&effective)?;
+    }
+    if bootstrap.setup_complete {
+        let store = secrets::FileSecretStore::new(data_dir.join("secrets.json"));
+        let password = std::env::var("SONICBOOM_ADMIN_PW").map_err(|e| e.to_string())?;
+        secrets::store_admin_password(&store, &password).map_err(|e| e.to_string())?;
     }
     config::writer::atomic_write_config_blocking(config_path, &bootstrap)
         .map_err(|e| format!("could not create {}: {e}", config_path.display()))?;
@@ -720,6 +783,13 @@ async fn run_server_inner(config_path: std::path::PathBuf, smoke: bool) -> anyho
         Arc::new(secrets::FileSecretStore::new(data_dir.join("secrets.json")));
 
     let current = config.get().await;
+    if !cfg!(feature = "web-ui") && !current.setup_complete && !smoke {
+        anyhow::bail!(
+            "Headless setup is incomplete. Set SONICBOOM_ADMIN_PW to a strong password, then run SonicBoom init --headless."
+        );
+    }
+    #[cfg(target_os = "android")]
+    sonicboom::onnx_runtime::initialize()?;
     if smoke {
         anyhow::ensure!(
             current.server.bind.is_loopback(),
@@ -955,6 +1025,38 @@ async fn shutdown_signal() {
         () = ctrl_c => tracing::info!("Received Ctrl+C, shutting down..."),
         () = terminate => tracing::info!("Received SIGTERM, shutting down..."),
     }
+}
+
+async fn doctor() -> anyhow::Result<()> {
+    let path = paths::resolve_config_path();
+    let loaded = path
+        .is_file()
+        .then(|| config::loader::load_from_file(&path));
+    let runtime = sonicboom::onnx_runtime::self_test();
+    let mut report = serde_json::json!({
+        "platform": std::env::consts::OS, "architecture": std::env::consts::ARCH,
+        "configuration_path": path, "playback": cfg!(feature = "playback"),
+        "web_ui": cfg!(feature = "web-ui"), "cpu_inference": runtime.is_ok(),
+        "onnxruntime": runtime.as_ref().map(|_| "inference passed".to_string()).unwrap_or_else(|e| format!("{e:#}")),
+        "compiled_providers": {"supertonic": true, "pocket_tts": cfg!(feature="pocket-tts"), "qwen_gguf": cfg!(feature="qwen-gguf")}
+    });
+    if let Some(Ok(loaded)) = loaded {
+        let c = loaded.config;
+        report["enabled_providers"] = serde_json::json!({"supertonic": true, "pocket_tts": c.providers.pocket_tts.enabled, "qwen_gguf": c.providers.qwen3_gguf.enabled});
+        report["model_cache_path"] = serde_json::json!(c.model.cache_dir);
+        report["port_available"] = serde_json::json!(
+            tokio::net::TcpListener::bind((c.server.bind, c.server.port))
+                .await
+                .is_ok()
+        );
+        report["storage_writable"] =
+            serde_json::json!(setup::verify_model_storage(&c.model.cache_dir).is_ok());
+    } else {
+        report["configuration_status"] =
+            serde_json::json!("missing or invalid; run config validate");
+    }
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    runtime
 }
 
 #[cfg(all(test, feature = "gui"))]

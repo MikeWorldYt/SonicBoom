@@ -1,8 +1,6 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
+#[cfg(feature = "web-ui")]
+use axum::response::Response;
+use axum::{extract::State, http::StatusCode, response::IntoResponse};
 
 use crate::{AppState, tts::ModelStatus};
 
@@ -25,6 +23,7 @@ pub async fn get_ready(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+#[cfg(feature = "web-ui")]
 pub async fn get_index(
     State(state): State<AppState>,
     axum::extract::Extension(nonce): axum::extract::Extension<crate::security::CspNonce>,

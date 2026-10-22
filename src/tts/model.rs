@@ -103,7 +103,19 @@ impl ModelHandle {
 }
 
 fn build_session(path: &std::path::Path) -> Result<Session> {
+    crate::onnx_runtime::initialize()?;
     let builder = Session::builder()?;
+    #[cfg(target_os = "android")]
+    let builder = builder
+        .with_intra_threads(
+            std::env::var("SONICBOOM_CPU_THREADS")
+                .ok()
+                .map(|s| s.parse::<usize>())
+                .transpose()?
+                .unwrap_or(2)
+                .clamp(1, 32),
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // NOTE: `with_execution_providers` returns a builder-carrying error that
     // is not `Send + Sync`, so it cannot convert into `anyhow::Error` with

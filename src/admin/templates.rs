@@ -27,7 +27,7 @@ pub fn admin_page(
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "web-ui"))]
 mod tests {
     use super::*;
     use crate::auth::token::hash_token_value;

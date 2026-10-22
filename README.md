@@ -371,3 +371,7 @@ for model residency, integrity verification, reloads and cache bounds.
 
 See [release instructions and runtime requirements](docs/RELEASING.md) for
 supported Linux/Windows x64 archives, checksums, smoke tests and troubleshooting.
+
+### Native Termux / Android ARM64
+
+See [native Termux installation, runtime ABI and testing](docs/termux/README.md) for the CPU API-only build without Node.js, a desktop or an audio server.

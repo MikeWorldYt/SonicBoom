@@ -41,6 +41,7 @@ fn root_defaults_keep_core_providers_and_one_onnx_execution_provider() {
     let default = feature_list(&manifest("Cargo.toml"), "default");
     for required in [
         "server",
+        "web-ui",
         "playback",
         "qwen-gguf",
         "qwen-gguf-vulkan",

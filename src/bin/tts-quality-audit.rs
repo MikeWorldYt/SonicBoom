@@ -201,6 +201,12 @@ fn main() -> Result<()> {
         Ok(raw) => Some(serde_json::from_str(&raw).context("AUDIT_ASR_JSON must be an array")?),
         Err(_) => None,
     };
+    let ort_build = if provider == "mock" {
+        "not used (mock)".to_string()
+    } else {
+        sonicboom::onnx_runtime::initialize()?;
+        ort::info().to_string()
+    };
     let device_label = std::env::var("AUDIT_DEVICE").unwrap_or_else(|_| "cpu".into());
     fs::create_dir(&out).context("output directory must be fresh; create parent beforehand")?;
     let mut manifest = OpenOptions::new()
@@ -326,7 +332,7 @@ fn main() -> Result<()> {
             .and_then(|s| s.preset)
             .map(|p| p.as_str())
             .unwrap_or("balanced");
-        let row = json!({"request_id":uuid::Uuid::new_v4().to_string(),"job_id":null,"boundary":"direct-provider","provider":provider,"model":model,"revision":revision,"inference_binary_sha256":executable_hash,"ort_build":ort::info(),"git_sha":String::from_utf8_lossy(&git.stdout).trim(),"effective_device":device_label,"language":language,"voice":request.voice,"reference_hash":effective_reference_hash,"text_hash":hash(text.as_bytes()),"seed":request.seed,"sampling_preset":sampling_preset,"reference_preprocessing":sonicboom::tts::audio::REFERENCE_RESAMPLER_VERSION,"mode":request.clone_mode.map(|m|m.as_str()),"pocket_steps":std::env::var("AUDIT_POCKET_STEPS").unwrap_or_else(|_|"1".into()),"pocket_temperature":std::env::var("AUDIT_POCKET_TEMPERATURE").unwrap_or_else(|_|"0.7".into()),"chunk_index":null,"sample_count":audio.samples.len(),"sample_rate":audio.sample_rate,"wav_hash":wav_hash,"output":name,"elapsed_secs":elapsed,"duration_secs":audio.duration_secs(),"rtf":elapsed/audio.duration_secs(),"peak":audio.samples.iter().fold(0f32,|a,b|a.max(b.abs())),"rms":rms,"dc_offset":audio.samples.iter().map(|s| *s as f64).sum::<f64>()/n,"clipping_fraction":audio.samples.iter().filter(|s|s.abs()>=1.0).count() as f64/n,"same_as_first_test":if *text=="test" {Some(test_hash.as_ref()==Some(&wav_hash))}else{None},"quality":report,"asr_available":asr_row.is_some(),"metrics":metrics,"content_review":"NOT RUN"});
+        let row = json!({"request_id":uuid::Uuid::new_v4().to_string(),"job_id":null,"boundary":"direct-provider","provider":provider,"model":model,"revision":revision,"inference_binary_sha256":executable_hash,"ort_build":ort_build,"git_sha":String::from_utf8_lossy(&git.stdout).trim(),"effective_device":device_label,"language":language,"voice":request.voice,"reference_hash":effective_reference_hash,"text_hash":hash(text.as_bytes()),"seed":request.seed,"sampling_preset":sampling_preset,"reference_preprocessing":sonicboom::tts::audio::REFERENCE_RESAMPLER_VERSION,"mode":request.clone_mode.map(|m|m.as_str()),"pocket_steps":std::env::var("AUDIT_POCKET_STEPS").unwrap_or_else(|_|"1".into()),"pocket_temperature":std::env::var("AUDIT_POCKET_TEMPERATURE").unwrap_or_else(|_|"0.7".into()),"chunk_index":null,"sample_count":audio.samples.len(),"sample_rate":audio.sample_rate,"wav_hash":wav_hash,"output":name,"elapsed_secs":elapsed,"duration_secs":audio.duration_secs(),"rtf":elapsed/audio.duration_secs(),"peak":audio.samples.iter().fold(0f32,|a,b|a.max(b.abs())),"rms":rms,"dc_offset":audio.samples.iter().map(|s| *s as f64).sum::<f64>()/n,"clipping_fraction":audio.samples.iter().filter(|s|s.abs()>=1.0).count() as f64/n,"same_as_first_test":if *text=="test" {Some(test_hash.as_ref()==Some(&wav_hash))}else{None},"quality":report,"asr_available":asr_row.is_some(),"metrics":metrics,"content_review":"NOT RUN"});
         writeln!(manifest, "{row}")?;
         manifest.flush()?;
         index.push_str(&format!(

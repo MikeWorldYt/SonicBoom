@@ -1,0 +1,23 @@
+{
+  "platform": "android",
+  "architecture": "aarch64",
+  "android": "16",
+  "device_model": "M2102J20SG",
+  "features": [
+    "android-ort",
+    "qwen-gguf"
+  ],
+  "backends": [
+    "cpu"
+  ],
+  "onnx_identity_inference": "passed",
+  "missing_gguf": "rejected",
+  "corrupted_gguf": "rejected",
+  "needed_libraries": [
+    "libc++_shared.so",
+    "libdl.so",
+    "libm.so",
+    "libc.so"
+  ],
+  "real_model_synthesis": "not tested"
+}

@@ -23,7 +23,10 @@ path = "src/lib.rs"
 # a hard build requirement for default builds; build CPU-only with
 # `--no-default-features --features qwen-gguf` instead. CUDA stays an
 # explicit opt-in (`qwen-gguf-cuda`).
-default = ["server", "playback", "qwen-gguf", "qwen-gguf-vulkan", "pocket-tts", "gui"]
+default = ["web-ui", "server", "playback", "qwen-gguf", "qwen-gguf-vulkan", "pocket-tts", "gui"]
+web-ui = ["server"]
+# Android uses a separately installed, verified Bionic runtime (no binary download).
+android-ort = ["ort/load-dynamic"]
 server = [
     "dep:axum",
     "dep:tower",
@@ -42,7 +45,7 @@ playback = ["dep:rodio"]
 # Desktop system tray. Linux uses ksni (pure-Rust StatusNotifierItem, no GTK);
 # macOS/Windows use tao/tray-icon (native backends, no GTK compiled in).
 # Only relevant on desktop systems.
-gui = ["server", "dep:ksni", "dep:tray-icon", "dep:tao", "dep:image", "dep:open"]
+gui = ["server", "web-ui", "dep:ksni", "dep:tray-icon", "dep:tao", "dep:image", "dep:open"]
 # First-party TikTools process plugin. It contains only the reusable engine
 # and SDK adapter; it does not start the HTTP server, tray, or playback queue.
 tiktools-plugin = ["dep:tiktools-plugin-sdk"]
@@ -98,7 +101,7 @@ tower-sessions = { version = "0.14", features = ["memory-store"], optional = tru
 # `ep::{CUDA, ROCm, CoreML}` names, `commit_from_file` takes `&mut`, and
 # `with_execution_providers` errors (builder-carrying, not Send/Sync) are
 # rendered via Display. Verified: CPU/cuda/rocm/coreml checks green.
-ort = { version = "2.0.0-rc.13", features = ["ndarray"] }
+
 ndarray = "0.17"
 
 sonicboom-qwen-llama = { path = "native/qwen-llama", optional = true }
@@ -117,7 +120,7 @@ flacenc = "0.5"
 rodio = { version = "0.19", optional = true }
 
 # HuggingFace model download
-reqwest = { version = "0.12", features = ["stream"] }
+
 futures-util = "0.3"
 
 # Serialization
@@ -204,6 +207,8 @@ codegen-units = 1
 
 # esaxx 0.1.10 forces /MT; match Rust, knf and ORT /MD on MSVC.
 [patch.crates-io]
+# Android: release ORT environment before the Android AAR C++ destructors.
+ort = { path = "vendor/ort" }
 esaxx-rs = { path = "vendor/esaxx-rs" }
 # Temporary compatibility patch until ksni adopts maintained zbus 6.
 ksni = { path = "vendor/ksni" }
@@ -214,4 +219,23 @@ required-features = ["qwen-gguf"]
 
 [[example]]
 name = "cache_benchmark"
+required-features = ["qwen-gguf"]
+
+# Keep desktop ORT defaults, including its binary distribution strategy.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+ort = { version = "=2.0.0-rc.13", features = ["ndarray"] }
+reqwest = { version = "0.12", features = ["stream"] }
+
+# rc.13 defaults to API 27. Android's pinned 1.24.3 AAR supplies API 24;
+# select that API explicitly rather than loading an incompatible runtime.
+[target.'cfg(target_os = "android")'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "tracing", "api-24", "load-dynamic"] }
+
+[[example]]
+name = "pocket_smoke"
+required-features = ["pocket-tts"]
+
+[[example]]
+name = "qwen_backend_probe"
 required-features = ["qwen-gguf"]

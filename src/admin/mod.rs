@@ -4,12 +4,8 @@ pub mod lockout;
 pub mod session;
 pub mod templates;
 
-use axum::{
-    Router,
-    extract::DefaultBodyLimit,
-    middleware,
-    routing::{get, post},
-};
+use axum::routing::get;
+use axum::{Router, extract::DefaultBodyLimit, middleware, routing::post};
 use handlers::AdminState;
 
 use crate::security::no_store_cache;
@@ -19,12 +15,12 @@ use crate::security::no_store_cache;
 /// apply when the listener restarts.
 pub async fn router(state: AdminState) -> Router {
     let body_limit = state.config.get().await.tts.admin_max_body_bytes;
-    Router::new()
+    let router = Router::new();
+    let router = router
         .route("/admin", get(handlers::get_admin))
-        .route(
-            "/admin/login",
-            get(handlers::get_login).post(handlers::post_login),
-        )
+        .route("/admin/login", get(handlers::get_login));
+    router
+        .route("/admin/login", post(handlers::post_login))
         // Logout changes session state, so it must be POST (with CSRF).
         .route("/admin/logout", post(handlers::post_logout))
         .route("/admin/tokens", post(handlers::post_create_token))

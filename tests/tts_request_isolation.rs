@@ -15,6 +15,10 @@ fn runner() -> std::process::Command {
     ] {
         command.env_remove(key);
     }
+    command.env(
+        "ORT_DYLIB_PATH",
+        "sonicboom-deliberately-missing-runtime.so",
+    );
     command
 }
 
@@ -46,6 +50,7 @@ fn mock_sequence_preserves_independent_wavs_and_manifest() {
         let wav = hound::WavReader::open(output.join(row["output"].as_str().unwrap())).unwrap();
         assert_eq!(wav.len() as u64, row["sample_count"].as_u64().unwrap());
         assert!(row.get("text").is_none());
+        assert_eq!(row["ort_build"], "not used (mock)");
     }
     // A second invocation refuses to overwrite independently produced outputs.
     assert!(

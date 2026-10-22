@@ -271,7 +271,10 @@ mod tests {
             .to_str()
             .unwrap()
             .to_string();
-        assert!(first_csp.contains("style-src 'self' 'nonce-"), "csp: {first_csp}");
+        assert!(
+            first_csp.contains("style-src 'self' 'nonce-"),
+            "csp: {first_csp}"
+        );
         assert!(!first_csp.contains("'unsafe-inline'"), "csp: {first_csp}");
         let first_nonce = nonce_of(&first_csp);
         assert_eq!(first_nonce.len(), 32, "nonce: {first_nonce}");

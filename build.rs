@@ -6,7 +6,7 @@ use std::{
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    if env::var_os("CARGO_FEATURE_SERVER").is_none() {
+    if env::var_os("CARGO_FEATURE_WEB_UI").is_none() {
         return;
     }
     for path in [

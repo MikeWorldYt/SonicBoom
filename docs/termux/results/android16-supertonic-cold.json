@@ -1,0 +1,45 @@
+{
+  "platform": "android",
+  "architecture": "aarch64",
+  "android": "16",
+  "model": "Supertonic 3",
+  "threads_intra_op": "2",
+  "smoke_only": false,
+  "model_ready_seconds": 118.35552188201109,
+  "observed_model_load_seconds": 2.036420624994207,
+  "synthesis": [
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1428.9883692968099,
+      "latency_seconds": 1.9406798949930817,
+      "real_time_factor": 0.8762296987826206
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1460.3146227494497,
+      "latency_seconds": 2.2467747909831814,
+      "real_time_factor": 1.014433551568584
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1579.557727657041,
+      "latency_seconds": 2.2296502080280334,
+      "real_time_factor": 1.0067016900682508
+    }
+  ],
+  "inference": "passed",
+  "process_status": "VmHWM:\t  508724 kB\nVmRSS:\t  507804 kB\nThreads:\t19",
+  "peak_sampled_rss_kib": 508724,
+  "peak_sampled_threads": 19,
+  "cpu_seconds": 40.43,
+  "cpu_percent_one_core": 29.977206851831696,
+  "kernel": "Linux",
+  "device_model": "M2102J20SG",
+  "measurement_context": "Cold Supertonic cache; Cargo test dependency compilation ran concurrently. Functional evidence; use warm run for performance comparison."
+}

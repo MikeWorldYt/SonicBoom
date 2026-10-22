@@ -6,6 +6,7 @@
 //! process plugin.
 
 pub mod engine;
+pub mod onnx_runtime;
 pub mod tts;
 
 // The GPU execution-provider features are mutually exclusive per platform

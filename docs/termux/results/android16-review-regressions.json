@@ -1,0 +1,74 @@
+{
+  "platform": "android",
+  "kernel": "Linux",
+  "architecture": "aarch64",
+  "android": "16",
+  "model": "Supertonic 3",
+  "threads_intra_op": "2",
+  "smoke_only": false,
+  "offline_download_proxy": true,
+  "tested_at_utc": "2026-10-22T15:37:01.126925+00:00",
+  "device_model": "M2102J20SG",
+  "binary_sha256": "2ebc476f56e85011cfd8ca8725e9c36ef74ac69ec05b3e2089ca7bd8b324be66",
+  "build_info": {
+    "architecture": "aarch64",
+    "features": [
+      "server",
+      "android-ort"
+    ],
+    "mode": "headless",
+    "native_backends": [
+      "cpu"
+    ],
+    "onnxruntime": {
+      "status": "unchecked"
+    },
+    "platform": "android",
+    "playback": false,
+    "runtime_backends": "cpu",
+    "web_ui": false
+  },
+  "model_ready_seconds": 5.432325415022206,
+  "observed_model_load_seconds": 2.064709479047451,
+  "peak_sampled_model_load_rss_kib": 467208,
+  "synthesis": [
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1597.5286673120795,
+      "latency_seconds": 6.722793747961987,
+      "real_time_factor": 3.035385462565127,
+      "cpu_percent_one_core": 168.53112596879365,
+      "sampled_rss_kib": 479928
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1537.2161562619165,
+      "latency_seconds": 6.404983122018166,
+      "real_time_factor": 2.891891880878043,
+      "cpu_percent_one_core": 154.5671520345955,
+      "sampled_rss_kib": 482252
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1502.373297812346,
+      "latency_seconds": 7.194833121960983,
+      "real_time_factor": 3.248514335368826,
+      "cpu_percent_one_core": 155.5282771721899,
+      "sampled_rss_kib": 480216
+    }
+  ],
+  "synthesis_rss_growth_kib": 288,
+  "inference": "passed",
+  "process_status": "VmHWM:\t  496900 kB\nVmRSS:\t  496092 kB\nThreads:\t17",
+  "peak_sampled_rss_kib": 496796,
+  "peak_sampled_threads": 18,
+  "cpu_seconds": 81.05,
+  "cpu_percent_one_core": 157.26425844456506,
+  "restart_and_sigint": "passed"
+}
