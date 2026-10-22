@@ -1,0 +1,75 @@
+{
+  "platform": "android",
+  "kernel": "Linux",
+  "architecture": "aarch64",
+  "android": "16",
+  "model": "Supertonic 3",
+  "threads_intra_op": "2",
+  "smoke_only": false,
+  "offline_download_proxy": true,
+  "tested_at_utc": "2026-10-22T14:09:12.303210+00:00",
+  "device_model": "M2102J20SG",
+  "binary_sha256": "2ebc476f56e85011cfd8ca8725e9c36ef74ac69ec05b3e2089ca7bd8b324be66",
+  "build_info": {
+    "architecture": "aarch64",
+    "features": [
+      "server",
+      "android-ort"
+    ],
+    "mode": "headless",
+    "native_backends": [
+      "cpu"
+    ],
+    "onnxruntime": {
+      "status": "unchecked"
+    },
+    "platform": "android",
+    "playback": false,
+    "runtime_backends": "cpu",
+    "web_ui": false
+  },
+  "model_ready_seconds": 6.130017810035497,
+  "observed_model_load_seconds": 2.04277312400518,
+  "peak_sampled_model_load_rss_kib": 466588,
+  "synthesis": [
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1540.6507990604832,
+      "latency_seconds": 7.25080431997776,
+      "real_time_factor": 3.273785698309863,
+      "cpu_percent_one_core": 138.88114415465134,
+      "sampled_rss_kib": 469124
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1451.0749281989017,
+      "latency_seconds": 6.726945830974728,
+      "real_time_factor": 3.037260155273059,
+      "cpu_percent_one_core": 172.14350005137575,
+      "sampled_rss_kib": 474332
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1367.5458938363238,
+      "latency_seconds": 6.755176560021937,
+      "real_time_factor": 3.0500065145635684,
+      "cpu_percent_one_core": 171.12802155925382,
+      "sampled_rss_kib": 475056
+    }
+  ],
+  "synthesis_rss_growth_kib": 5932,
+  "inference": "passed",
+  "process_status": "VmHWM:\t  493940 kB\nVmRSS:\t  493680 kB\nThreads:\t15",
+  "peak_sampled_rss_kib": 493844,
+  "peak_sampled_threads": 15,
+  "cpu_seconds": 80.48,
+  "cpu_percent_one_core": 154.5695682522776,
+  "restart_and_sigint": "passed",
+  "measurement_context": "Native cached-model test with Rust download traffic routed to a closed loopback proxy. This is not kernel-level network isolation."
+}

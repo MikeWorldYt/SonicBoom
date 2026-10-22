@@ -250,7 +250,8 @@ async fn post_tts_inner(
     let text = body.trim().to_string();
     let voice_name = match query.voice {
         Some(ref v) if model_handle.voice_styles.contains_key(v.as_str()) => v.clone(),
-        _ => model_handle
+        Some(_) => return Err(AppError::BadRequest("unknown Supertonic voice".into())),
+        None => model_handle
             .default_voice()
             .ok_or_else(|| AppError::internal("no voice styles available"))?
             .to_string(),

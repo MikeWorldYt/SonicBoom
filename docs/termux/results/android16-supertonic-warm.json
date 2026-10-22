@@ -1,0 +1,244 @@
+{
+  "platform": "android",
+  "kernel": "Linux",
+  "architecture": "aarch64",
+  "android": "16",
+  "model": "Supertonic 3",
+  "threads_intra_op": "2",
+  "smoke_only": false,
+  "tested_at_utc": "2026-10-22T14:05:18.340588+00:00",
+  "device_model": "M2102J20SG",
+  "binary_sha256": "2ebc476f56e85011cfd8ca8725e9c36ef74ac69ec05b3e2089ca7bd8b324be66",
+  "build_info": {
+    "architecture": "aarch64",
+    "features": [
+      "server",
+      "android-ort"
+    ],
+    "mode": "headless",
+    "native_backends": [
+      "cpu"
+    ],
+    "onnxruntime": {
+      "status": "unchecked"
+    },
+    "platform": "android",
+    "playback": false,
+    "runtime_backends": "cpu",
+    "web_ui": false
+  },
+  "model_ready_seconds": 6.986483227054123,
+  "observed_model_load_seconds": 2.035603958007414,
+  "peak_sampled_model_load_rss_kib": 465584,
+  "synthesis": [
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1475.330173080984,
+      "latency_seconds": 6.314678383001592,
+      "real_time_factor": 2.8511186990301334,
+      "cpu_percent_one_core": 172.13861642203068,
+      "sampled_rss_kib": 476952
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1539.2159510384763,
+      "latency_seconds": 6.399600518983789,
+      "real_time_factor": 2.88946160031109,
+      "cpu_percent_one_core": 164.38526074859595,
+      "sampled_rss_kib": 479320
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1440.54648007712,
+      "latency_seconds": 6.134579737030435,
+      "real_time_factor": 2.7698029793601324,
+      "cpu_percent_one_core": 172.13893131515115,
+      "sampled_rss_kib": 476900
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1406.406542967811,
+      "latency_seconds": 6.7035460389452055,
+      "real_time_factor": 3.026694995725365,
+      "cpu_percent_one_core": 169.16419957614454,
+      "sampled_rss_kib": 476780
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1532.4698130095646,
+      "latency_seconds": 6.239379998005461,
+      "real_time_factor": 2.817120984428049,
+      "cpu_percent_one_core": 174.69684493466332,
+      "sampled_rss_kib": 476820
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1581.8557532443212,
+      "latency_seconds": 6.2926002579624765,
+      "real_time_factor": 2.841150280795565,
+      "cpu_percent_one_core": 167.97507495609665,
+      "sampled_rss_kib": 477180
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1444.1439272008529,
+      "latency_seconds": 7.4976389550138265,
+      "real_time_factor": 3.3852331546702747,
+      "cpu_percent_one_core": 132.0415674774479,
+      "sampled_rss_kib": 475740
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1446.816500849547,
+      "latency_seconds": 6.7411279659718275,
+      "real_time_factor": 3.0436634822249506,
+      "cpu_percent_one_core": 159.61720433605203,
+      "sampled_rss_kib": 475828
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1460.3667871323848,
+      "latency_seconds": 6.8336701020016335,
+      "real_time_factor": 3.0854468634962786,
+      "cpu_percent_one_core": 155.84597794500695,
+      "sampled_rss_kib": 459652
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1590.5741386322109,
+      "latency_seconds": 6.753660310001578,
+      "real_time_factor": 3.0493219177364224,
+      "cpu_percent_one_core": 163.4669126555081,
+      "sampled_rss_kib": 446252
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1446.5621389233531,
+      "latency_seconds": 6.814141664013732,
+      "real_time_factor": 3.0766296456851494,
+      "cpu_percent_one_core": 157.31988750121758,
+      "sampled_rss_kib": 444136
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1433.9311639350685,
+      "latency_seconds": 6.1279566119774245,
+      "real_time_factor": 2.7668125949669244,
+      "cpu_percent_one_core": 173.63047217409374,
+      "sampled_rss_kib": 441440
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1463.3539164624185,
+      "latency_seconds": 6.302806768042501,
+      "real_time_factor": 2.845758587026858,
+      "cpu_percent_one_core": 171.82820921802647,
+      "sampled_rss_kib": 439572
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1447.0490873512972,
+      "latency_seconds": 6.500254892976955,
+      "real_time_factor": 2.9349077102196484,
+      "cpu_percent_one_core": 167.68573201301143,
+      "sampled_rss_kib": 439024
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1621.2913389536684,
+      "latency_seconds": 6.432978019001894,
+      "real_time_factor": 2.9045317604453995,
+      "cpu_percent_one_core": 168.66216498721113,
+      "sampled_rss_kib": 438740
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1606.8998209102683,
+      "latency_seconds": 6.32920593599556,
+      "real_time_factor": 2.8576779844727223,
+      "cpu_percent_one_core": 172.84948713363644,
+      "sampled_rss_kib": 438896
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1412.1696790327173,
+      "latency_seconds": 6.314715569955297,
+      "real_time_factor": 2.851135489183588,
+      "cpu_percent_one_core": 172.1376027087939,
+      "sampled_rss_kib": 438900
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1429.560502099374,
+      "latency_seconds": 6.352885727013927,
+      "real_time_factor": 2.8683695653999997,
+      "cpu_percent_one_core": 169.68666623674605,
+      "sampled_rss_kib": 437456
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1396.9529807220438,
+      "latency_seconds": 6.546321091009304,
+      "real_time_factor": 2.955706900714735,
+      "cpu_percent_one_core": 167.26952203793812,
+      "sampled_rss_kib": 437620
+    },
+    {
+      "duration_seconds": 2.2148072562358276,
+      "sample_rate": 44100,
+      "channels": 1,
+      "rms": 1324.4809540808862,
+      "latency_seconds": 6.272327810002025,
+      "real_time_factor": 2.831997137602913,
+      "cpu_percent_one_core": 176.48950015570736,
+      "sampled_rss_kib": 437444
+    }
+  ],
+  "synthesis_rss_growth_kib": -39508,
+  "inference": "passed",
+  "process_status": "VmHWM:\t  482300 kB\nVmRSS:\t  457636 kB\nThreads:\t14",
+  "peak_sampled_rss_kib": 482300,
+  "peak_sampled_threads": 14,
+  "cpu_seconds": 263.72,
+  "cpu_percent_one_core": 160.729480171092,
+  "restart_and_sigint": "passed",
+  "measurement_context": "No Cargo or native compiler process was running during synthesis. Device power/thermal state was not controlled after prolonged native builds. Results describe this run, not a controlled comparison."
+}

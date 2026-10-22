@@ -1,11 +1,14 @@
 //! Vite's hashed production assets are compiled into the server binary.
+#[cfg(feature = "web-ui")]
 use axum::{
     extract::Path,
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
+#[cfg(feature = "web-ui")]
 include!(concat!(env!("OUT_DIR"), "/frontend_assets.rs"));
 
+#[cfg(feature = "web-ui")]
 pub async fn get_static(Path(file): Path<String>) -> Response {
     let Some((mime, body)) = asset_body(&file) else {
         return StatusCode::NOT_FOUND.into_response();
@@ -23,13 +26,15 @@ pub async fn get_static(Path(file): Path<String>) -> Response {
 /// Development serves TypeScript through Vite's same-origin localhost proxy.
 /// Release binaries always use embedded production assets.
 pub fn dev_mode() -> bool {
-    cfg!(debug_assertions) && std::env::var("SONICBOOM_FRONTEND_DEV").as_deref() == Ok("1")
+    cfg!(all(feature = "web-ui", debug_assertions))
+        && std::env::var("SONICBOOM_FRONTEND_DEV").as_deref() == Ok("1")
 }
 
 /// Build the HTML shell for a page.
 ///
 /// `nonce` is the per-response CSP nonce: the frontend marks the one inline
 /// style it owns with it, so the page can keep a strict `style-src`.
+#[cfg(feature = "web-ui")]
 pub fn page(data: serde_json::Value, nonce: &crate::security::CspNonce) -> String {
     let template = if dev_mode() {
         include_str!("../../frontend/index.html").replace(
@@ -52,7 +57,31 @@ pub fn page(data: serde_json::Value, nonce: &crate::security::CspNonce) -> Strin
         .replace("SONICBOOM_CSP_NONCE", nonce.as_str())
 }
 
-#[cfg(test)]
+// Session/API authentication handlers also compile without browser assets.
+// Browser routes are excluded in this mode; never embed frontend files.
+#[cfg(not(feature = "web-ui"))]
+pub fn page(_data: serde_json::Value, _nonce: &crate::security::CspNonce) -> String {
+    _data.to_string()
+}
+
+/// Browser pages use HTML; API-only admin sessions expose the same safe data as JSON.
+pub fn response(body: String) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    #[cfg(feature = "web-ui")]
+    {
+        axum::response::Html(body).into_response()
+    }
+    #[cfg(not(feature = "web-ui"))]
+    {
+        (
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            body,
+        )
+            .into_response()
+    }
+}
+
+#[cfg(all(test, feature = "web-ui"))]
 mod tests {
     use super::*;
     use axum::{Router, body::Body, http::Request, routing::get};
@@ -74,8 +103,14 @@ mod tests {
     fn the_page_carries_the_csp_nonce() {
         let nonce = crate::security::CspNonce::new();
         let html = page(serde_json::json!({"page": "home"}), &nonce);
-        assert!(html.contains(nonce.as_str()), "the page must carry its nonce");
-        assert!(!html.contains("SONICBOOM_CSP_NONCE"), "the placeholder must be replaced");
+        assert!(
+            html.contains(nonce.as_str()),
+            "the page must carry its nonce"
+        );
+        assert!(
+            !html.contains("SONICBOOM_CSP_NONCE"),
+            "the placeholder must be replaced"
+        );
     }
 
     #[tokio::test]

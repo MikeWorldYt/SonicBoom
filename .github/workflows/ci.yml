@@ -221,6 +221,54 @@ jobs:
       - name: Test (headless server)
         run: cargo test --locked --no-default-features --features server
 
+  # Cross-compilation validates the NDK ABI/build graph, not on-device inference.
+  android-headless:
+    name: Android ARM64 API-only (NDK, no runtime claims)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          targets: aarch64-linux-android
+          components: rustfmt, clippy
+      - name: Configure installed Android NDK
+        run: |
+          test -d "$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=aarch64-linux-android28-clang" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=aarch64-linux-android28-clang" >> "$GITHUB_ENV"
+          echo "CXX_aarch64_linux_android=aarch64-linux-android28-clang++" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=llvm-ar" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+      - run: cargo fmt --all --check
+      - name: Check Android feature graph
+        run: |
+          cargo tree --color never --locked --target aarch64-linux-android --no-default-features --features server,android-ort > android-tree.txt
+          if grep -E '(^|[ │├└─])(alsa|cpal|rodio|tao|tray-icon|ksni|sonicboom-qwen-llama|ash) v' android-tree.txt; then
+            echo 'Unexpected desktop or GPU dependency' >&2
+            exit 1
+          fi
+      - name: Build API-only Android executable
+        run: cargo build --locked --target aarch64-linux-android --no-default-features --features server,android-ort --bin SonicBoom
+      - name: Check optional Pocket provider
+        run: cargo check --locked --target aarch64-linux-android --no-default-features --features server,android-ort,pocket-tts --bin SonicBoom
+      - name: Check optional Qwen CPU provider
+        run: cargo check --locked --target aarch64-linux-android --no-default-features --features server,android-ort,qwen-gguf --bin SonicBoom
+      - name: Validate official Android ORT artifact
+        run: |
+          curl --fail --location https://repo.maven.apache.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/1.24.3/onnxruntime-android-1.24.3.aar -o runtime.aar
+          echo '67397e4a970e75617f765d2015ceaf911917e1d822276cfb5792744e8085cbce  runtime.aar' | sha256sum -c -
+          unzip -p runtime.aar jni/arm64-v8a/libonnxruntime.so > libonnxruntime.so
+          readelf -h libonnxruntime.so | grep 'Machine:.*AArch64'
+          readelf -d libonnxruntime.so | grep '\[libandroid.so\]'
+          if readelf -d libonnxruntime.so | grep -E 'libc.so.6|libstdc\+\+.so|ld-linux'; then exit 1; fi
+      - name: Clippy API-only Android
+        run: cargo clippy --locked --target aarch64-linux-android --no-default-features --features server,android-ort --bin SonicBoom -- -D warnings
+
   # Linux-compatible feature combinations beyond default/headless.
   feature-matrix:
     name: Feature matrix (${{ matrix.features }})

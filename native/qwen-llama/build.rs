@@ -365,12 +365,14 @@ fn main() {
         );
     }
     let target = std::env::var("TARGET").unwrap();
-    if target.contains("apple") {
+    if target.contains("android") {
+        println!("cargo:rustc-link-lib=c++_shared");
+    } else if target.contains("apple") {
         println!("cargo:rustc-link-lib=c++");
     } else if !target.contains("msvc") {
         println!("cargo:rustc-link-lib=stdc++");
     }
-    if target.contains("linux") {
+    if target.contains("linux") && !target.contains("android") {
         println!("cargo:rustc-link-lib=dl");
         println!("cargo:rustc-link-lib=pthread");
         println!("cargo:rustc-link-lib=m");

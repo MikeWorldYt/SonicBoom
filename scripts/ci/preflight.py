@@ -73,7 +73,7 @@ def _is_covered(path, copies):
 
 def validate(root=ROOT):
     manifest = tomllib.loads((root / 'Cargo.toml').read_text())
-    required = ['Cargo.toml', 'Cargo.lock']
+    required = ['Cargo.toml', 'Cargo.lock', 'assets/runtime-identity.onnx']
     for example in manifest.get('example', []):
         required.append(
             to_docker_path(example.get('path', f"examples/{example['name']}.rs"))
@@ -117,9 +117,9 @@ def validate(root=ROOT):
                 raise ValueError(f'{stage}: missing explicit features')
             selected = set(features[1].split(','))
             expected = {
-                'builder': {'server', 'qwen-gguf', 'pocket-tts'},
-                'builder-playback': {'server', 'playback', 'qwen-gguf', 'pocket-tts'},
-                'builder-cuda': {'server', 'cuda', 'qwen-gguf-cuda', 'pocket-tts'},
+                'builder': {'server', 'qwen-gguf', 'pocket-tts', 'web-ui'},
+                'builder-playback': {'server', 'playback', 'qwen-gguf', 'pocket-tts', 'web-ui'},
+                'builder-cuda': {'server', 'cuda', 'qwen-gguf-cuda', 'pocket-tts', 'web-ui'},
             }
             for feature in features[1].split(','):
                 if feature not in manifest['features']:

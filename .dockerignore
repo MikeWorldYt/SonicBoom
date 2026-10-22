@@ -35,3 +35,7 @@ vendor/llama.cpp/media
 **/*.onnx
 **/*.gguf
 **/*.safetensors
+
+# Tiny offline inference diagnostic, not a provider weight.
+!assets/
+!assets/runtime-identity.onnx

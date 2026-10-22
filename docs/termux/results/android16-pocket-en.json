@@ -1,0 +1,18 @@
+{
+  "audio_seconds": 2.0,
+  "latency_seconds": 5.887552498,
+  "load_seconds": 3.587628123,
+  "model": "pocket-tts-en",
+  "real_time_factor": 2.943776249,
+  "platform": "android",
+  "architecture": "aarch64",
+  "android": "16",
+  "device_model": "M2102J20SG",
+  "wav": {
+    "duration_seconds": 2.0,
+    "sample_rate": 24000,
+    "channels": 1,
+    "rms": 1618.349909108812
+  },
+  "measurement_context": "Functional synthesis with compilation running concurrently; not a controlled performance baseline."
+}
