@@ -18,6 +18,16 @@ unset SONICBOOM_ADMIN_PW
 ./scripts/termux/run.sh
 ```
 
+To update an existing installation after pulling the desired revision, run
+`./scripts/termux/install.sh --upgrade`. Without this flag a different installed
+binary is preserved. The installer stages the new executable in `$PREFIX/bin`,
+verifies its contents and runs its ONNX self-test before an atomic rename.
+A failed validation leaves the installed executable intact.
+
+`SONICBOOM_BINARY=/path/to/SonicBoom ./scripts/termux/run.sh` selects that exact
+executable. A missing, empty or non-executable explicit path is an error; only
+an unset variable permits fallback from the installed binary to the local build.
+
 `read -s -p` above assumes Termux's interactive Bash. Alternatively export
 `SONICBOOM_ADMIN_PW` using your shell's secure input mechanism. There is no
 default password. Initialization stores it in the existing permission-restricted
@@ -104,6 +114,13 @@ unnecessary. The archive is cached under `$XDG_CACHE_HOME/sonicboom/runtime`
 The extracted library SHA-256 is
 `4d2318b3849abb8862133d3068fc7e807ed8b2671cc6d83657fff2fcb9e1caad`.
 An existing verified library is reused even when the archive cache is absent.
+
+Every wrapper validation, including startup, verifies the pinned library's
+SHA-256. For an intentionally custom runtime, set both `ORT_DYLIB_PATH` to a
+separate path and `SONICBOOM_ALLOW_CUSTOM_ORT=1`. This skips only the digest pin;
+ELF/ABI validation and the startup inference self-test still apply. The default
+`$PREFIX/lib/sonicboom/libonnxruntime.so` always requires the pinned digest,
+even with the custom-runtime option enabled.
 
 The shell validator checks ELF64/AArch64, Android dependencies and `OrtGetApiBase`,
 rejecting typical glibc dependencies. The executable's fallible explicit loader
@@ -219,3 +236,14 @@ Run native Rust tests with a clean loader path: `env -u LD_LIBRARY_PATH cargo te
 A model-free Qwen CPU link/backend probe is available with `env -u LD_LIBRARY_PATH cargo run --locked --no-default-features --features android-ort,qwen-gguf --example qwen_backend_probe`. It also rejects missing/corrupted GGUF files without loading real weights.
 
 Native device results and remaining validation limits are recorded in [VALIDATION.md](VALIDATION.md).
+
+## API compatibility note
+
+An explicitly unknown Supertonic voice on `POST /api/tts` now returns HTTP 400
+with `unknown Supertonic voice`, instead of synthesizing with the default voice.
+Omitting `voice` still selects the configured default. Existing valid voice IDs
+are unchanged. The native HTTP integration suite checks this error response.
+
+Wrapper regression checks run without package installation or model downloads:
+`python3 scripts/termux/test_wrappers.py`. They use isolated fake build tools;
+real native inference and HTTP validation remain in `scripts/termux/test.sh`.

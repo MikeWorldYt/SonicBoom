@@ -86,3 +86,21 @@ Additional evidence:
 
 Qwen real-model speech synthesis, physical disk-full testing and Android Vulkan
 execution remain unvalidated. No Android GPU acceleration is claimed.
+
+## PR review follow-up (2026-10-22)
+
+Eight isolated wrapper regression tests passed. These exercise explicit binary
+selection (including missing, empty and non-executable paths), mandatory default
+runtime integrity, custom-runtime opt-in, idempotent installation, explicit
+upgrades, staged self-test failure, runtime validation failure and invalid
+arguments. Package/build/ELF tools are stubbed for these tests; they never replace
+the real installed executable. Failed upgrades preserve the previous contents
+and remove staging files.
+
+Separately, native `run.sh --build-info` verified the official runtime digest and
+completed the actual ONNX inference self-test. The [review follow-up HTTP run](results/android16-review-regressions.json)
+passed cached Supertonic synthesis through both APIs, the explicit invalid-voice
+HTTP 400 response and message, concurrency/cancellation/deadline checks, and
+shutdown/restart. Downloads were routed through a closed proxy, with the same
+network-isolation limitations described above. Three repeated synthesis requests
+were used for functional verification, not a new stability benchmark.

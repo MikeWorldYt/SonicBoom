@@ -14,6 +14,9 @@ ORT_CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/sonicboom/runtime
 export ORT_DYLIB_PATH=${ORT_DYLIB_PATH:-$PREFIX/lib/sonicboom/libonnxruntime.so}
 validate_ort() {
     [ -f "$ORT_DYLIB_PATH" ] || fail "Missing $ORT_DYLIB_PATH; run scripts/termux/install.sh"
+    if [ "$ORT_DYLIB_PATH" = "$PREFIX/lib/sonicboom/libonnxruntime.so" ] || [ "${SONICBOOM_ALLOW_CUSTOM_ORT:-0}" != 1 ]; then
+        echo "$ORT_LIBRARY_SHA256  $ORT_DYLIB_PATH" | sha256sum -c - || fail 'ORT integrity check failed; custom paths require explicit SONICBOOM_ALLOW_CUSTOM_ORT=1 to use an unpinned runtime'
+    fi
     readelf -h "$ORT_DYLIB_PATH" | grep -q 'Machine:.*AArch64' || fail 'ORT must be AArch64 ELF'
     readelf -h "$ORT_DYLIB_PATH" | grep -q 'Class:.*ELF64' || fail 'ORT must be ELF64'
     deps=$(readelf -d "$ORT_DYLIB_PATH")
@@ -25,7 +28,6 @@ validate_ort() {
 }
 prepare_ort() {
     if [ -f "$ORT_DYLIB_PATH" ]; then
-        echo "$ORT_LIBRARY_SHA256  $ORT_DYLIB_PATH" | sha256sum -c - || fail 'Existing runtime differs from pinned Android runtime; move it aside or choose a different ORT_DYLIB_PATH'
         validate_ort
         return
     fi

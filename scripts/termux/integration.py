@@ -264,7 +264,8 @@ def main():
                     assert max(rss_values[-5:]) - min(rss_values[-5:]) < 16384, 'fixed-input RSS did not stabilize'
                 wav_info(request('/v1/audio/speech', json.dumps({'model': 'tts-1', 'voice': 'F1',
                          'input': 'Hello from Android Termux', 'response_format': 'wav'}).encode(), 'application/json'))
-                request('/api/tts?voice=INVALID&format=wav', b'Hello', 'text/plain', expected=400)
+                invalid_voice = request('/api/tts?voice=INVALID&format=wav', b'Hello', 'text/plain', expected=400)
+                assert b'unknown Supertonic voice' in invalid_voice, invalid_voice
                 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
                     outputs = list(pool.map(lambda _: request('/api/tts?voice=F1&format=wav', b'Concurrent test', 'text/plain'), range(2)))
                 for output in outputs:

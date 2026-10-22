@@ -10,4 +10,5 @@ binary=${SONICBOOM_BINARY:-$ROOT/target/release/SonicBoom}
 "$binary" --build-info
 "$binary" --onnx-self-test
 command -v python3 >/dev/null || fail 'Integration tests need Python (pkg install python); the server does not'
+python3 "$ROOT/scripts/termux/test_wrappers.py"
 exec python3 "$ROOT/scripts/termux/integration.py" "$binary" "$@"
