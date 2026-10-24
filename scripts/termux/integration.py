@@ -181,8 +181,12 @@ def main():
             for endpoint in ('/setup/status', '/api/status', '/api/info', '/api/providers', '/v1/models', '/v1/voices'):
                 request(endpoint)
             # A second process on the occupied port must fail, preserving the first.
-            occupied = subprocess.run([binary, '--smoke-test'], env=env, capture_output=True, timeout=30)
-            assert occupied.returncode != 0 and b'panicked' not in occupied.stderr
+            # Use normal startup so this also catches model work started before binding.
+            occupied = subprocess.run([binary], env=env, capture_output=True, timeout=30)
+            occupied_output = occupied.stdout + occupied.stderr
+            assert occupied.returncode != 0 and b'failed to bind' in occupied_output
+            for unexpected in (b'panicked', b'load task panic', b'Initial model preparation failed', b'Downloading ', b'Already cached (verified)', b'Loading ONNX sessions'):
+                assert unexpected not in occupied_output, occupied_output
             request('/health')
             request('/api/tts?voice=F1&format=wav', b'x' * 10001, 'text/plain', expected=400)
             request('/api/tts?voice=F1&format=wav', b'x' * 70000, 'text/plain', expected=413)

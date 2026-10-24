@@ -943,12 +943,8 @@ async fn run_server_inner(config_path: std::path::PathBuf, smoke: bool) -> anyho
 
     // Independently restartable HTTP listener.
     let server = Arc::new(ApiServerManager::new(app_state.clone(), admin_state));
-    // Model download + load runs in the background.
     let hf_token = secrets::load_hf_token(secrets.as_ref())
         .map_err(|e| anyhow::anyhow!("secret store error: {e}"))?;
-    if !smoke {
-        model_service.start_initial_load(&current.model, hf_token.clone());
-    }
     // Optional providers download + load in parallel with the HTTP server
     // when enabled (deduplicated background tasks; progress via
     // `/api/providers/{id}/status`). Supertonic is unaffected.
@@ -959,9 +955,6 @@ async fn run_server_inner(config_path: std::path::PathBuf, smoke: bool) -> anyho
         provider_pool.sync_gguf_config(crate::api::providers::map_qwen_gguf_config(
             &current.providers.qwen3_gguf,
         ));
-        if !smoke {
-            provider_pool.kick_ensure_if_needed(hf_token);
-        }
     }
 
     // Runtime reconfiguration: every committed configuration
@@ -983,7 +976,13 @@ async fn run_server_inner(config_path: std::path::PathBuf, smoke: bool) -> anyho
 
     // Hot reload: watch config.toml for external edits.
     let _watcher = config::watcher::start_watching(Arc::clone(&config));
+    // Acquire the listener before starting native model work. A bind failure
+    // must not trigger downloads or cancel inference initialization at shutdown.
     server.start().await?;
+    if !smoke {
+        model_service.start_initial_load(&current.model, hf_token.clone());
+        provider_pool.kick_ensure_if_needed(hf_token);
+    }
     #[cfg(feature = "gui")]
     if !smoke && !current.setup_complete {
         open_application();
