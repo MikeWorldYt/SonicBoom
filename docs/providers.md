@@ -205,6 +205,15 @@ confirmation, and remaining limitations are documented in
 
 ## Pinned download manifests
 
+Optional-provider downloads retry transient network failures, interrupted bodies,
+HTTP 408/429 and HTTP 5xx responses up to five total attempts per file, waiting
+1, 2, 4 and 8 seconds between attempts. Each retry restarts that file; completed,
+verified files remain cached. Connections time out after 10 seconds and reads
+after 60 seconds without data, allowing large files to continue while data arrives.
+Permanent HTTP errors, oversized bodies, checksum mismatches and local disk errors
+fail immediately. Staged files are removed on failure; only size- and
+SHA-256-verified files are installed.
+
 Qwen3-TTS 1.7B GGUF/ONNX (`Emerald7664/Qwen3-TTS-ONNX`
 `0a36d692562f83a862466b0bf8c12154ddf1965d`), SHA-256 verified by the
 server before loading (full hashes in

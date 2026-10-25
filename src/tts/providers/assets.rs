@@ -4,7 +4,7 @@
 //! per-file SHA-256 verification, atomic temp-file + rename installs, and
 //! progress/cancellation reporting. Files already present with matching
 //! hashes are skipped, so restarts and reloads never re-fetch weights.
-//! Shares the process-wide `reqwest` client; no Python, no CLI subprocess.
+//! Uses an in-process `reqwest` client; no Python, no CLI subprocess.
 
 use std::path::{Path, PathBuf};
 
@@ -260,7 +260,7 @@ pub async fn ensure_pinned_files(
     let mut done: u64 = 0;
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(1800))
+        .read_timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| ProviderError::inference_failed(format!("http client failed: {e}")))?;
     for file in files {
@@ -320,91 +320,139 @@ pub async fn ensure_pinned_files(
             file.size
         );
         on_download_start();
-        let mut request = client.get(&file.url);
-        if let Some(token) = hf_token {
-            request = request.bearer_auth(token);
-        }
-        let response = request.send().await.map_err(|e| {
-            ProviderError::model_missing(format!(
-                "could not download '{}': {e} (see docs/providers.md for offline import)",
-                file.path
-            ))
-        })?;
-        if !response.status().is_success() {
-            return Err(ProviderError::model_missing(format!(
-                "download of '{}' failed with HTTP {}",
-                file.path,
-                response.status()
-            )));
-        }
-        let tmp = dest.with_extension(format!(
-            "{}.{}.part",
-            std::process::id(),
-            uuid::Uuid::new_v4().simple()
-        ));
-        let _staging = StagedFile(tmp.clone());
-        let mut out = tokio::fs::File::create(&tmp).await.map_err(|e| {
-            ProviderError::model_missing(format!("could not stage '{}': {e}", file.path))
-        })?;
-        // Restrict staged weights while downloading (defense in depth;
-        // model bytes are integrity-checked before use regardless).
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-        }
-        let mut hasher = sha2::Sha256::new();
-        let mut stream = response.bytes_stream();
-        use futures_util::StreamExt;
-        use tokio::io::AsyncWriteExt;
-        let mut file_done: u64 = 0;
-        while let Some(chunk) = stream.next().await {
+        // Retry transport failures only. Every attempt gets a fresh staging
+        // file; invalid hashes, oversized bodies and local I/O fail immediately.
+        for attempt in 0..5u32 {
             if cancelled() {
-                let _ = std::fs::remove_file(&tmp);
                 return Err(ProviderError::loading(format!(
                     "{provider} download cancelled"
                 )));
             }
-            let chunk = chunk.map_err(|e| {
-                ProviderError::model_missing(format!(
-                    "download of '{}' interrupted: {e}",
-                    file.path
-                ))
-            })?;
-            if file_done.saturating_add(chunk.len() as u64) > file.size {
-                return Err(ProviderError::model_missing("asset exceeds pinned size"));
-            }
-            hasher.update(&chunk);
-            out.write_all(&chunk).await.map_err(|e| {
-                ProviderError::model_missing(format!("could not stage '{}': {e}", file.path))
-            })?;
-            file_done += chunk.len() as u64;
-            if file_done > file.size {
-                return Err(ProviderError::model_missing("asset exceeds pinned size"));
-            }
-            // Progress counts verified-completed files fully plus the
-            // in-flight file proportionally (capped at its manifest size).
-            on_progress((done + file_done.min(file.size)) as f32 / total as f32);
-        }
-        out.flush()
-            .await
-            .map_err(|e| ProviderError::model_missing(e.to_string()))?;
-        out.sync_all()
-            .await
-            .map_err(|e| ProviderError::model_missing(e.to_string()))?;
-        drop(out);
-        let hash = hex::encode(hasher.finalize());
-        if file_done != file.size || !hash.eq_ignore_ascii_case(file.sha256) {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(ProviderError::model_missing(format!(
-                "integrity check failed for '{}' (hash mismatch); \
+            on_progress(done as f32 / total as f32);
+            let mut retryable = false;
+            let result: Result<(), ProviderError> = async {
+                let mut request = client.get(&file.url);
+                if let Some(token) = hf_token {
+                    request = request.bearer_auth(token);
+                }
+                let response = request.send().await.map_err(|e| {
+                    retryable = e.is_timeout() || e.is_connect() || e.is_request() || e.is_body();
+                    ProviderError::model_missing(format!(
+                        "could not download '{}': {e} (see docs/providers.md for offline import)",
+                        file.path
+                    ))
+                })?;
+                if !response.status().is_success() {
+                    retryable = response.status().is_server_error()
+                        || matches!(response.status().as_u16(), 408 | 429);
+                    return Err(ProviderError::model_missing(format!(
+                        "download of '{}' failed with HTTP {}",
+                        file.path,
+                        response.status()
+                    )));
+                }
+                let tmp = dest.with_extension(format!(
+                    "{}.{}.part",
+                    std::process::id(),
+                    uuid::Uuid::new_v4().simple()
+                ));
+                let _staging = StagedFile(tmp.clone());
+                let mut out = tokio::fs::File::create(&tmp).await.map_err(|e| {
+                    ProviderError::model_missing(format!("could not stage '{}': {e}", file.path))
+                })?;
+                // Restrict staged weights while downloading (defense in depth;
+                // model bytes are integrity-checked before use regardless).
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+                }
+                let mut hasher = sha2::Sha256::new();
+                let mut stream = response.bytes_stream();
+                use futures_util::StreamExt;
+                use tokio::io::AsyncWriteExt;
+                let mut file_done: u64 = 0;
+                while let Some(chunk) = stream.next().await {
+                    if cancelled() {
+                        let _ = std::fs::remove_file(&tmp);
+                        return Err(ProviderError::loading(format!(
+                            "{provider} download cancelled"
+                        )));
+                    }
+                    let chunk = chunk.map_err(|e| {
+                        retryable = true;
+                        ProviderError::model_missing(format!(
+                            "download of '{}' interrupted: {e}",
+                            file.path
+                        ))
+                    })?;
+                    if file_done.saturating_add(chunk.len() as u64) > file.size {
+                        return Err(ProviderError::model_missing("asset exceeds pinned size"));
+                    }
+                    hasher.update(&chunk);
+                    out.write_all(&chunk).await.map_err(|e| {
+                        ProviderError::model_missing(format!(
+                            "could not stage '{}': {e}",
+                            file.path
+                        ))
+                    })?;
+                    file_done += chunk.len() as u64;
+                    if file_done > file.size {
+                        return Err(ProviderError::model_missing("asset exceeds pinned size"));
+                    }
+                    // Progress counts verified-completed files fully plus the
+                    // in-flight file proportionally (capped at its manifest size).
+                    on_progress((done + file_done.min(file.size)) as f32 / total as f32);
+                }
+                out.flush()
+                    .await
+                    .map_err(|e| ProviderError::model_missing(e.to_string()))?;
+                out.sync_all()
+                    .await
+                    .map_err(|e| ProviderError::model_missing(e.to_string()))?;
+                drop(out);
+                let hash = hex::encode(hasher.finalize());
+                if file_done < file.size {
+                    retryable = true;
+                    return Err(ProviderError::model_missing(format!(
+                        "download of '{}' ended early ({file_done}/{} bytes)",
+                        file.path, file.size
+                    )));
+                }
+                if file_done != file.size || !hash.eq_ignore_ascii_case(file.sha256) {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(ProviderError::model_missing(format!(
+                        "integrity check failed for '{}' (hash mismatch); \
                  the staged file was discarded, retry or import offline",
-                file.path
-            )));
+                        file.path
+                    )));
+                }
+                tokio::fs::rename(&tmp, &dest).await.map_err(|e| {
+                    ProviderError::model_missing(format!("could not install '{}': {e}", file.path))
+                })?;
+                Ok(())
+            }
+            .await;
+            match result {
+                Ok(()) => break,
+                Err(error) if retryable && attempt < 4 => {
+                    let delay = std::time::Duration::from_secs(1 << attempt);
+                    tracing::warn!(provider, file = file.path, attempt = attempt + 1,
+                        retry_in_secs = delay.as_secs(), error = %error,
+                        "asset download interrupted; retrying");
+                    let deadline = tokio::time::Instant::now() + delay;
+                    while tokio::time::Instant::now() < deadline {
+                        if cancelled() {
+                            return Err(ProviderError::loading(format!(
+                                "{provider} download cancelled"
+                            )));
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                }
+                Err(error) => return Err(error),
+            }
         }
-        tokio::fs::rename(&tmp, &dest).await.map_err(|e| {
-            ProviderError::model_missing(format!("could not install '{}': {e}", file.path))
-        })?;
         done += file.size;
         on_progress(done as f32 / total as f32);
     }
@@ -555,6 +603,109 @@ mod tests {
             .expect("warm cache verifies without fetching");
         assert!(!*started.lock().unwrap(), "no download must start");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    async fn serve_attempts(responses: Vec<&'static str>) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/weight.bin", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            for response in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).await.unwrap();
+                    request.push(byte[0]);
+                }
+                socket.write_all(response.as_bytes()).await.unwrap();
+                socket.shutdown().await.unwrap();
+            }
+        });
+        (url, task)
+    }
+
+    async fn check_attempts(responses: Vec<&'static str>, succeeds: bool) {
+        let expected_attempts = responses.len();
+        let (url, server) = serve_attempts(responses).await;
+        let dir = std::env::temp_dir().join(format!("sb-retry-{}", uuid::Uuid::new_v4()));
+        let files = [PinnedFile {
+            path: "weight.bin",
+            url,
+            sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            size: 3,
+        }];
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(25),
+            ensure_pinned_files(
+                "test",
+                &dir,
+                &files,
+                None,
+                |progress| {
+                    if progress == 0.0 {
+                        attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                },
+                || {},
+                || false,
+            ),
+        )
+        .await
+        .expect("bounded retries");
+        assert_eq!(result.is_ok(), succeeds, "{result:?}");
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::Relaxed),
+            expected_attempts
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(1), server)
+            .await
+            .unwrap()
+            .unwrap();
+        if succeeds {
+            assert_eq!(std::fs::read(dir.join("weight.bin")).unwrap(), b"abc");
+        } else {
+            assert!(!dir.join("weight.bin").exists());
+        }
+        assert!(std::fs::read_dir(&dir).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "part")
+        }));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn interrupted_body_and_transient_status_are_retried() {
+        check_attempts(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\na",
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
+        ], true).await;
+    }
+
+    #[tokio::test]
+    async fn permanent_status_and_bad_checksum_are_not_retried() {
+        check_attempts(
+            vec!["HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"],
+            false,
+        )
+        .await;
+        check_attempts(
+            vec!["HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabd"],
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn transient_failures_stop_after_five_attempts() {
+        check_attempts(vec![
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"; 5
+        ], false).await;
     }
 
     #[test]
