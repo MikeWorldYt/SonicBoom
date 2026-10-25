@@ -190,6 +190,11 @@ background processes without delivering a signal; battery exemption and
 `termux-wake-lock` may help but do not guarantee uninterrupted operation. No root
 is required. Preserve model/config directories when restarting.
 
+- Address already in use: check `curl http://127.0.0.1:17842/ready` before
+  starting another instance. A server already running in the background keeps
+  the port occupied. Stop that instance before starting a replacement; a second
+  launch fails without downloading or loading models. An occupied port may also
+  belong to another application, so identify it before stopping anything.
 - Missing runtime: run the installer or set `ORT_DYLIB_PATH` to the verified library.
 - Wrong architecture/glibc library/API: replace it with the pinned Android AAR library.
 - CMake missing C++ symbols: avoid parent-app private C++ libraries. Build and runtime wrappers clear
