@@ -285,6 +285,12 @@ fn main() {
     }
 
     let mut cmake = cmake::Config::new(".");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        // CMake otherwise adds its default Android API 21 target, overriding
+        // the API 28 clang wrapper used by our supported NDK build. llama.cpp
+        // needs posix_madvise, which Bionic exposes starting with API 23.
+        cmake.define("CMAKE_SYSTEM_VERSION", "28");
+    }
     cmake
         .profile("Release")
         .define("GGML_VULKAN", if vulkan { "ON" } else { "OFF" })
