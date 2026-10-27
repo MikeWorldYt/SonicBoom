@@ -1,6 +1,8 @@
 use anyhow::Result;
 use unicode_normalization::UnicodeNormalization;
 
+use crate::tts::normalization::segments;
+
 /// Default hard maximum chunk size in Unicode characters.
 pub const DEFAULT_MAX_CHUNK_CHARS: usize = 200;
 
@@ -16,19 +18,37 @@ impl TextProcessor {
         Ok(Self { indexer })
     }
 
+    /// Encode `text` into model token ids and an all-ones mask.
+    ///
+    /// Same values as [`TextProcessor::encode_with_report`] without the
+    /// dropped-character count.
     pub fn encode(&self, text: &str) -> (Vec<i64>, Vec<i64>) {
-        let normalized: String = text.nfkd().collect();
+        let (ids, mask, _dropped) = self.encode_with_report(text);
+        (ids, mask)
+    }
 
-        let ids: Vec<i64> = normalized
-            .chars()
+    /// Encode `text` and also return how many characters (after NFKD) the
+    /// unicode indexer could not map and therefore dropped.
+    ///
+    /// Only the count is reported, never the characters, so the value is
+    /// safe to log. The NFKD step is unchanged on purpose: whether the model
+    /// expects decomposed accents still needs verification against the real
+    /// indexer (open item in `docs/normalization.md`).
+    pub fn encode_with_report(&self, text: &str) -> (Vec<i64>, Vec<i64>, usize) {
+        let mut dropped = 0usize;
+        let ids: Vec<i64> = text
+            .nfkd()
             .filter_map(|c| {
-                let cp = c as usize;
-                self.indexer.get(cp).copied().filter(|&id| id >= 0)
+                let id = self.indexer.get(c as usize).copied().filter(|&id| id >= 0);
+                if id.is_none() {
+                    dropped += 1;
+                }
+                id
             })
             .collect();
 
         let mask: Vec<i64> = vec![1i64; ids.len()];
-        (ids, mask)
+        (ids, mask, dropped)
     }
 
     pub fn split_sentences(text: &str) -> Vec<String> {
@@ -37,9 +57,18 @@ impl TextProcessor {
 
     /// Split `text` into chunks of at most `max_chars` Unicode characters.
     ///
-    /// Strategy: prefer sentence boundaries, then whitespace, then hard-split
-    /// by character count. No returned chunk ever exceeds `max_chars`
-    /// characters (measured with [`str::chars`], not UTF-8 bytes).
+    /// Strategy: prefer protected sentence boundaries, then whitespace, then
+    /// a hard split between grapheme clusters (by character count only when
+    /// a single cluster exceeds the limit). No returned chunk ever exceeds
+    /// `max_chars` characters (measured with [`str::chars`], not UTF-8
+    /// bytes).
+    ///
+    /// Sentence boundaries come from
+    /// [`crate::tts::normalization::segments`]: a `.` only ends a sentence
+    /// when followed by whitespace (or the end) and not after a known
+    /// abbreviation or initial, so decimals (`3.14`), IP addresses, versions
+    /// and URLs are never cut. `? ! ; …` follow the same rule; `。 ？ ！ ；`
+    /// and newlines always end a sentence.
     pub fn split_sentences_with_limit(text: &str, max_chars: usize) -> Vec<String> {
         let max_chars = max_chars.max(1);
         let text = text.trim();
@@ -50,30 +79,19 @@ impl TextProcessor {
             return vec![text.to_string()];
         }
 
-        // 1. Split at sentence boundaries.
-        let mut sentences = Vec::new();
-        let mut current = String::new();
-        for ch in text.chars() {
-            current.push(ch);
-            if is_sentence_end(ch) {
-                let trimmed = current.trim();
-                if !trimmed.is_empty() {
-                    sentences.push(trimmed.to_string());
-                }
-                current = String::new();
-            }
-        }
-        let trimmed = current.trim();
-        if !trimmed.is_empty() {
-            sentences.push(trimmed.to_string());
-        }
+        // 1. Split at protected sentence boundaries.
+        let sentences: Vec<&str> = segments::sentence_spans(text)
+            .into_iter()
+            .map(|span| text[span].trim())
+            .filter(|sentence| !sentence.is_empty())
+            .collect();
 
         // 2. Greedily pack sentences, splitting oversized ones.
         let mut chunks = Vec::new();
         let mut pending = String::new();
         let mut pending_len = 0usize;
         for sentence in sentences {
-            for piece in split_oversized(&sentence, max_chars) {
+            for piece in split_oversized(sentence, max_chars) {
                 let piece_len = piece.chars().count();
                 if pending_len > 0 && pending_len + 1 + piece_len > max_chars {
                     chunks.push(std::mem::take(&mut pending));
@@ -95,13 +113,6 @@ impl TextProcessor {
         }
         chunks
     }
-}
-
-fn is_sentence_end(ch: char) -> bool {
-    matches!(
-        ch,
-        '.' | '?' | '!' | '。' | '？' | '！' | '…' | ';' | '；' | '\n'
-    )
 }
 
 /// Split a single sentence that may exceed `max_chars`: first at whitespace,
@@ -146,12 +157,10 @@ fn split_oversized(sentence: &str, max_chars: usize) -> Vec<String> {
     pieces
 }
 
+/// Hard split that never cuts inside a grapheme cluster unless the cluster
+/// alone exceeds `max_chars`.
 fn hard_split(text: &str, max_chars: usize) -> Vec<String> {
-    let chars: Vec<char> = text.chars().collect();
-    chars
-        .chunks(max_chars)
-        .map(|chunk| chunk.iter().collect())
-        .collect()
+    segments::hard_split(text, max_chars)
 }
 
 fn hard_truncate(text: &str, max_chars: usize) -> String {
@@ -235,5 +244,99 @@ mod tests {
             let chunks = TextProcessor::split_sentences_with_limit(&text, limit);
             assert_bounded(&chunks, limit);
         }
+    }
+
+    /// Non-whitespace characters of `text`, in order.
+    fn dense(text: &str) -> String {
+        text.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    fn assert_covers(chunks: &[String], text: &str) {
+        assert_eq!(
+            dense(&chunks.concat()),
+            dense(text),
+            "chunks lost or reordered text"
+        );
+    }
+
+    #[test]
+    fn protected_tokens_are_never_split() {
+        for token in [
+            "3.14",
+            "10.0.0.1:8080",
+            "https://example.org/a?b=3.14",
+            "v1.2.3",
+            "v1.2.3-beta.2",
+            "1.21.11",
+            "1.234,56",
+            "user@example.org",
+        ] {
+            let filler = "palabra ".repeat(6);
+            let text = format!("{filler}valor {token} final. {filler}otra frase aquí.");
+            let chunks = TextProcessor::split_sentences_with_limit(&text, 80);
+            assert_bounded(&chunks, 80);
+            assert_covers(&chunks, &text);
+            assert!(
+                chunks.iter().any(|c| c.contains(token)),
+                "token {token} was cut: {chunks:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decimal_is_not_a_sentence_boundary() {
+        let text = "El valor es 3.14 y sigue la frase sin cortar nada más.";
+        let chunks = TextProcessor::split_sentences_with_limit(text, 40);
+        assert_bounded(&chunks, 40);
+        assert_covers(&chunks, text);
+        assert!(chunks.iter().any(|c| c.contains("3.14")));
+    }
+
+    #[test]
+    fn abbreviation_is_not_a_sentence_boundary() {
+        let text = "Ayer vino el Dr. García. Hoy no vino.";
+        let chunks = TextProcessor::split_sentences_with_limit(text, 24);
+        assert_bounded(&chunks, 24);
+        assert_eq!(chunks, vec!["Ayer vino el Dr. García.", "Hoy no vino."]);
+    }
+
+    #[test]
+    fn sentence_boundaries_still_split() {
+        let text = "Primera frase. ¿Segunda? ¡Tercera! Cuarta; quinta\nsexta 。七";
+        let chunks = TextProcessor::split_sentences_with_limit(text, 16);
+        assert_bounded(&chunks, 16);
+        assert_covers(&chunks, text);
+        assert!(chunks.len() >= 5);
+    }
+
+    #[test]
+    fn zwj_emoji_and_accents_survive_hard_split() {
+        let family = "👨\u{200D}👩\u{200D}👧\u{200D}👦";
+        let text = format!("{} Pingüino niño acción áéíóú", family.repeat(30));
+        let chunks = TextProcessor::split_sentences_with_limit(&text, 20);
+        assert_bounded(&chunks, 20);
+        assert_covers(&chunks, &text);
+        let families: usize = chunks.iter().map(|c| c.matches(family).count()).sum();
+        assert_eq!(families, 30, "a ZWJ family was split: {chunks:?}");
+        assert!(chunks.iter().any(|c| c.contains("Pingüino")));
+    }
+
+    #[test]
+    fn encode_with_report_counts_dropped_chars() {
+        // Indexer that knows only ASCII letters a..=z and the combining
+        // acute accent (U+0301).
+        let mut indexer = vec![-1i64; 0x302];
+        for (id, cp) in (b'a'..=b'z').enumerate() {
+            indexer[cp as usize] = id as i64;
+        }
+        indexer[0x301] = 99;
+        let processor = TextProcessor { indexer };
+        let (ids, mask, dropped) = processor.encode_with_report("ab é😊");
+        // NFKD: a b ' ' e U+0301 😊 -> space and emoji are dropped.
+        assert_eq!(ids, vec![0, 1, 4, 99]);
+        assert_eq!(mask, vec![1; 4]);
+        assert_eq!(dropped, 2);
+        assert_eq!(processor.encode("ab é😊"), (ids, mask));
+        assert_eq!(processor.encode_with_report(""), (vec![], vec![], 0));
     }
 }
