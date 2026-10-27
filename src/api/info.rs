@@ -35,6 +35,9 @@ pub struct NormalizationInfo {
     pub ruleset_version: &'static str,
     /// Effective configured default mode (`auto` or `off`).
     pub default_mode: sonicboom::tts::normalization::NormalizationMode,
+    /// Configured server locale, or `auto` for language defaults.
+    pub default_locale: String,
+    pub enabled: bool,
     pub languages: Vec<sonicboom::tts::normalization::LanguageCoverage>,
 }
 
@@ -113,6 +116,8 @@ pub async fn get_info(State(state): State<AppState>) -> Json<InfoResponse> {
         normalization: NormalizationInfo {
             ruleset_version: sonicboom::tts::normalization::RULESET_VERSION,
             default_mode: config.tts.normalization.effective_mode(),
+            default_locale: config.tts.normalization.default_locale.clone(),
+            enabled: config.tts.normalization.enabled,
             languages: sonicboom::tts::normalization::language_coverage(),
         },
     })

@@ -1,5 +1,12 @@
 # Text normalization (`tn-v1`)
 
+Normalization defaults to `auto`, including for existing clients that omit the
+new option. This can change spoken output compared with earlier releases. Set
+`[tts.normalization] mode = "off"` or send `normalization=off` to retain the
+original text. Setting `enabled = false` disables normalization globally, even
+when a request explicitly asks for `auto`. The configured `default_locale`
+applies only to its matching language; other languages use their own defaults.
+
 SonicBoom turns written forms such as dates, prices, times and units into
 speakable text before synthesis. The normalizer lives in
 `src/tts/normalization/`. It is Rust-native, offline and deterministic. It has

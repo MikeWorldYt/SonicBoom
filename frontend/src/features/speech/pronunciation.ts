@@ -3,17 +3,17 @@ import type { NormalizationLanguage, NormalizationMode, NormalizeRequest, Speech
 /** Delay between a user action and the preview request it triggers. */
 export const PREVIEW_DEBOUNCE_MS = 500;
 
-const isConcreteLocale = (value: string | undefined): value is string => !!value && value.trim() !== '' && value.trim().toLowerCase() !== 'auto';
+const hasLocale = (value: string | undefined): value is string => !!value && value.trim() !== '';
 
 /**
- * Query fields for the synthesis endpoints. Absent or "auto" values are omitted,
+ * Query fields for the synthesis endpoints. Absent values are omitted,
  * so a legacy caller produces exactly the URL it produced before.
  */
 export function pronunciationQuery(pronunciation?: SpeechPronunciation): Record<string, string> {
   const query: Record<string, string> = {};
   if (!pronunciation) return query;
   if (pronunciation.normalization) query.normalization = pronunciation.normalization;
-  if (isConcreteLocale(pronunciation.locale)) query.locale = pronunciation.locale.trim();
+  if (hasLocale(pronunciation.locale)) query.locale = pronunciation.locale.trim();
   return query;
 }
 
@@ -29,19 +29,19 @@ export function showLocaleChoice(entry: NormalizationLanguage | undefined, mode:
 
 /**
  * The explicit locale to send. Only a tag the server listed for this language
- * qualifies; anything else (including the empty "language default" choice)
- * yields undefined so the server applies its documented default.
+ * qualifies, along with "auto" for the language default. An empty choice
+ * yields undefined so the server applies its configured default.
  */
 export function effectiveLocale(entry: NormalizationLanguage | undefined, requested: string, mode: NormalizationMode): string | undefined {
   if (!showLocaleChoice(entry, mode)) return undefined;
-  return localeChoices(entry).includes(requested) ? requested : undefined;
+  return requested === 'auto' || localeChoices(entry).includes(requested) ? requested : undefined;
 }
 
 /** Body of POST /api/tts/normalize. Optional members are left out when unset. */
 export function previewRequestBody(request: NormalizeRequest): NormalizeRequest {
   return {
     text: request.text, language: request.language,
-    ...(isConcreteLocale(request.locale) ? { locale: request.locale.trim() } : {}),
+    ...(hasLocale(request.locale) ? { locale: request.locale.trim() } : {}),
     ...(request.mode ? { mode: request.mode } : {}),
     ...(request.model ? { model: request.model } : {}),
   };

@@ -14,6 +14,8 @@ const byteOffset = number.int().nonnegative();
 export const normalizationInfoSchema: z.ZodType<NormalizationInfo> = z.object({
   ruleset_version: z.string().min(1),
   default_mode: normalizationMode,
+  default_locale: z.string().optional(),
+  enabled: z.boolean().optional(),
   languages: z.array(z.object({
     language: z.string().min(1), locales: z.array(z.string().min(1)), default_locale: z.string(),
     rules: coverageLevel, features: z.record(z.string(), coverageLevel).default({}),

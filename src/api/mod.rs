@@ -64,7 +64,11 @@ pub async fn router(state: AppState) -> Router {
         // Normalization preview: authenticated, rate-limited, TTS body limit.
         .route(
             "/api/tts/normalize",
-            post(normalize::post_normalize).route_layer(DefaultBodyLimit::max(tts_body_limit)),
+            // JSON can encode one input byte as six bytes (e.g. `\u0001`).
+            // Reserve additional bounded space for the other request fields.
+            post(normalize::post_normalize).route_layer(DefaultBodyLimit::max(
+                tts_body_limit.saturating_mul(6).saturating_add(8192),
+            )),
         )
         .route("/api/tts/jobs/{id}", get(jobs::status))
         .route("/api/tts/jobs/{id}/events", get(jobs::events))

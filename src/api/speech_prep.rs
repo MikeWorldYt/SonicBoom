@@ -16,19 +16,23 @@ pub use sonicboom::tts::normalization::SpeechText;
 
 use crate::{config::AppConfig, error::AppError};
 
-/// Effective normalization mode: the request value when present (trimmed,
-/// case-insensitive `auto`/`off`; empty means absent), else the configured
-/// default (`NormalizationConfig::effective_mode`).
+/// Effective normalization mode: the requested or configured mode, unless
+/// the global switch is disabled. Invalid request values are still rejected.
 pub(crate) fn resolve_mode(
     config: &AppConfig,
     requested: Option<&str>,
 ) -> Result<NormalizationMode, AppError> {
-    match requested.map(str::trim).filter(|raw| !raw.is_empty()) {
+    let mode = match requested.map(str::trim).filter(|raw| !raw.is_empty()) {
         None => Ok(config.tts.normalization.effective_mode()),
         Some(raw) => NormalizationMode::parse(raw).ok_or_else(|| {
             AppError::BadRequest("normalization must be one of: auto, off".to_string())
         }),
-    }
+    }?;
+    Ok(if config.tts.normalization.enabled {
+        mode
+    } else {
+        NormalizationMode::Off
+    })
 }
 
 /// Fixed, content-free `400` message for a normalization failure.
@@ -159,10 +163,9 @@ mod tests {
         ));
         config.tts.normalization.enabled = false;
         assert_eq!(resolve_mode(&config, None).unwrap(), NormalizationMode::Off);
-        // An explicit request value still wins over the configured default.
         assert_eq!(
             resolve_mode(&config, Some("auto")).unwrap(),
-            NormalizationMode::Auto
+            NormalizationMode::Off
         );
     }
 

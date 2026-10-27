@@ -78,7 +78,7 @@ export function createStudio(data: HomeData, overrides?: { api?: Api }) {
   const normalizationAvailable = computed(() => !!normalizationInfo.value);
   const normalizationChoice = ref<NormalizationMode | null>(null);
   const normalizationMode = computed<NormalizationMode>({
-    get: () => normalizationChoice.value ?? normalizationInfo.value?.default_mode ?? 'auto',
+    get: () => normalizationInfo.value?.enabled === false ? 'off' : normalizationChoice.value ?? normalizationInfo.value?.default_mode ?? 'auto',
     set: value => { normalizationChoice.value = value; },
   });
   const pronunciationLocale = ref('');
@@ -89,7 +89,7 @@ export function createStudio(data: HomeData, overrides?: { api?: Api }) {
   const pronunciation = computed<SpeechPronunciation | undefined>(() => normalizationInfo.value
     ? { normalization: normalizationMode.value, locale: effectiveLocale(normalizationLanguage.value, pronunciationLocale.value, normalizationMode.value) }
     : undefined);
-  watch(pronunciationLocales, options => { if (pronunciationLocale.value && !options.includes(pronunciationLocale.value)) pronunciationLocale.value = ''; });
+  watch(pronunciationLocales, options => { if (pronunciationLocale.value && pronunciationLocale.value !== 'auto' && !options.includes(pronunciationLocale.value)) pronunciationLocale.value = ''; });
   let session = new AbortController();
   const cache = createResourceCache();
   const api = overrides?.api ?? createApi(createHttpClient(() => token.value, () => info.value?.auth.required ?? true, () => session.signal));

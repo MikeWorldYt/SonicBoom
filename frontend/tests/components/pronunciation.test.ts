@@ -70,7 +70,7 @@ it('adds no normalization parameters unless fields are present', async () => {
   expect(paths[1]).toBe('/api/tts/jobs?lang=es&format=wav&voice=A&seed=7');
   expect(paths[2]).toBe(paths[0]);
   expect(paths[3]).toBe(paths[0]);
-  expect(paths[4]).toBe(paths[0]);
+  expect(new URL(paths[4], 'http://localhost').searchParams.get('locale')).toBe('auto');
   expect(pronunciationQuery()).toEqual({});
 });
 
@@ -94,7 +94,7 @@ it('previewNormalization posts JSON, omits unset members, validates the response
   expect(calls[0].path).toBe('/api/tts/normalize');
   expect(calls[0].options.method).toBe('POST');
   expect(calls[0].options.signal).toBe(controller.signal);
-  expect(JSON.parse(String(calls[0].options.body))).toEqual({ text: '26/10/2026', language: 'es', mode: 'auto' });
+  expect(JSON.parse(String(calls[0].options.body))).toEqual({ text: '26/10/2026', language: 'es', locale: 'auto', mode: 'auto' });
   expect(previewRequestBody({ text: 'x', language: 'es', locale: 'es-PE', model: 'm' })).toEqual({ text: 'x', language: 'es', locale: 'es-PE', model: 'm' });
   const broken = createApi({ json: async () => ({ ...previewBody, spoken: 5 }) } as never);
   await expect(broken.previewNormalization({ text: 'x', language: 'es' })).rejects.toMatchObject({ kind: 'invalid_response' });
@@ -106,6 +106,7 @@ it('offers only server-listed locales and only where there is a choice', () => {
   expect(showLocaleChoice(french, 'auto')).toBe(false);
   expect(showLocaleChoice(undefined, 'auto')).toBe(false);
   expect(effectiveLocale(spanish, 'es-PE', 'auto')).toBe('es-PE');
+  expect(effectiveLocale(spanish, 'auto', 'auto')).toBe('auto');
   expect(effectiveLocale(spanish, 'es-AR', 'auto')).toBeUndefined();
   expect(effectiveLocale(spanish, '', 'auto')).toBeUndefined();
   expect(effectiveLocale(spanish, 'es-PE', 'off')).toBeUndefined();

@@ -1,5 +1,18 @@
 //! Pipeline-level unit and deterministic fuzz tests for the normalizer.
 
+#[test]
+fn long_code_spans_remain_protected() {
+    for delimiter in ["`", "```"] {
+        let text = format!("{delimiter}{} 123 {delimiter}", "x".repeat(6000));
+        assert_eq!(
+            super::normalize(&text, &opts("en", None)).unwrap().spoken,
+            text
+        );
+    }
+    let malformed = format!("`{} 123", "x".repeat(6000));
+    assert!(super::normalize(&malformed, &opts("en", None)).is_ok());
+}
+
 use super::*;
 
 fn opts(language: &str, locale: Option<&str>) -> NormalizeOptions {

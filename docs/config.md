@@ -175,7 +175,7 @@ max_normalized_chars = 20000  # 1..=200000
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `enabled` | `true` | Master switch. `false` behaves like `mode = "off"` whatever `mode` says. |
+| `enabled` | `true` | Global switch. `false` forces `off`, including when a request specifies `normalization=auto`. |
 | `mode` | `"auto"` | `auto` applies conservative, high-confidence rewrites for the features each language supports and leaves everything else untouched. `off` speaks the text exactly as sent. Requests may override it per call with `normalization=auto\|off`. |
 | `default_locale` | `"auto"` | `auto` uses the documented default locale of the speech language (`es-ES`, `en-US`, `pt-BR`, `fr-FR`, `de-DE`, `it-IT`, `ru-RU`, `zh-CN`, `ja-JP`, `ko-KR`); it is never inferred from the server location. A concrete tag (`es-ES`, `es-MX`, `es-PE`, `en-US`, `en-GB`, `pt-BR`, `pt-PT`, `fr-FR`, `de-DE`, `it-IT`, `ru-RU`, `zh-CN`, `zh-TW`, `ja-JP`, `ko-KR`) is treated as an explicit choice, which allows ambiguous slash dates to be converted. Requests may override it with `locale=<tag>`. |
 | `report_ambiguities` | `true` | Report expressions that could be read two ways (for example `01/02/2026`) as warnings. They are preserved, not guessed. |

@@ -43,7 +43,7 @@ export type NormalizationMode = 'auto' | 'off';
 export type CoverageLevel = 'full' | 'partial' | 'none';
 /** One speech language in the `normalization` block of `GET /api/info`. */
 export interface NormalizationLanguage { language: string; locales: string[]; default_locale: string; rules: CoverageLevel; features: Record<string, CoverageLevel> }
-export interface NormalizationInfo { ruleset_version: string; default_mode: NormalizationMode; languages: NormalizationLanguage[] }
+export interface NormalizationInfo { ruleset_version: string; default_mode: NormalizationMode; default_locale?: string; enabled?: boolean; languages: NormalizationLanguage[] }
 /** Optional synthesis query fields. Absent fields are never sent, so legacy requests are unchanged. */
 export interface SpeechPronunciation { normalization?: NormalizationMode; locale?: string }
 export interface NormalizeRequest { text: string; language: string; locale?: string; mode?: NormalizationMode; model?: string }

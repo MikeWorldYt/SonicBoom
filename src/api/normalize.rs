@@ -265,7 +265,7 @@ mod tests {
             .unwrap();
         let status = response.status();
         let headers = response.headers().clone();
-        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        let bytes = axum::body::to_bytes(response.into_body(), 256 * 1024)
             .await
             .unwrap();
         (
@@ -339,6 +339,27 @@ mod tests {
         assert_eq!(body["spoken"], "26/10/2026");
         assert_eq!(body["mode"], "off");
         assert!(body["changes"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn preview_accepts_maximum_length_escaped_text() {
+        let (app, token) = app().await;
+        for text in [
+            "\"".repeat(10_000),
+            "\\".repeat(10_000),
+            "😀".repeat(10_000),
+        ] {
+            let body =
+                serde_json::json!({"text": text, "language": "en", "mode": "off"}).to_string();
+            let (status, _, response) = post(&app, Some(&token), &body).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(response["spoken"], text);
+        }
+        let body = format!(
+            r#"{{"text":"{}","language":"en","mode":"off"}}"#,
+            "\\ud83d\\ude00".repeat(10_000)
+        );
+        assert_eq!(post(&app, Some(&token), &body).await.0, StatusCode::OK);
     }
 
     #[tokio::test]

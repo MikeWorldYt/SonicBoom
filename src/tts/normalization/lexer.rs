@@ -12,7 +12,7 @@
 //! [`is_protected_identifier`] and by the strictness of the numeric
 //! matchers: a core is only rewritten when it matches a pattern in full.
 
-use std::ops::Range;
+use std::{collections::HashMap, ops::Range};
 
 /// One whitespace-delimited field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,8 +41,6 @@ impl Field {
     }
 }
 
-/// Maximum bytes scanned for a closing backtick run.
-const MAX_CODE_SPAN: usize = 4096;
 /// Maximum bytes of a `<tag>`.
 const MAX_TAG_SPAN: usize = 256;
 
@@ -78,18 +76,36 @@ fn is_trailing_punct(c: char) -> bool {
 pub(crate) fn protected_regions(text: &str) -> Vec<Range<usize>> {
     let bytes = text.as_bytes();
     let mut regions = Vec::new();
+    // Index runs once so unmatched delimiters cannot cause quadratic rescans.
+    let mut runs = Vec::new();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'`' {
+            let start = cursor;
+            while cursor < bytes.len() && bytes[cursor] == b'`' {
+                cursor += 1;
+            }
+            runs.push((start, cursor - start));
+        } else {
+            cursor += 1;
+        }
+    }
+    let mut next_by_length = HashMap::new();
+    let mut closing = HashMap::new();
+    for &(start, len) in runs.iter().rev() {
+        if let Some(&next) = next_by_length.get(&len) {
+            closing.insert(start, next + len);
+        }
+        next_by_length.insert(len, start);
+    }
     let mut i = 0usize;
     while i < bytes.len() {
         match bytes[i] {
             b'`' => {
                 let run = bytes[i..].iter().take_while(|b| **b == b'`').count();
-                let fence = &text[i..i + run];
                 let search_from = i + run;
-                let window_end =
-                    floor_char_boundary(text, (search_from + MAX_CODE_SPAN).min(text.len()));
-                match text[search_from..window_end].find(fence) {
-                    Some(offset) => {
-                        let end = search_from + offset + run;
+                match closing.get(&i).copied() {
+                    Some(end) => {
                         regions.push(i..end);
                         i = end;
                     }
@@ -125,17 +141,6 @@ pub(crate) fn protected_regions(text: &str) -> Vec<Range<usize>> {
         }
     }
     regions
-}
-
-/// Largest char boundary `<= index`.
-pub(crate) fn floor_char_boundary(text: &str, mut index: usize) -> usize {
-    if index >= text.len() {
-        return text.len();
-    }
-    while index > 0 && !text.is_char_boundary(index) {
-        index -= 1;
-    }
-    index
 }
 
 /// `true` when `pos` lies inside one of `regions` (sorted, disjoint).
