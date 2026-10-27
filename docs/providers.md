@@ -126,6 +126,29 @@ on Pocket TTS), missing assets, and unavailable devices all return explicit,
 actionable errors. Configured `cpu` fallback from `auto` is allowed where
 supported, and the effective device is always reported.
 
+### Text normalization coverage
+
+Text normalization (`tn-v1`, see [normalization.md](normalization.md)) runs
+before every provider. It is separate from provider language support: a
+provider that cannot synthesize a language still rejects it, whatever the
+normalizer can render. Each language uses its own rules. No language is
+normalized with English or Spanish rules.
+
+| Language | Locales | What `auto` converts | Preserved (unchanged, often with a warning) |
+|---|---|---|---|
+| `pt` | pt-BR, pt-PT | cardinals, decimals, `%`, `R$`/`€`/`US$`/codes, slash and ISO dates, `HH:MM`, units, `1º`/`1ª`, ranges, Dr./Sr./Av. | `$`, `¥`, nouns that need gender (`2 casas`), `S/` (PEN), pt-PT space-grouped decimals |
+| `fr` | fr-FR | cardinals, decimals, `%` (also `12,5 %`), `€`/`US$`/codes, dates, `HH:MM`, units, ranges, Dr. | space-grouped decimals (`1 234,50 €`), `1er`/`2e`, `15h30`, `un`/`une` before nouns |
+| `de` | de-DE | decimals, `%`, `€`/`US$`/codes, ISO and slash dates, units, ranges, Dr./Nr. | standalone integers (they may be ordinals such as `3.`), clock times (`15:30 Uhr`), dot dates (`26.10.2026`) |
+| `it` | it-IT | cardinals, decimals, `%`, `€`/`US$`/codes, dates, `HH:MM`, units, `1º`/`1ª`, Dott./Sig. | `15.30`, `uno`/`una` before nouns, ranges |
+| `ru` | ru-RU | cardinals before verified nouns (`5 рублей`, `21 год`), decimals, `%`, `€`/`US$`/codes, km/kg | other nouns and cases, dates, times, Cyrillic unit abbreviations (`км`) |
+| `zh` | zh-CN, zh-TW | Hanzi cardinals, decimals, `%`, ISO dates, `HH:MM`; zh-CN only: currency codes and units | numbers attached to Hanzi (`2026年10月26日`, `3个`), measure words, `¥` |
+| `ja` | ja-JP | kanji cardinals, decimals, `%`, ISO dates, `HH:MM`, `JPY`/`USD`/`EUR`/`GBP`, units | numbers attached to kana/kanji (`500円`), counters (`3 人`), `¥`, amounts with cents |
+| `ko` | ko-KR | Sino-Korean cardinals, decimals, `%`, ISO dates, clock hours 1–12, currency codes, units, `10000 원` | numbers attached to Hangul (`2026년`), native counters (`3 개`), 24-hour times above 12 |
+
+All of these expectations were written by an agent and have not yet been
+reviewed by fluent speakers. Coverage per feature is reported by
+`/api/info` and in each `/api/tts/normalize` response.
+
 ## Qwen3-TTS 1.7B GGUF/ONNX setup (CPU smoke test)
 
 1. Default source builds include Qwen on CPU + Vulkan in one binary
