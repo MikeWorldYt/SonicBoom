@@ -201,11 +201,17 @@ digest-pinned bases, native CMake/NCCL policy and runtime packaging are wired
 correctly; it does not prove GPU inference works.
 
 The full native CUDA compile and CUDA Docker image build live in the dedicated
-`.github/workflows/cuda-full.yml` workflow, triggered manually, weekly, and on
-release tags. It compiles the native backend, verifies NCCL/static linking and
+`.github/workflows/cuda-full.yml` workflow, triggered manually and on release
+tags. It is **disabled by default**: the weekly `schedule:` block is commented
+out so it cannot consume ~47-80 minutes of runner time unattended; uncomment it
+to restore the weekly run. It compiles the native backend with the same
+`web-ui` feature set as the production image (the frontend is built on the
+runner and embedded via `SONICBOOM_FRONTEND_PREBUILT=1`, so no Node.js is
+needed inside the CUDA container), verifies NCCL/static linking and
 shared-library resolution, builds the CUDA image with a layer cache, and runs
-GPU runtime tests only when a self-hosted CUDA runner is attached. Release CUDA
-artifacts are not treated as validated unless those full checks pass.
+GPU runtime tests only when a self-hosted CUDA runner is attached and GPU tests
+are requested. Release CUDA artifacts are not treated as validated unless those
+full checks pass.
 
 Use `python3 scripts/ci/container_smoke.py sonicboom:cpu` (or
 `sonicboom:playback`) to check real HTTP health and graceful shutdown without

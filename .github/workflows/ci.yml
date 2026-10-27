@@ -499,9 +499,10 @@ jobs:
       - name: Verify playback health and graceful shutdown (model-free)
         run: python3 scripts/ci/container_smoke.py sonicboom:playback
 
-  # Fast, static validation only. The full ~80 minute CUDA Docker build is
+  # Fast, static validation only. The full ~47-80 minute CUDA Docker build is
   # deliberately NOT run on pushes/PRs; it lives in the dedicated
-  # `cuda-full.yml` workflow (manual + scheduled + release tags).
+  # `cuda-full.yml` workflow, which is disabled by default and runs only on
+  # manual dispatch or release tags.
   docker-cuda:
     name: Docker CUDA structural check
     runs-on: ubuntu-24.04
