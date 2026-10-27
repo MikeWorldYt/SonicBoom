@@ -1,9 +1,11 @@
 name: CUDA full build
 
-# The full native CUDA compile and CUDA Docker image build are slow (~80 min)
-# and are deliberately kept OUT of ordinary push/PR CI. This workflow runs
-# them manually, weekly, and for release tags so CUDA support stays validated
-# without blocking normal pull requests. It is NOT a mandatory branch-check.
+# The full native CUDA compile and CUDA Docker image build are slow (~47-80
+# min) and are deliberately kept OUT of ordinary push/PR CI. This workflow is
+# DISABLED BY DEFAULT: it does not run on a schedule, so it cannot burn runner
+# time every week without anyone asking. Trigger it manually via
+# workflow_dispatch, or let the release-tag trigger validate a release.
+# To restore the weekly run, uncomment the `schedule:` block below.
 on:
   workflow_dispatch:
     inputs:
@@ -15,9 +17,9 @@ on:
         description: Also build a narrow-arch CUDA image for faster feedback
         type: boolean
         default: false
-  schedule:
-    # Weekly, Sunday 04:00 UTC.
-    - cron: '0 4 * * 0'
+  # schedule:
+  #   # Weekly, Sunday 04:00 UTC.
+  #   - cron: '0 4 * * 0'
   push:
     tags: ['v*']
 
@@ -41,11 +43,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
       - name: Verify pinned native sources and manifests
@@ -53,20 +55,33 @@ jobs:
         run: python3 scripts/ci/preflight.py
       - name: Static CUDA configuration check
         run: python3 scripts/ci/cuda_structure.py
+      # The production image builds with `web-ui` (embedded frontend assets).
+      # Build the frontend here so the CUDA link check compiles the same feature
+      # set without installing Node.js inside the CUDA devel container.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend (embedded web UI)
+        run: npm ci && npm run build
+        working-directory: frontend
       - name: Cache cargo
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-v3-${{ runner.os }}-cuda13-native-servercuda-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-${{ github.sha }}
+          key: cargo-v3-${{ runner.os }}-cuda13-native-servercuda-webui-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}
           restore-keys: |
-            cargo-v3-${{ runner.os }}-cuda13-native-servercuda-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
+            cargo-v3-${{ runner.os }}-cuda13-native-servercuda-webui-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
       # Build inside the digest-pinned CUDA devel image (same base as the
       # Dockerfile builder-cuda) so CUDA/NCCL behaviour matches production.
       # The image is pulled from the host runner to avoid container-job
       # checkout/toolchain pitfalls. Cargo caches are bind-mounted.
+      # SONICBOOM_FRONTEND_PREBUILT=1 reuses the dist built above instead of
+      # invoking npm inside the container (which has no Node.js).
       - name: Compile, link and verify native CUDA
         run: |
           set -euo pipefail
@@ -79,6 +94,7 @@ jobs:
             -e CARGO_TERM_COLOR=always \
             -e ORT_STRATEGY=download \
             -e ORT_CUDA_VERSION=13 \
+            -e SONICBOOM_FRONTEND_PREBUILT=1 \
             "$CUDA_DEVEL_IMAGE" bash -lc '
               set -euo pipefail
               apt-get update
@@ -90,7 +106,7 @@ jobs:
                 | sh -s -- -y --profile minimal --default-toolchain 1.89.0
               . "$HOME/.cargo/env"
               cargo build --release --locked --no-default-features \
-                --features server,cuda,qwen-gguf-cuda,pocket-tts
+                --features server,cuda,qwen-gguf-cuda,pocket-tts,web-ui
               BIN=target/release/SonicBoom
               test -x "$BIN"
               if readelf -d "$BIN" | grep -qi libnccl; then
@@ -117,11 +133,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
       - name: Verify pinned native sources and manifests
@@ -172,17 +188,17 @@ jobs:
   gpu-runtime:
     name: GPU runtime tests (self-hosted, optional)
     needs: docker-cuda-build
-    if: >-
-      (github.event_name == 'workflow_dispatch' && inputs.run_gpu_tests) ||
-      (github.event_name == 'schedule' && vars.CUDA_GPU_RUNNER == 'true')
+    # Only on explicit manual dispatch: the weekly schedule is disabled by
+    # default, so there is no unattended path that could reach this job.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_gpu_tests
     runs-on: [self-hosted, linux, cuda]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
       - name: Confirm GPU is visible
