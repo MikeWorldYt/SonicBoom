@@ -12,6 +12,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
+use super::speech_prep::{SpeechOptions, SpeechText};
 use super::tts::{check_rate_limit, synthesize_bounded};
 use crate::{
     auth::AuthenticatedToken,
@@ -87,6 +88,56 @@ pub struct SpeechRequest {
     /// Deterministic seed for cloning providers, when supported.
     #[serde(default)]
     pub seed: Option<u64>,
+    /// SonicBoom extension: text normalization mode, `auto` or `off`.
+    /// Absent uses the server's configured default.
+    #[serde(default)]
+    pub normalization: Option<String>,
+    /// SonicBoom extension: pronunciation locale (e.g. `es-PE`). Absent or
+    /// `auto` selects the speech language's documented default.
+    #[serde(default)]
+    pub locale: Option<String>,
+}
+
+impl SpeechRequest {
+    /// The request's normalization options.
+    fn speech_options(&self) -> SpeechOptions {
+        SpeechOptions {
+            normalization: self.normalization.clone(),
+            locale: self.locale.clone(),
+        }
+    }
+
+    /// Prepare `input` for `language` (legacy trimming first), once.
+    pub(crate) fn speech(
+        &self,
+        config: &crate::config::AppConfig,
+        language: &str,
+    ) -> Result<SpeechText, AppError> {
+        self.speech_options()
+            .prepare(config, language, self.input.trim())
+    }
+}
+
+/// Provider request for a cloning profile. Only the target text is
+/// prepared; the stored reference transcript and audio are passed through
+/// byte-identical.
+fn cloning_provider_request(
+    profile: &sonicboom::tts::voices::VoiceProfile,
+    reference: sonicboom::tts::providers::types::ReferenceAudio,
+    speech: SpeechText,
+    language: String,
+    seed: Option<u64>,
+) -> Result<sonicboom::tts::providers::ProviderRequest, AppError> {
+    use sonicboom::tts::providers::types::DevicePreference;
+    let mut provider_request =
+        super::speech_prep::provider_request(&profile.model, &profile.id, speech, language);
+    provider_request.device = DevicePreference::Auto;
+    provider_request.clone_mode =
+        Some(super::voices::parse_clone_mode_public(&profile.clone_mode)?);
+    provider_request.reference_transcript = profile.transcript.clone();
+    provider_request.reference_audio = Some(reference);
+    provider_request.seed = seed;
+    Ok(provider_request)
 }
 
 fn default_model() -> String {
@@ -187,7 +238,6 @@ async fn post_speech_cloning(
 ) -> Result<axum::response::Response, AppError> {
     use super::providers::{build_registry_for_state, provider_error_to_app};
     use super::tts::synthesize_provider_bounded;
-    use sonicboom::tts::providers::types::{DevicePreference, ProviderRequest};
 
     let config = state.config.get().await;
     sonicboom::engine::validate_tts_input(
@@ -227,18 +277,10 @@ async fn post_speech_cloning(
             profile.id, profile.model, request.model
         )));
     }
-    let mut provider_request = ProviderRequest::new(
-        &profile.model,
-        &profile.id,
-        request.input.trim(),
-        request.language.clone().unwrap_or(profile.language.clone()),
-    );
-    provider_request.device = DevicePreference::Auto;
-    provider_request.clone_mode =
-        Some(super::voices::parse_clone_mode_public(&profile.clone_mode)?);
-    provider_request.reference_transcript = profile.transcript.clone();
-    provider_request.reference_audio = Some(reference);
-    provider_request.seed = request.seed;
+    let language = request.language.clone().unwrap_or(profile.language.clone());
+    let speech = request.speech(&config, &language)?;
+    let provider_request =
+        cloning_provider_request(&profile, reference, speech, language, request.seed)?;
     let registry = build_registry_for_state(state).await;
     let provider = registry
         .resolve_model(&request.model)
@@ -310,6 +352,10 @@ async fn post_speech_inner(
         config.tts.max_text_length,
     )
     .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    // Legacy Supertonic aliases synthesize English; the text is prepared
+    // once for that language before the model check.
+    let lang = "en".to_string(); // Default language
+    let speech = request.speech(&config, &lang)?;
 
     let model_handle = {
         let status = state.model_status.read().await;
@@ -338,8 +384,6 @@ async fn post_speech_inner(
         }
     };
 
-    let text = request.input.trim().to_string();
-
     // Verify voice exists, fallback to default
     let voice_name = if model_handle.voice_styles.contains_key(&voice_name) {
         voice_name
@@ -350,10 +394,9 @@ async fn post_speech_inner(
             .to_string()
     };
 
-    let lang = "en".to_string(); // Default language
     let sample_rate = model_handle.sample_rate();
 
-    let samples = synthesize_bounded(&state, model_handle, text, lang, voice_name).await?;
+    let samples = synthesize_bounded(&state, model_handle, speech, lang, voice_name).await?;
 
     let audio_bytes = super::tts::encode_output(samples, sample_rate, format).await?;
 
@@ -579,5 +622,102 @@ mod tests {
         // New optional fields default to absent without changing old defaults.
         assert_eq!(request.language, None);
         assert_eq!(request.seed, None);
+        assert_eq!(request.normalization, None);
+        assert_eq!(request.locale, None);
+        // Standard OpenAI clients may send fields SonicBoom does not know.
+        let request: SpeechRequest =
+            serde_json::from_str(r#"{"input":"hi","instructions":"calm","stream_format":"audio"}"#)
+                .unwrap();
+        assert_eq!(request.input, "hi");
+    }
+
+    #[test]
+    fn legacy_and_cloning_paths_prepare_text_once_with_request_options() {
+        let config = crate::api::tests::test_config();
+        let request: SpeechRequest = serde_json::from_str(
+            r#"{"input":"  Pago 26/10/2026  ","normalization":"auto","locale":"es-PE"}"#,
+        )
+        .unwrap();
+        let speech = request.speech(&config, "es").unwrap();
+        assert_eq!(
+            speech.as_str(),
+            "Pago veintiséis de octubre de dos mil veintiséis"
+        );
+        assert_eq!(speech.identity(), "tn-v1|auto|es|es-PE");
+        // Legacy aliases synthesize English: a Spanish locale is a 400.
+        assert!(matches!(
+            request.speech(&config, "en"),
+            Err(AppError::BadRequest(_))
+        ));
+        let off: SpeechRequest =
+            serde_json::from_str(r#"{"input":"  Pago 26/10/2026  ","normalization":"OFF"}"#)
+                .unwrap();
+        assert_eq!(
+            off.speech(&config, "es").unwrap().as_str(),
+            "Pago 26/10/2026"
+        );
+        let invalid: SpeechRequest =
+            serde_json::from_str(r#"{"input":"hi","normalization":"strict"}"#).unwrap();
+        assert!(matches!(
+            invalid.speech(&config, "en"),
+            Err(AppError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn cloning_requests_keep_the_reference_transcript_byte_identical() {
+        let config = crate::api::tests::test_config();
+        let now = chrono::Utc::now();
+        let transcript = "Reference: 12 words, 3/4 of them; ¿sí? 26/10/2026".to_string();
+        let profile = sonicboom::tts::voices::VoiceProfile {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Synthetic authorized fixture".into(),
+            provider: "qwen3-gguf".into(),
+            model: "qwen3-tts-1.7b-base".into(),
+            model_revision: "test".into(),
+            language: "es".into(),
+            clone_mode: "icl".into(),
+            reference_hash: "synthetic-fixture".into(),
+            reference_sample_rate: 24_000,
+            reference_duration_secs: 3.0,
+            transcript: Some(transcript.clone()),
+            owner_token_hash: Some("test-owner".into()),
+            consent: sonicboom::tts::voices::VoiceConsent {
+                basis: "owner".into(),
+                note: String::new(),
+                created_at: now,
+            },
+            created_at: now,
+            updated_at: now,
+        };
+        let reference = sonicboom::tts::providers::types::ReferenceAudio {
+            pcm: vec![0.25; 2400],
+            sample_rate: 24_000,
+        };
+        let request: SpeechRequest = serde_json::from_str(
+            r#"{"model":"qwen3-tts-1.7b-base","input":"Tengo 3 gatos el 26/10/2026","seed":7}"#,
+        )
+        .unwrap();
+        let speech = request.speech(&config, &profile.language).unwrap();
+        let identity = speech.identity().to_string();
+        let built = cloning_provider_request(
+            &profile,
+            reference.clone(),
+            speech,
+            profile.language.clone(),
+            request.seed,
+        )
+        .unwrap();
+        assert!(built.text.contains("veintiséis de octubre"));
+        assert_ne!(built.text, request.input);
+        assert_eq!(built.speech_identity.as_deref(), Some(identity.as_str()));
+        assert_eq!(
+            built.reference_transcript.as_deref().map(str::as_bytes),
+            Some(transcript.as_bytes())
+        );
+        assert_eq!(built.reference_audio.as_ref().unwrap().pcm, reference.pcm);
+        assert_eq!(built.seed, Some(7));
+        assert_eq!(built.clone_mode.unwrap().as_str(), "icl");
+        assert_eq!(built.language, "es");
     }
 }

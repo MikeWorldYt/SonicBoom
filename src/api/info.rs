@@ -24,6 +24,18 @@ pub struct InfoResponse {
     pub config_revision: u64,
     pub model: ModelInfo,
     pub synthesis: serde_json::Value,
+    /// Text-normalization capabilities. Coverage of pronunciation rules is
+    /// reported separately from provider speech-language support.
+    pub normalization: NormalizationInfo,
+}
+
+/// `normalization` block of `GET /api/info`.
+#[derive(Serialize)]
+pub struct NormalizationInfo {
+    pub ruleset_version: &'static str,
+    /// Effective configured default mode (`auto` or `off`).
+    pub default_mode: sonicboom::tts::normalization::NormalizationMode,
+    pub languages: Vec<sonicboom::tts::normalization::LanguageCoverage>,
 }
 
 #[derive(Serialize)]
@@ -98,5 +110,52 @@ pub async fn get_info(State(state): State<AppState>) -> Json<InfoResponse> {
         model: ModelInfo {
             status: model_status.to_string(),
         },
+        normalization: NormalizationInfo {
+            ruleset_version: sonicboom::tts::normalization::RULESET_VERSION,
+            default_mode: config.tts.normalization.effective_mode(),
+            languages: sonicboom::tts::normalization::language_coverage(),
+        },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn info_reports_normalization_coverage_and_effective_mode() {
+        let mut config = crate::api::tests::test_config();
+        let state = crate::api::tests::test_state(
+            config.clone(),
+            Arc::new(crate::auth::store::TokenStore::empty()),
+            Arc::new(None),
+        );
+        let body = serde_json::to_value(get_info(State(state)).await.0).unwrap();
+        let block = &body["normalization"];
+        assert_eq!(block["ruleset_version"], "tn-v1");
+        assert_eq!(block["default_mode"], "auto");
+        let spanish = block["languages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["language"] == "es")
+            .unwrap();
+        assert_eq!(
+            spanish["locales"],
+            serde_json::json!(["es-ES", "es-MX", "es-PE"])
+        );
+        assert_eq!(spanish["default_locale"], "es-ES");
+        assert!(spanish["rules"].is_string());
+        assert!(spanish["features"]["cardinal_numbers"].is_string());
+
+        config.tts.normalization.enabled = false;
+        let state = crate::api::tests::test_state(
+            config,
+            Arc::new(crate::auth::store::TokenStore::empty()),
+            Arc::new(None),
+        );
+        let body = serde_json::to_value(get_info(State(state)).await.0).unwrap();
+        assert_eq!(body["normalization"]["default_mode"], "off");
+    }
 }

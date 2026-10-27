@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::gate::RunBoundedError;
+use super::speech_prep::{SpeechOptions, SpeechText};
 use crate::{
     auth::AuthenticatedToken,
     error::AppError,
@@ -19,11 +20,13 @@ use crate::{
 /// Run model inference with the admission permit owned by the blocking
 /// task itself, so an HTTP timeout/cancellation can never release the
 /// concurrency slot while inference still runs (see
-/// [`crate::api::gate::InferenceGate::run_bounded`]).
+/// [`crate::api::gate::InferenceGate::run_bounded`]). The text is a
+/// [`SpeechText`]: it has been prepared exactly once by
+/// [`super::speech_prep::prepare_speech`].
 pub(super) async fn synthesize_bounded(
     state: &crate::AppState,
     model_handle: std::sync::Arc<crate::tts::model::ModelHandle>,
-    text: String,
+    text: SpeechText,
     lang: String,
     voice_name: String,
 ) -> Result<Vec<f32>, AppError> {
@@ -46,7 +49,7 @@ pub(super) async fn synthesize_bounded(
             }
             inference::synthesize(
                 &model_handle,
-                &text,
+                text.as_str(),
                 &lang,
                 &voice_name,
                 inference_steps,
@@ -81,6 +84,24 @@ pub struct TtsQuery {
     /// Play immediately?
     #[cfg(feature = "playback")]
     pub play_now: Option<bool>,
+    /// Text normalization mode: `auto` or `off`. Absent uses the server's
+    /// configured default (`[tts.normalization]`).
+    #[serde(default)]
+    pub normalization: Option<String>,
+    /// Pronunciation locale (e.g. `es-PE`). Absent or `auto` selects the
+    /// speech language's documented default.
+    #[serde(default)]
+    pub locale: Option<String>,
+}
+
+impl TtsQuery {
+    /// The request's normalization options.
+    pub(crate) fn speech_options(&self) -> SpeechOptions {
+        SpeechOptions {
+            normalization: self.normalization.clone(),
+            locale: self.locale.clone(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -135,12 +156,22 @@ pub async fn get_status(State(state): State<crate::AppState>) -> impl IntoRespon
 /// task itself (same cancellation safety as [`synthesize_bounded`]): an HTTP
 /// timeout/cancellation can never release the concurrency slot while
 /// inference still runs, and queued jobs are bounded by the shared gate.
+///
+/// Only requests built from a prepared [`SpeechText`]
+/// ([`super::speech_prep::provider_request`]) are accepted: a request
+/// without `speech_identity` carries raw text and is refused before any
+/// inference.
 pub(crate) async fn synthesize_provider_bounded(
     state: &crate::AppState,
     provider: std::sync::Arc<dyn sonicboom::tts::providers::TtsProvider>,
     request: sonicboom::tts::providers::types::ProviderRequest,
 ) -> Result<sonicboom::tts::providers::types::PcmAudio, sonicboom::tts::providers::ProviderError> {
     use sonicboom::tts::providers::ProviderError;
+    if request.speech_identity.is_none() {
+        return Err(ProviderError::inference_failed(
+            "synthesis text was not prepared",
+        ));
+    }
     let config = state.config.get().await;
     super::jobs::with_deadline(
         config.inference.generation_deadline_secs,
@@ -195,7 +226,30 @@ pub async fn post_tts(
 ) -> Result<Response, AppError> {
     super::jobs::with_admission(
         &state,
-        post_tts_inner(token, State(state.clone()), Query(query), body),
+        post_tts_inner(token, State(state.clone()), Query(query), body, None),
+    )
+    .await
+}
+
+/// `/api/tts` semantics for text that was already prepared (async jobs
+/// prepare at enqueue, before computing their idempotency fingerprint).
+/// `query.lang` must be the language `speech` was prepared for.
+pub(super) async fn post_tts_prepared(
+    token: AuthenticatedToken,
+    state: crate::AppState,
+    query: TtsQuery,
+    body: String,
+    speech: SpeechText,
+) -> Result<Response, AppError> {
+    super::jobs::with_admission(
+        &state,
+        post_tts_inner(
+            token,
+            State(state.clone()),
+            Query(query),
+            body,
+            Some(speech),
+        ),
     )
     .await
 }
@@ -205,6 +259,7 @@ async fn post_tts_inner(
     State(state): State<crate::AppState>,
     Query(query): Query<TtsQuery>,
     body: String,
+    prepared: Option<SpeechText>,
 ) -> Result<Response, AppError> {
     check_rate_limit(&state, &token)?;
     let lang = query.lang.clone().unwrap_or_else(|| "en".to_string());
@@ -219,6 +274,14 @@ async fn post_tts_inner(
         config.tts.max_text_length,
     )
     .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    // Text is prepared once, before the model check, so invalid
+    // normalization options are a 400 even while the model loads.
+    let speech = match prepared {
+        Some(speech) => speech,
+        None => query
+            .speech_options()
+            .prepare(&config, &lang, body.trim())?,
+    };
 
     let model_handle = {
         let status = state.model_status.read().await;
@@ -247,7 +310,6 @@ async fn post_tts_inner(
         }
     };
 
-    let text = body.trim().to_string();
     let voice_name = match query.voice {
         Some(ref v) if model_handle.voice_styles.contains_key(v.as_str()) => v.clone(),
         Some(_) => return Err(AppError::BadRequest("unknown Supertonic voice".into())),
@@ -268,7 +330,7 @@ async fn post_tts_inner(
         .map_err(|e| AppError::BadRequest(e.to_string()))?
         .unwrap_or(audio::AudioFormat::Opus);
 
-    let samples = synthesize_bounded(&state, model_handle, text, lang, voice_name).await?;
+    let samples = synthesize_bounded(&state, model_handle, speech, lang, voice_name).await?;
 
     let audio_bytes = encode_output(samples, sample_rate, format).await?;
 
@@ -319,6 +381,9 @@ async fn post_tts_and_play_inner(
     .map_err(|e| AppError::BadRequest(e.to_string()))?;
     let play_now = query.play_now.unwrap_or(false);
     let (samples, sample_rate) = if provider_id == "supertonic" {
+        let speech = query
+            .speech_options()
+            .prepare(&config, &lang, body.trim())?;
         let model_handle = super::providers::supertonic_handle(&state)
             .await
             .ok_or_else(|| {
@@ -341,7 +406,7 @@ async fn post_tts_and_play_inner(
         playback_manager(&state)?;
         let rate = model_handle.sample_rate();
         (
-            synthesize_bounded(&state, model_handle, body.trim().into(), lang, voice_name).await?,
+            synthesize_bounded(&state, model_handle, speech, lang, voice_name).await?,
             rate,
         )
     } else {
@@ -352,6 +417,7 @@ async fn post_tts_and_play_inner(
             voice,
             body.trim(),
             query.lang.clone(),
+            &query.speech_options(),
         )
         .await?;
         playback_manager(&state)?;
@@ -580,6 +646,7 @@ async fn prepare_plugin_clone(
     voice: &str,
     text: &str,
     language: Option<String>,
+    options: &SpeechOptions,
 ) -> Result<
     (
         Arc<dyn sonicboom::tts::providers::TtsProvider>,
@@ -604,6 +671,7 @@ async fn prepare_plugin_clone(
         reference,
         text,
         language,
+        options,
     )?;
     Ok((provider, request))
 }
@@ -616,6 +684,7 @@ fn playback_manager(state: &crate::AppState) -> Result<&crate::tts::queue::Audio
 }
 
 #[cfg(feature = "playback")]
+#[allow(clippy::too_many_arguments)]
 fn plugin_clone_request(
     config: &crate::config::AppConfig,
     provider: &dyn sonicboom::tts::providers::TtsProvider,
@@ -624,6 +693,7 @@ fn plugin_clone_request(
     reference: sonicboom::tts::providers::types::ReferenceAudio,
     text: &str,
     language: Option<String>,
+    options: &SpeechOptions,
 ) -> Result<sonicboom::tts::providers::ProviderRequest, AppError> {
     if profile.provider != provider_id
         || profile.model_revision != super::voices::config_revision_for(config, provider_id)
@@ -660,12 +730,11 @@ fn plugin_clone_request(
             "unsupported voice model, language or clone mode".into(),
         ));
     }
-    let mut request = sonicboom::tts::providers::ProviderRequest::new(
-        &profile.model,
-        &profile.id,
-        text,
-        language,
-    );
+    // Only the target text is prepared; the reference transcript and audio
+    // travel to the provider unchanged.
+    let speech = options.prepare(config, &language, text)?;
+    let mut request =
+        super::speech_prep::provider_request(&profile.model, &profile.id, speech, language);
     request.clone_mode = Some(super::voices::parse_clone_mode_public(&profile.clone_mode)?);
     request.reference_transcript = profile.transcript;
     request.reference_audio = Some(reference);
@@ -802,6 +871,7 @@ mod plugin_play_tests {
                 reference(),
                 "test",
                 None,
+                &SpeechOptions::default(),
             )
             .unwrap();
             assert_eq!(request.model, profile.model);
@@ -876,7 +946,8 @@ mod plugin_play_tests {
                     profile(&config, &provider),
                     reference(),
                     "test",
-                    None
+                    None,
+                    &SpeechOptions::default()
                 ),
                 Err(AppError::ServiceUnavailable(_))
             ));
@@ -891,7 +962,8 @@ mod plugin_play_tests {
                 p.clone(),
                 reference(),
                 "test",
-                Some("es".into())
+                Some("es".into()),
+                &SpeechOptions::default()
             ),
             Err(AppError::BadRequest(_))
         ));
@@ -903,7 +975,8 @@ mod plugin_play_tests {
                 p.clone(),
                 reference(),
                 "test",
-                None
+                None,
+                &SpeechOptions::default()
             ),
             Err(AppError::BadRequest(_))
         ));
@@ -917,7 +990,8 @@ mod plugin_play_tests {
                 stale,
                 reference(),
                 "test",
-                None
+                None,
+                &SpeechOptions::default()
             ),
             Err(AppError::BadRequest(_))
         ));

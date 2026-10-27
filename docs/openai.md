@@ -48,6 +48,17 @@ Synthesizes text to speech using OpenAI-compatible request format.
 | `speed` | number | No | `1.0` | Only `1.0` (or omitted) is accepted; anything else → `400` (speed adjustment is not implemented) |
 | `language` | string | No | profile language (`en` for legacy) | Synthesis language for cloning models; validated per provider (Pocket TTS supports `en`/`es`; anything else → `400`). Legacy Supertonic requests always synthesize English |
 | `seed` | integer | No | - | Deterministic seed for cloning providers, when supported |
+| `normalization` | string | No | server default (`auto`) | SonicBoom extension: text normalization `auto` or `off` (anything else → `400`) |
+| `locale` | string | No | language default | SonicBoom extension: pronunciation locale such as `es-PE`, or `auto`. Must belong to the synthesis language (legacy Supertonic aliases synthesize English, so only `en-US`/`en-GB` apply there); unsupported or mismatched → `400` |
+
+Both extension fields are optional and additive: standard OpenAI clients
+that omit them keep working, and unknown fields are still ignored. With the
+default `auto` mode, numbers, dates, prices and similar written forms are
+spoken as words; send `"normalization": "off"` for the previous audio.
+Only the `input` text is prepared (once, before synthesis); a cloning
+profile's reference transcript and reference audio are never modified. See
+[api.md](api.md#text-normalization) for details and the
+`POST /api/tts/normalize` preview.
 
 Cloning example (Qwen3-TTS, Japanese):
 

@@ -1,4 +1,10 @@
 //! Private, bounded, process-local synthesis jobs. SSE carries snapshots, not audio.
+//!
+//! Job text is prepared ([`SpeechText`]) once at enqueue, before the
+//! idempotency fingerprint is computed; the executor receives the prepared
+//! text and never normalizes again. Job status, SSE events and audio
+//! metadata never include the original or spoken text.
+use super::speech_prep::{SpeechOptions, SpeechText};
 use crate::{AppState, auth::AuthenticatedToken, error::AppError};
 use axum::{
     Json,
@@ -345,9 +351,24 @@ pub struct JobQuery {
     pub predictor_top_p: Option<f32>,
     #[serde(default)]
     pub predictor_repetition_penalty: Option<f32>,
+    /// Text normalization mode: `auto` or `off` (absent = server default).
+    /// Frozen at enqueue together with the effective locale and ruleset.
+    #[serde(default)]
+    pub normalization: Option<String>,
+    /// Pronunciation locale (absent or `auto` = language default).
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 impl JobQuery {
+    /// The request's normalization options.
+    fn speech_options(&self) -> SpeechOptions {
+        SpeechOptions {
+            normalization: self.normalization.clone(),
+            locale: self.locale.clone(),
+        }
+    }
+
     /// Collect the optional sampling/quality overrides (unparsed).
     fn sampling_input(&self) -> super::sampling::SamplingInput {
         super::sampling::SamplingInput {
@@ -432,12 +453,21 @@ fn job_provider(_query: &JobQuery) -> &str {
 /// submissions with the same idempotency key must fingerprint identically,
 /// otherwise the key is being reused for a different request. The spoken text
 /// is hashed, never stored, so diagnostics carry no user content.
-fn request_fingerprint(query: &JobQuery, body: &str, playback: &PlaybackRequest) -> String {
+///
+/// `speech_identity` is the prepared text's [`SpeechText::identity`]
+/// (ruleset version, effective mode, language and locale), so a retry whose
+/// effective normalization differs is a conflict, never the old audio.
+fn request_fingerprint(
+    query: &JobQuery,
+    body: &str,
+    playback: &PlaybackRequest,
+    speech_identity: &str,
+) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(body.as_bytes());
     format!(
-        "{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
         job_provider(query),
         query.profile.as_deref().unwrap_or(""),
         query.voice.as_deref().unwrap_or(""),
@@ -450,8 +480,35 @@ fn request_fingerprint(query: &JobQuery, body: &str, playback: &PlaybackRequest)
         },
         playback.play_now,
         query.sampling_identity(),
+        speech_identity,
         hex::encode(hasher.finalize()),
     )
+}
+
+/// Speech language a job synthesizes in, resolved at enqueue so its text can
+/// be prepared (and fingerprinted) once. Matches the executors: Supertonic
+/// jobs default to `en`; profile jobs without `lang` use the owned
+/// profile's base language, like the preview handler.
+async fn job_speech_language(
+    state: &AppState,
+    owner: &str,
+    query: &JobQuery,
+) -> Result<String, AppError> {
+    if let Some(lang) = query.lang.as_ref() {
+        return Ok(lang.clone());
+    }
+    let Some(id) = query.profile.as_deref().map(str::trim).map(str::to_string) else {
+        return Ok("en".to_string());
+    };
+    let owner = owner.to_string();
+    super::voices::with_store(state, move |store| {
+        store
+            .get(&id)
+            .filter(|profile| profile.owner_token_hash.as_deref() == Some(owner.as_str()))
+            .map(|profile| profile.language.clone())
+            .ok_or_else(|| AppError::NotFound("unknown voice profile".into()))
+    })
+    .await
 }
 
 /// Validated playback request derived from the job query.
@@ -571,11 +628,15 @@ fn validate_profile_provider(selected: Option<&str>, actual: &str) -> Result<(),
     Ok(())
 }
 
+/// Real job executor. `speech` was prepared at enqueue for `query.lang`
+/// (pinned to the effective language), so neither route below prepares the
+/// text again.
 async fn execute_request(
     token: AuthenticatedToken,
     state: AppState,
     query: JobQuery,
     body: String,
+    speech: SpeechText,
 ) -> Result<Response, AppError> {
     // Verify explicit routing using owned metadata before reading reference audio.
     #[cfg(feature = "playback")]
@@ -609,10 +670,10 @@ async fn execute_request(
             predictor_top_k: query.predictor_top_k,
             predictor_top_p: query.predictor_top_p,
             predictor_repetition_penalty: query.predictor_repetition_penalty,
+            normalization: query.normalization.clone(),
+            locale: query.locale.clone(),
         };
-        super::voices::post_preview(token, State(state), Path(profile), Query(preview), body)
-            .await
-            .map(IntoResponse::into_response)
+        super::voices::post_preview_prepared(token, state, profile, preview, body, speech).await
     } else {
         // Supertonic path: sampling/quality options are meaningless here and
         // are rejected explicitly rather than silently ignored.
@@ -622,10 +683,10 @@ async fn execute_request(
                 "sampling and quality options require a cloned Qwen3-TTS voice profile".into(),
             ));
         }
-        super::tts::post_tts(
+        super::tts::post_tts_prepared(
             token,
-            State(state),
-            Query(super::tts::TtsQuery {
+            state,
+            super::tts::TtsQuery {
                 // Synthesis stays playback-free here: the job admits playback
                 // itself once, after generation, under its own idempotency and
                 // cancellation checks.
@@ -636,8 +697,11 @@ async fn execute_request(
                 format: query.format,
                 #[cfg(feature = "playback")]
                 play_now: None,
-            }),
+                normalization: query.normalization,
+                locale: query.locale,
+            },
             body,
+            speech,
         )
         .await
     }
@@ -654,7 +718,7 @@ async fn create_with_executor<F, Fut>(
     execute: F,
 ) -> Result<Response, AppError>
 where
-    F: FnOnce(AuthenticatedToken, AppState, JobQuery, String) -> Fut + Send + 'static,
+    F: FnOnce(AuthenticatedToken, AppState, JobQuery, String, SpeechText) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<Response, AppError>> + Send + 'static,
 {
     super::tts::check_rate_limit(&state, &token)?;
@@ -671,7 +735,19 @@ where
     // synchronous 400 rather than a failed job.
     query.sampling_input().into_parts()?;
     let owner = token.rate_limit_key();
-    let fingerprint = request_fingerprint(&query, &body, &playback);
+    // Freeze the effective normalization (mode, locale, ruleset) now: the
+    // text is prepared exactly once, before the fingerprint, and the
+    // executor receives the prepared text. The legacy trimming matches the
+    // synchronous routes.
+    let language = job_speech_language(&state, &owner, &query).await?;
+    let speech = query
+        .speech_options()
+        .prepare(&config, &language, body.trim())?;
+    let fingerprint = request_fingerprint(&query, &body, &playback, speech.identity());
+    // Pin the language the text was prepared for, so the executor cannot
+    // resolve a different one later.
+    let mut query = query;
+    query.lang = Some(language);
     let scoped_key = idem_key.map(|key| format!("{owner}\u{1f}{key}"));
     let retention = Duration::from_secs(config.inference.job_retention_secs);
     let store = state.inference_gate.jobs.clone();
@@ -761,7 +837,7 @@ where
         let execution = tokio::spawn(ADMISSION.scope(
             std::cell::RefCell::new(Some(admission)),
             ACTIVE.scope(control.clone(), async move {
-                let response = execute(token, state, query, body).await?;
+                let response = execute(token, state, query, body, speech).await?;
                 let content_type = response
                     .headers()
                     .get(header::CONTENT_TYPE)
@@ -1049,7 +1125,7 @@ mod tests {
             query,
             idempotency_key(&headers),
             body,
-            |_token, state, query, body| async move {
+            |_token, state, query, body, _speech| async move {
                 state
                     .inference_gate
                     .run_bounded(move || {
@@ -1865,6 +1941,394 @@ mod tests {
             status["playback"]["state"], "skipped",
             "a cancelled job is never enqueued for playback"
         );
+    }
+}
+
+/// Text-normalization integration: preparation at enqueue, fingerprints and
+/// the shared provider boundary.
+#[cfg(test)]
+mod normalization_tests {
+    use super::*;
+    use sonicboom::tts::providers::{
+        PcmAudio, ProviderCapabilities, ProviderError, ProviderRequest, ProviderStatus,
+        ProviderStatusState, TtsProvider,
+    };
+
+    /// What the provider boundary saw: text, identity, reference transcript.
+    type Seen = (String, Option<String>, Option<String>);
+
+    /// Provider mock that records every request reaching inference.
+    #[derive(Default)]
+    struct Recorder(Mutex<Vec<Seen>>);
+    impl TtsProvider for Recorder {
+        fn id(&self) -> &'static str {
+            "qwen3-gguf"
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                provider_id: "qwen3-gguf".into(),
+                models: vec!["qwen3-tts-1.7b-base".into()],
+                languages: vec!["en".into(), "es".into()],
+                clone_modes: vec!["icl".into()],
+                devices: vec!["cpu".into()],
+                requires_reference_audio: true,
+                requires_reference_transcript: true,
+                sample_rate: Some(24_000),
+            }
+        }
+        fn status(&self) -> ProviderStatus {
+            ProviderStatus {
+                provider_id: "qwen3-gguf".into(),
+                enabled: true,
+                state: ProviderStatusState::Ready,
+                active_model: Some("qwen3-tts-1.7b-base".into()),
+                effective_device: Some("cpu".into()),
+                model_revision: None,
+                backend_diagnostics: None,
+                detail: None,
+            }
+        }
+        fn load(&self, _: &str) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        fn unload(&self) {}
+        fn synthesize(&self, request: &ProviderRequest) -> Result<PcmAudio, ProviderError> {
+            self.0.lock().unwrap().push((
+                request.text.clone(),
+                request.speech_identity.clone(),
+                request.reference_transcript.clone(),
+            ));
+            Ok(PcmAudio::mono(vec![0.125; 240], 24_000))
+        }
+    }
+
+    const TEXT: &str = "  Pago el 26/10/2026  ";
+    const SPOKEN: &str = "Pago el veintiséis de octubre de dos mil veintiséis";
+    const TRANSCRIPT: &str = "Referencia exacta: 3 de 4, 01/02/2026.";
+
+    /// Job app whose executor sends the prepared text through the real
+    /// provider boundary ([`super::super::tts::synthesize_provider_bounded`]).
+    async fn recording_app() -> (axum::Router, AppState, String, Arc<Recorder>) {
+        use crate::auth::store::TokenStore;
+        use axum::routing::{get, post};
+        let path =
+            std::env::temp_dir().join(format!("sonicboom-job-norm-{}.json", uuid::Uuid::new_v4()));
+        let tokens = Arc::new(TokenStore::load(path.to_str().unwrap()).await.unwrap());
+        let (_, token) = tokens.create(None).await.unwrap();
+        let _ = std::fs::remove_file(&path);
+        // Setup is complete so live configuration updates keep the API open.
+        let mut config = crate::api::tests::test_config();
+        config.setup_complete = true;
+        let state = crate::api::tests::test_state(config, tokens, Arc::new(None));
+        let recorder = Arc::new(Recorder::default());
+        let provider = recorder.clone();
+        let handler = move |token: AuthenticatedToken,
+                            state: State<AppState>,
+                            query: Query<JobQuery>,
+                            headers: axum::http::HeaderMap,
+                            body: String| {
+            let provider = provider.clone();
+            async move {
+                create_with_executor(
+                    token,
+                    state,
+                    query,
+                    idempotency_key(&headers),
+                    body,
+                    move |_token, state, query, _body, speech| async move {
+                        let language = query.lang.clone().unwrap_or_default();
+                        let mut request = super::super::speech_prep::provider_request(
+                            "qwen3-tts-1.7b-base",
+                            "profile",
+                            speech,
+                            language,
+                        );
+                        request.reference_transcript = Some(TRANSCRIPT.to_string());
+                        let audio = super::super::tts::synthesize_provider_bounded(
+                            &state, provider, request,
+                        )
+                        .await
+                        .map_err(super::super::providers::provider_error_to_app)?;
+                        Ok((
+                            [(header::CONTENT_TYPE, "audio/wav")],
+                            sonicboom::tts::audio::encode_audio(
+                                &audio.samples,
+                                audio.sample_rate,
+                                sonicboom::tts::audio::AudioFormat::Wav,
+                            )
+                            .unwrap(),
+                        )
+                            .into_response())
+                    },
+                )
+                .await
+            }
+        };
+        let app = axum::Router::new()
+            .route("/jobs", post(handler))
+            .route("/jobs/{id}", get(status))
+            .route("/jobs/{id}/audio", get(audio))
+            .with_state(state.clone());
+        (app, state, token, recorder)
+    }
+
+    async fn send(
+        app: &axum::Router,
+        method: &str,
+        uri: &str,
+        token: &str,
+        idem: Option<&str>,
+        body: &str,
+    ) -> Response {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"));
+        if let Some(key) = idem {
+            builder = builder.header("idempotency-key", key);
+        }
+        app.clone()
+            .oneshot(builder.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap()
+    }
+
+    async fn text_of(response: Response) -> (StatusCode, String) {
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    async fn settle(app: &axum::Router, token: &str, id: &str) -> String {
+        for _ in 0..400 {
+            let (_, body) =
+                text_of(send(app, "GET", &format!("/jobs/{id}"), token, None, "").await).await;
+            let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+            if matches!(
+                value["stage"].as_str(),
+                Some("completed" | "failed" | "cancelled")
+            ) {
+                return body;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("job {id} never settled");
+    }
+
+    fn job_id(body: &str) -> String {
+        serde_json::from_str::<serde_json::Value>(body).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn jobs_prepare_once_at_enqueue_and_status_carries_no_text() {
+        let (app, state, token, recorder) = recording_app().await;
+        let config = state.config.get().await;
+        for (query, expected_text, expected_identity) in [
+            ("lang=es", SPOKEN, "tn-v1|auto|es|es-ES"),
+            ("lang=es&locale=es-PE", SPOKEN, "tn-v1|auto|es|es-PE"),
+            (
+                "lang=es&normalization=off",
+                TEXT.trim(),
+                "tn-v1|off|es|es-ES",
+            ),
+        ] {
+            let (status, body) =
+                text_of(send(&app, "POST", &format!("/jobs?{query}"), &token, None, TEXT).await)
+                    .await;
+            assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+            let snapshot = settle(&app, &token, &job_id(&body)).await;
+            assert!(snapshot.contains("\"completed\""), "{snapshot}");
+            for fragment in ["Pago", "26/10", "veintiséis", "Referencia"] {
+                assert!(
+                    !snapshot.contains(fragment),
+                    "status leaked text: {snapshot}"
+                );
+                assert!(!body.contains(fragment), "creation leaked text: {body}");
+            }
+            let seen = recorder.0.lock().unwrap().pop().unwrap();
+            assert_eq!(seen.0, expected_text, "{query}");
+            assert_eq!(seen.1.as_deref(), Some(expected_identity), "{query}");
+            // The reference transcript is passed through byte-identical.
+            assert_eq!(seen.2.as_deref(), Some(TRANSCRIPT));
+            // Same result as the shared helper used by every other route.
+            let query = Query::<JobQuery>::try_from_uri(&format!("/jobs?{query}").parse().unwrap())
+                .unwrap()
+                .0;
+            let direct = query
+                .speech_options()
+                .prepare(&config, "es", TEXT.trim())
+                .unwrap();
+            assert_eq!(direct.as_str(), expected_text);
+            assert_eq!(direct.identity(), expected_identity);
+        }
+        // Invalid options are synchronous 400s that never create a job.
+        let before = state.inference_gate.jobs.entries.lock().unwrap().len();
+        for query in [
+            "lang=es&normalization=strict",
+            "lang=es&locale=es-AR",
+            "lang=es&locale=en-US",
+            "locale=es-PE",
+        ] {
+            let (status, body) =
+                text_of(send(&app, "POST", &format!("/jobs?{query}"), &token, None, TEXT).await)
+                    .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {body}");
+            assert!(!body.contains("Pago"));
+        }
+        assert_eq!(
+            state.inference_gate.jobs.entries.lock().unwrap().len(),
+            before
+        );
+    }
+
+    #[tokio::test]
+    async fn idempotency_covers_effective_mode_locale_and_ruleset() {
+        let (app, state, token, recorder) = recording_app().await;
+        let uri = "/jobs?lang=es&voice=M1&format=wav";
+        let (status, body) =
+            text_of(send(&app, "POST", uri, &token, Some("norm-1"), TEXT).await).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let first = job_id(&body);
+        settle(&app, &token, &first).await;
+        assert_eq!(recorder.0.lock().unwrap().len(), 1);
+
+        // Identical retry, and a retry whose explicit values equal the
+        // effective defaults: same job, no second synthesis.
+        for retry in [
+            uri.to_string(),
+            format!("{uri}&normalization=AUTO&locale=auto"),
+        ] {
+            let (status, body) =
+                text_of(send(&app, "POST", &retry, &token, Some("norm-1"), TEXT).await).await;
+            assert_eq!(status, StatusCode::OK, "{retry}");
+            assert_eq!(job_id(&body), first);
+        }
+        // Same key, different effective locale or mode: conflict.
+        for changed in [
+            format!("{uri}&locale=es-PE"),
+            format!("{uri}&normalization=off"),
+        ] {
+            let (status, _) =
+                text_of(send(&app, "POST", &changed, &token, Some("norm-1"), TEXT).await).await;
+            assert_eq!(status, StatusCode::CONFLICT, "{changed}");
+        }
+        // A different configured default changes the effective mode too.
+        state
+            .config
+            .update(None, |config| config.tts.normalization.enabled = false)
+            .await
+            .unwrap();
+        let (status, _) =
+            text_of(send(&app, "POST", uri, &token, Some("norm-1"), TEXT).await).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(state.inference_gate.jobs.entries.lock().unwrap().len(), 1);
+        assert_eq!(
+            recorder.0.lock().unwrap().len(),
+            1,
+            "never synthesized twice"
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_jobs_without_lang_need_an_owned_profile() {
+        let (app, state, token, _) = recording_app().await;
+        let dir = std::env::temp_dir().join(format!(
+            "sonicboom-job-norm-voices-{}",
+            uuid::Uuid::new_v4()
+        ));
+        state
+            .config
+            .update(None, |config| {
+                config.voices.store_dir = dir.to_string_lossy().into_owned()
+            })
+            .await
+            .unwrap();
+        let uri = format!("/jobs?profile={}", uuid::Uuid::new_v4());
+        let (status, _) = text_of(send(&app, "POST", &uri, &token, None, TEXT).await).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(state.inference_gate.jobs.entries.lock().unwrap().len(), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn every_route_hands_the_provider_the_same_spoken_input() {
+        let (app, state, token, recorder) = recording_app().await;
+        let config = state.config.get().await;
+        let options = "normalization=auto&locale=es-PE";
+        // /api/tts and /api/tts/play (query string).
+        let tts = Query::<super::super::tts::TtsQuery>::try_from_uri(
+            &format!("/api/tts?lang=es&{options}").parse().unwrap(),
+        )
+        .unwrap()
+        .0
+        .speech_options()
+        .prepare(&config, "es", TEXT.trim())
+        .unwrap();
+        // Voice preview (query string).
+        let preview = Query::<super::super::voices::PreviewQuery>::try_from_uri(
+            &format!("/api/voices/id/preview?language=es&{options}")
+                .parse()
+                .unwrap(),
+        )
+        .unwrap()
+        .0
+        .speech_options()
+        .prepare(&config, "es", TEXT.trim())
+        .unwrap();
+        // /v1/audio/speech (JSON body).
+        let openai: super::super::openai::SpeechRequest = serde_json::from_value(
+            serde_json::json!({"input": TEXT, "language": "es", "normalization": "auto", "locale": "es-PE"}),
+        )
+        .unwrap();
+        let openai = openai.speech(&config, "es").unwrap();
+        for speech in [tts, preview, openai] {
+            let mut request = super::super::speech_prep::provider_request(
+                "qwen3-tts-1.7b-base",
+                "profile",
+                speech,
+                "es",
+            );
+            request.reference_transcript = Some(TRANSCRIPT.to_string());
+            super::super::tts::synthesize_provider_bounded(&state, recorder.clone(), request)
+                .await
+                .unwrap();
+        }
+        // /api/tts/jobs (real enqueue path).
+        let (status, body) = text_of(
+            send(
+                &app,
+                "POST",
+                &format!("/jobs?lang=es&{options}"),
+                &token,
+                None,
+                TEXT,
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        settle(&app, &token, &job_id(&body)).await;
+        let seen = recorder.0.lock().unwrap().clone();
+        assert_eq!(seen.len(), 4);
+        for entry in &seen {
+            assert_eq!(entry.0, SPOKEN);
+            assert_eq!(entry.1.as_deref(), Some("tn-v1|auto|es|es-PE"));
+            assert_eq!(entry.2.as_deref(), Some(TRANSCRIPT));
+        }
+        // Raw text never reaches inference through the bounded boundary.
+        let raw = ProviderRequest::new("qwen3-tts-1.7b-base", "profile", TEXT, "es");
+        assert!(
+            super::super::tts::synthesize_provider_bounded(&state, recorder.clone(), raw)
+                .await
+                .is_err()
+        );
+        assert_eq!(recorder.0.lock().unwrap().len(), 4);
     }
 }
 

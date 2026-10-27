@@ -5,6 +5,7 @@ Complete API documentation for SonicBoom TTS server.
 ## Table of Contents
 
 - [Original TTS API](#original-tts-api)
+- [Text normalization](#text-normalization)
 - [Audio Queue API](#audio-queue-api)
 - [Audio Output Device API](#audio-output-device-api)
 - [Web Routes](#web-routes)
@@ -31,6 +32,8 @@ Synthesizes text to speech audio.
 | `voice`   | string | No       | `M1`    | Voice style (M1-M5, F1-F5)             |
 | `lang`    | string | No       | `en`    | Language code                          |
 | `format`  | string | No       | `opus`  | Output format: `opus`, `wav`, `mp3`, or `flac` (unknown → `400`) |
+| `normalization` | string | No | server default (`auto`) | Text normalization: `auto` or `off` (case-insensitive; see [Text normalization](#text-normalization)) |
+| `locale`  | string | No       | language default | Pronunciation locale such as `es-PE`; `auto` selects the language default |
 
 **Request Body:** Plain text string (max `MAX_TEXT_LENGTH` Unicode chars,
 body capped at `TTS_MAX_BODY_BYTES`)
@@ -69,6 +72,8 @@ Synthesizes text and adds it directly to the server's playback queue in a single
 | `voice` | string | For cloning | `M1` (Supertonic) | Built-in style or token-owned clone profile UUID; matching `provider:voice` option IDs accepted |
 | `lang`     | string  | No       | `en`    | Language code                          |
 | `play_now` | boolean | No       | `false` | If `true`, clears queue and plays now  |
+| `normalization` | string | No | server default | `auto` or `off` |
+| `locale`   | string  | No       | language default | Pronunciation locale (independent of the profile's base language) |
 
 **Request Body:** Plain text string
 
@@ -120,6 +125,118 @@ Clients must strictly filter voices by provider and must not submit an empty clo
 voice. The playback route validates qualified IDs against the authoritative provider.
 
 Example: `POST /api/tts/play?provider=pocket-tts&voice=pocket-tts%3A<uuid>&lang=en&play_now=false`.
+
+---
+
+## Text normalization
+
+Before synthesis, SonicBoom turns written forms (numbers, dates, times,
+prices, percentages, units, abbreviations) into speakable text with an
+offline, rule-based normalizer. It runs **once per request**, before
+chunking and before any provider-specific preprocessing, on every
+synthesis path: `/api/tts`, `/api/tts/play`, `/api/tts/jobs`,
+`/api/voices/{id}/preview`, `/v1/audio/speech`, the reusable library engine
+and the TikTools plugin. Ambiguous input (for example `01/02/2026` without
+an explicit locale) is preserved and only reported. Only the target text is
+prepared: a Qwen voice profile's reference transcript and every reference
+audio are passed to the provider unchanged. Coverage per language is listed
+in [normalization.md](normalization.md) and in `GET /api/info`.
+
+> **Behavior change.** The default mode is `auto`. Requests that send no
+> normalization parameters now hear numbers, dates, prices and similar
+> forms spoken as words (for example `26/10/2026` in Spanish becomes
+> "veintiséis de octubre de dos mil veintiséis"). Send `normalization=off`
+> (or `"normalization": "off"` in JSON) to get the previous audio, or set
+> `[tts.normalization] mode = "off"` / `enabled = false` server-wide.
+
+Request options (query parameters on `POST /api/tts`, `POST /api/tts/play`,
+`POST /api/tts/jobs` and `POST /api/voices/{id}/preview`; JSON fields on
+`POST /v1/audio/speech`):
+
+| Option | Values | Absent / empty |
+| ------ | ------ | -------------- |
+| `normalization` | `auto` or `off` (case-insensitive) | `[tts.normalization]` effective mode (`auto`; `off` when `enabled = false`) |
+| `locale` | a supported tag (`es-ES`, `es-MX`, `es-PE`, `en-US`, `en-GB`, `pt-BR`, `pt-PT`, `fr-FR`, `de-DE`, `it-IT`, `ru-RU`, `zh-CN`, `zh-TW`, `ja-JP`, `ko-KR`) or `auto` | `[tts.normalization] default_locale` when it belongs to the speech language, otherwise the language default |
+
+- `off` hands the provider exactly the text it received before this
+  feature (each route's existing trimming still applies).
+- `locale=auto` always selects the speech language's documented default
+  (`es`→`es-ES`, `en`→`en-US`, `pt`→`pt-BR`, ...), never the server location.
+- The speech language is the route's existing language (`lang`, the
+  profile language, or `en` for Supertonic aliases on `/v1/audio/speech`).
+  The locale must belong to it.
+- A speech language without rules, or a legacy tag such as `en-US` passed as
+  the language, passes through unchanged.
+
+Errors (all use the standard JSON error envelope and never echo the text):
+
+| Condition | Status |
+| --------- | ------ |
+| `normalization` other than `auto`/`off` | `400` |
+| Malformed locale, unsupported locale (e.g. `es-AR`), or locale of another language | `400` |
+| Text over `max_text_length`, or spoken text over `max_normalized_chars` / `max_expansion_ratio` | `400` |
+| Missing or invalid bearer token | `401` |
+
+### Preview normalization
+
+**Endpoint:** `POST /api/tts/normalize`
+
+**Authentication:** Bearer token required. Rate-limited like the TTS
+routes; body capped at `TTS_MAX_BODY_BYTES`. No model inference, no file
+access, no job is created. Responses (success and errors) carry
+`Cache-Control: private, no-store`. The server never logs `original` or
+`spoken`.
+
+**Request Body (JSON, unknown fields rejected):**
+
+| Field | Type | Required | Description |
+| ----- | ---- | -------- | ----------- |
+| `text` | string | Yes | Trimmed; non-empty; at most `max_text_length` characters |
+| `language` | string | Yes | Speech language (base code such as `es`) |
+| `locale` | string | No | Supported tag or `auto` (default: as for synthesis) |
+| `mode` | string | No | `auto` or `off` (default: server default) |
+| `model` | string | No | When present, `language` must be valid for that model (e.g. `pocket-tts-es` accepts only `es`) |
+
+```bash
+curl -X POST "http://localhost:17842/api/tts/normalize"   -H "Authorization: Bearer YOUR_TOKEN"   -H "Content-Type: application/json"   -d '{"text":"La reunión es el 26/10/2026.","model":"pocket-tts-es","language":"es","locale":"es-PE","mode":"auto"}'
+```
+
+**Response (`200`):**
+
+```json
+{
+  "original": "La reunión es el 26/10/2026.",
+  "spoken": "La reunión es el veintiséis de octubre de dos mil veintiséis.",
+  "language": "es",
+  "locale": "es-PE",
+  "mode": "auto",
+  "normalizer_version": "tn-v1",
+  "changes": [
+    { "kind": "date", "before": "26/10/2026", "after": "veintiséis de octubre de dos mil veintiséis",
+      "start": 18, "end": 28, "confidence": "high" }
+  ],
+  "warnings": [],
+  "coverage": { "cardinal_numbers": "full", "dates": "partial", "...": "..." }
+}
+```
+
+(Coverage values above are illustrative; the response lists all eleven
+feature keys with the levels documented in [normalization.md](normalization.md).)
+
+`start`/`end` are UTF-8 byte offsets into `original` (`before` is
+`original[start..end]`). `warnings` entries have `{code, before, start,
+end}` with codes `ambiguous_number`, `ambiguous_date`, `invalid_date`,
+`ambiguous_currency`, `ambiguous_time`, `ambiguous_fraction`,
+`number_too_large`; they are empty when `report_ambiguities = false`.
+`coverage` maps each feature key to `full`, `partial` or `none` for the
+language. Errors: `400` for empty/too long text, invalid language, locale,
+mode or model/language mismatch, malformed JSON; `401` without a valid
+bearer token; `429` when rate-limited.
+
+`GET /api/info` adds a `normalization` block:
+`{ "ruleset_version": "tn-v1", "default_mode": "auto", "languages": [{ "language", "locales", "default_locale", "rules", "features" }] }`.
+Speech-language support is still reported by provider capabilities
+(`/api/providers`); normalization coverage is separate.
 
 ---
 
@@ -537,7 +654,7 @@ curl -X POST http://localhost:17842/v1/audio/speech \
 | Status Code | Description                                         |
 | ----------- | --------------------------------------------------- |
 | `200`       | Success                                             |
-| `400`       | Bad request (invalid input)                         |
+| `400`       | Bad request (invalid input, including invalid `normalization`/`locale` or text that exceeds the normalization budgets) |
 | `401`       | Unauthorized (invalid/missing token)                |
 | `403`       | Forbidden (queue path outside allowed directory)    |
 | `404`       | Not found (unknown voice profile IDs report `404` without disclosing ownership) |

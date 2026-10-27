@@ -4,6 +4,7 @@ pub mod config_api;
 pub mod gate;
 pub mod info;
 pub mod jobs;
+pub mod normalize;
 pub mod openai;
 mod plugin_catalog;
 pub mod providers;
@@ -11,6 +12,7 @@ pub mod providers;
 pub mod queue;
 pub mod rate_limit;
 pub mod sampling;
+pub mod speech_prep;
 pub mod tts;
 pub mod voices;
 
@@ -58,6 +60,11 @@ pub async fn router(state: AppState) -> Router {
         .route(
             "/api/tts/jobs",
             post(jobs::create).route_layer(DefaultBodyLimit::max(tts_body_limit)),
+        )
+        // Normalization preview: authenticated, rate-limited, TTS body limit.
+        .route(
+            "/api/tts/normalize",
+            post(normalize::post_normalize).route_layer(DefaultBodyLimit::max(tts_body_limit)),
         )
         .route("/api/tts/jobs/{id}", get(jobs::status))
         .route("/api/tts/jobs/{id}/events", get(jobs::events))
@@ -349,6 +356,166 @@ mod tests {
             post_status(app, "/v1/audio/speech", Some(&valid), r#"{"input":"hi"}"#).await,
             StatusCode::SERVICE_UNAVAILABLE
         );
+    }
+
+    #[tokio::test]
+    async fn synthesis_routes_validate_normalization_and_keep_old_shapes() {
+        let (app, valid) = test_app().await;
+        // 503 proves the request passed text preparation and reached the
+        // model check; 400 proves options are validated before it.
+        for (uri, body, status) in [
+            ("/api/tts", "hello", StatusCode::SERVICE_UNAVAILABLE),
+            (
+                "/api/tts?lang=en&voice=M1",
+                "I have 3 cats",
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                "/api/tts?normalization=off",
+                "hello 3",
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                "/api/tts?normalization=OFF&locale=auto",
+                "hi",
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                "/api/tts?lang=es&locale=es-PE",
+                "hola 3",
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                "/api/tts?lang=en-US",
+                "hello 3",
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                "/api/tts?normalization=strict",
+                "hello",
+                StatusCode::BAD_REQUEST,
+            ),
+            ("/api/tts?locale=es-PE", "hello", StatusCode::BAD_REQUEST),
+            (
+                "/api/tts?lang=es&locale=es-AR",
+                "hola",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/api/tts?lang=es&locale=es_PE",
+                "hola",
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            assert_eq!(
+                post_status(app.clone(), uri, Some(&valid), body).await,
+                status,
+                "{uri}"
+            );
+        }
+        for (body, status) in [
+            (r#"{"input":"hi"}"#, StatusCode::SERVICE_UNAVAILABLE),
+            (
+                r#"{"input":"hi 3","normalization":"off"}"#,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                r#"{"input":"hi","locale":"en-GB","speed":1.0}"#,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                r#"{"input":"hi","normalization":"bogus"}"#,
+                StatusCode::BAD_REQUEST,
+            ),
+            // Legacy aliases synthesize English: a Spanish locale is invalid.
+            (
+                r#"{"input":"hi","locale":"es-PE"}"#,
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            assert_eq!(
+                post_status(app.clone(), "/v1/audio/speech", Some(&valid), body).await,
+                status,
+                "{body}"
+            );
+        }
+        #[cfg(feature = "playback")]
+        for (uri, status) in [
+            ("/api/tts/play?voice=M1", StatusCode::SERVICE_UNAVAILABLE),
+            (
+                "/api/tts/play?voice=M1&normalization=strict",
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            assert_eq!(
+                post_status(app.clone(), uri, Some(&valid), "hello").await,
+                status,
+                "{uri}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn voice_preview_validates_normalization_after_ownership() {
+        use sonicboom::tts::voices::{NewVoiceProfile, VoiceProfileStore};
+        let dir = std::env::temp_dir().join(format!("preview-norm-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tokens = TokenStore::load(dir.join("tokens.json").to_str().unwrap())
+            .await
+            .unwrap();
+        let (token, raw) = tokens.create(None).await.unwrap();
+        let mut config = test_config();
+        config.voices.store_dir = dir.join("voices").to_string_lossy().into_owned();
+        let revision = voices::config_revision_for(&config, "pocket-tts");
+        let mut store = VoiceProfileStore::open(config.voices.store_dir.clone().into()).unwrap();
+        let profile = store
+            .create(NewVoiceProfile {
+                name: "Synthetic test reference".into(),
+                provider: "pocket-tts".into(),
+                model: "pocket-tts-en".into(),
+                model_revision: revision,
+                language: "en".into(),
+                clone_mode: "audio_prompt".into(),
+                reference_pcm: vec![0.1; 72_000],
+                reference_sample_rate: 24_000,
+                transcript: None,
+                owner_token_hash: Some(token.token_hash.clone()),
+                consent_basis: "owner".into(),
+                consent_note: String::new(),
+            })
+            .unwrap();
+        let app = router(test_state(config, Arc::new(tokens), Arc::new(None))).await;
+        let preview = format!("/api/voices/{}/preview", profile.id);
+        for (query, expect_bad_request) in [
+            ("?normalization=strict", true),
+            // The profile language is `en`; an `es` locale does not belong to it.
+            ("?locale=es-PE", true),
+            ("?locale=en-GB&normalization=auto", false),
+            ("", false),
+        ] {
+            let status = post_status(
+                app.clone(),
+                &format!("{preview}{query}"),
+                Some(&raw),
+                "I have 3 cats",
+            )
+            .await;
+            assert_eq!(
+                status == StatusCode::BAD_REQUEST,
+                expect_bad_request,
+                "{query}: {status}"
+            );
+        }
+        // Ownership is still checked first: a foreign token sees 404.
+        let missing = format!(
+            "/api/voices/{}/preview?normalization=strict",
+            uuid::Uuid::new_v4()
+        );
+        assert_eq!(
+            post_status(app, &missing, Some(&raw), "hello").await,
+            StatusCode::NOT_FOUND
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

@@ -14,9 +14,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use sonicboom::tts::providers::types::{
-    CloneMode, DevicePreference, ProviderRequest, ReferenceAudio,
-};
+use sonicboom::tts::providers::types::{CloneMode, DevicePreference, ReferenceAudio};
 use sonicboom::tts::voices::{
     NAME_MAX_CHARS, REFERENCE_MAX_CHANNELS, REFERENCE_MAX_RATE, REFERENCE_MAX_SECS,
     REFERENCE_MIN_RATE, REFERENCE_MIN_SECS, TRANSCRIPT_MAX_CHARS,
@@ -1117,9 +1115,24 @@ pub struct PreviewQuery {
     pub predictor_top_p: Option<f32>,
     #[serde(default)]
     pub predictor_repetition_penalty: Option<f32>,
+    /// Text normalization mode: `auto` or `off` (absent = server default).
+    #[serde(default)]
+    pub normalization: Option<String>,
+    /// Pronunciation locale, independent of the profile's base language.
+    /// Absent or `auto` selects the language default.
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 impl PreviewQuery {
+    /// The request's normalization options.
+    pub(crate) fn speech_options(&self) -> super::speech_prep::SpeechOptions {
+        super::speech_prep::SpeechOptions {
+            normalization: self.normalization.clone(),
+            locale: self.locale.clone(),
+        }
+    }
+
     /// Collect the optional sampling/quality overrides (unparsed).
     pub(crate) fn sampling_input(&self) -> super::sampling::SamplingInput {
         super::sampling::SamplingInput {
@@ -1152,7 +1165,42 @@ pub async fn post_preview(
         &state,
         super::jobs::with_reference_memory(
             &state,
-            post_preview_inner(token, State(state.clone()), Path(id), Query(query), body),
+            post_preview_inner(
+                token,
+                State(state.clone()),
+                Path(id),
+                Query(query),
+                body,
+                None,
+            ),
+        ),
+    )
+    .await
+}
+
+/// Preview semantics for text that was already prepared (async jobs
+/// prepare at enqueue). `query.language` must be the language `speech`
+/// was prepared for.
+pub(crate) async fn post_preview_prepared(
+    token: AuthenticatedToken,
+    state: crate::AppState,
+    id: String,
+    query: PreviewQuery,
+    body: String,
+    speech: super::speech_prep::SpeechText,
+) -> Result<axum::response::Response, AppError> {
+    super::jobs::with_admission(
+        &state,
+        super::jobs::with_reference_memory(
+            &state,
+            post_preview_inner(
+                token,
+                State(state.clone()),
+                Path(id),
+                Query(query),
+                body,
+                Some(speech),
+            ),
         ),
     )
     .await
@@ -1164,7 +1212,8 @@ async fn post_preview_inner(
     Path(id): Path<String>,
     Query(query): Query<PreviewQuery>,
     body: String,
-) -> Result<impl IntoResponse, AppError> {
+    prepared: Option<super::speech_prep::SpeechText>,
+) -> Result<axum::response::Response, AppError> {
     check_rate_limit(&state, &token)?;
     let config = state.config.get().await;
     let text = body.trim().to_string();
@@ -1196,6 +1245,12 @@ async fn post_preview_inner(
         ));
     }
     let language = query.language.clone().unwrap_or(profile.language.clone());
+    // Only the target text is prepared (once); the profile's reference
+    // transcript and audio are passed through unchanged.
+    let speech = match prepared {
+        Some(speech) => speech,
+        None => query.speech_options().prepare(&config, &language, &text)?,
+    };
     let mode = parse_clone_mode(&profile.clone_mode)?;
     let format = query
         .format
@@ -1204,7 +1259,8 @@ async fn post_preview_inner(
         .transpose()
         .map_err(|e| AppError::BadRequest(e.to_string()))?
         .unwrap_or(sonicboom::tts::audio::AudioFormat::Opus);
-    let mut request = ProviderRequest::new(&profile.model, &profile.id, text, language);
+    let mut request =
+        super::speech_prep::provider_request(&profile.model, &profile.id, speech, language);
     request.device = DevicePreference::Auto;
     request.clone_mode = Some(mode);
     request.reference_transcript = profile.transcript.clone();

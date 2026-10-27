@@ -89,6 +89,22 @@ request is `409`. Lookup, admission and insert share one critical section, so
 two concurrent identical submissions cannot both admit a job. Remembered keys
 are bounded and expire with the job retention window.
 
+Text normalization is frozen at enqueue. Jobs accept the same optional
+`normalization` (`auto`|`off`) and `locale` query parameters as `/api/tts`
+(see [api.md](api.md#text-normalization)); invalid values are a synchronous
+`400` and never create a job. The text is prepared once, before the
+fingerprint is computed, and the executor receives that prepared text, so
+it is never normalized again during execution or on resume. The fingerprint
+also covers the prepared text's identity (`ruleset version|effective
+mode|language|effective locale`, e.g. `tn-v1|auto|es|es-PE`). Effective
+values count, not spellings: omitting `normalization` while the server
+default is `auto` matches `normalization=auto`. The same key with a
+different effective mode, locale, ruleset version or server default mode is
+`409`, never the previous audio. Profile jobs without `lang` resolve the
+owned profile's language at enqueue (unknown or foreign profile → `404`).
+Job status, SSE events and audio metadata never contain the original or
+spoken text.
+
 ## Lifecycle and deadlines
 
 Jobs begin `queued`, progress through observable `preparing`, `generating`,
