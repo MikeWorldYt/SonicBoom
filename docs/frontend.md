@@ -105,6 +105,28 @@ Only English and Spanish are offered until another complete catalog is added.
 The UI uses the English catalog as a fallback for future untranslated messages.
 
 
+## Pronunciation and the spoken-text preview
+
+Speech input offers a **Pronunciation** select (Automatic, recommended, or
+Original text) that maps to the `normalization=auto|off` query parameter, and a
+**Regional pronunciation** select (`locale=<tag>`) shown only when the mode is
+Automatic and the selected speech language has more than one locale. Modes,
+locales and defaults are read from the `normalization` block of `GET /api/info`;
+no locale list lives in the UI. When that block is absent or malformed (an older
+server) the controls and the preview are hidden and requests are unchanged.
+The speech language and locale never derive from the interface language.
+
+"What will be spoken?" (below the text area) calls `POST /api/tts/normalize`
+only on an explicit action, debounced by 500 ms; a superseded request is aborted
+and its response discarded. It shows the original and spoken text in read-only,
+selectable fields, the list of changes (kind, before and after) and warnings
+with a plain-language explanation. Loading, empty and error states (including
+400 for length or expansion limits) are announced through a polite live region.
+Editing the text or settings marks the preview stale until it is refreshed.
+
+`useSynthesis` freezes text, voice, model, language, mode and locale when a
+generation is submitted. Resume and regenerate reuse that snapshot, not the form.
+
 ## Component architecture
 
 - `AppShell` owns the shared header, language switcher, skip link and footer.

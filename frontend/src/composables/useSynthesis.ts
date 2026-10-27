@@ -2,9 +2,14 @@ import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, watch } fro
 import { ApiError } from '../services/http';
 import { monitorJob } from '../services/jobs';
 import { t, msg, uiError, errorMessage, type Message } from '../i18n';
-import type { Job, QualityReport } from '../services/contracts';
+import type { Job, NormalizationMode, QualityReport } from '../services/contracts';
 import type { Studio } from './useStudio';
-export type GenerationInput = Readonly<{ text: string; model: string; voice: string; language: string; cloned: boolean }>;
+/**
+ * Everything a generation needs, frozen at submission. `normalization` and `locale`
+ * are absent for servers without pronunciation support; retry, regenerate and resume
+ * reuse this snapshot, never the live form.
+ */
+export type GenerationInput = Readonly<{ text: string; model: string; voice: string; language: string; cloned: boolean; normalization?: NormalizationMode; locale?: string }>;
 type ActiveGeneration = Readonly<{ jobId: string; input: GenerationInput; requestEpoch: number; preset: string }>;
 /** One completed generation, retained for side-by-side comparison. */
 export interface GenerationResult {
@@ -135,7 +140,7 @@ export function useSynthesis(studio: Studio) {
     const signal = control.signal;
     try {
       const preset = studio.sampling.value.preset;
-      const job = await studio.api.createJob(input.text, input.language, input.voice, input.cloned, samplingFor(input.model), signal);
+      const job = await studio.api.createJob(input.text, input.language, input.voice, input.cloned, samplingFor(input.model), signal, { normalization: input.normalization, locale: input.locale });
       if (disposed || requestEpoch !== epoch) return;
       const generation = Object.freeze({ jobId: job.id, input, requestEpoch, preset });
       active.value = generation;
@@ -149,6 +154,7 @@ export function useSynthesis(studio: Studio) {
       text: preview ? t('Hi there. This is a voice preview.') : studio.text.value.trim(),
       model: studio.selectedModel.value.id, voice: studio.voice.value,
       language: studio.language.value, cloned: studio.selectedModel.value.cloned,
+      normalization: studio.pronunciation?.value?.normalization, locale: studio.pronunciation?.value?.locale,
     });
     lastInput = input;
     await run(input);

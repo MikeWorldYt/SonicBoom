@@ -5,7 +5,7 @@ export interface SynthesisConstraints {
   max_text_chars: number; max_body_bytes: number;
   sampling: { provider: string; seed_max: string; temperature: NumericBounds; top_k: NumericBounds; top_p: NumericBounds; repetition_penalty: NumericBounds };
 }
-export interface ServerInfo { synthesis?: SynthesisConstraints; version: string; mode: string; setup_complete: boolean; auth: { mode: string; required: boolean }; features: { playback: boolean; audio_devices: boolean; hot_reload: boolean }; config_revision: number; model: { status: string } }
+export interface ServerInfo { synthesis?: SynthesisConstraints; normalization?: NormalizationInfo; version: string; mode: string; setup_complete: boolean; auth: { mode: string; required: boolean }; features: { playback: boolean; audio_devices: boolean; hot_reload: boolean }; config_revision: number; model: { status: string } }
 export interface BackendDiagnostics { compiled_backends: string[]; available_runtime_backends: string[]; vulkan_gpu_name?: string | null; requested_device: string; effective_device?: string | null; model_loading_status: string; vulkan_initialization_error?: string | null; cpu_fallback_reason?: string | null; status: string }
 export interface ProviderStatus { model_revision?: string; backend_diagnostics?: BackendDiagnostics; provider_id: string; state: string; enabled: boolean; effective_device?: string | null; active_model?: string | null; detail?: string | null }
 export interface Capabilities { provider_id: string; models: string[]; languages: string[]; devices: string[]; clone_modes: string[]; requires_reference_audio: boolean; requires_reference_transcript: boolean; sample_rate?: number }
@@ -37,3 +37,17 @@ export interface VoiceConstraints {
   max_channels: number; name_max_chars: number; transcript_max_chars: number;
   providers: Record<string, { duration_seconds: [number, number]; clone_modes: string[]; models: string[]; languages: string[]; transcript_required_for: string[] }>;
 }
+
+/** Pronunciation (text normalization) mode: `auto` converts numerals, dates, etc.; `off` speaks the text as typed. */
+export type NormalizationMode = 'auto' | 'off';
+export type CoverageLevel = 'full' | 'partial' | 'none';
+/** One speech language in the `normalization` block of `GET /api/info`. */
+export interface NormalizationLanguage { language: string; locales: string[]; default_locale: string; rules: CoverageLevel; features: Record<string, CoverageLevel> }
+export interface NormalizationInfo { ruleset_version: string; default_mode: NormalizationMode; languages: NormalizationLanguage[] }
+/** Optional synthesis query fields. Absent fields are never sent, so legacy requests are unchanged. */
+export interface SpeechPronunciation { normalization?: NormalizationMode; locale?: string }
+export interface NormalizeRequest { text: string; language: string; locale?: string; mode?: NormalizationMode; model?: string }
+/** `start`/`end` are UTF-8 byte offsets into the original text: display `before`/`after`, never slice with them. */
+export interface NormalizationChange { kind: string; before: string; after: string; start: number; end: number; confidence: string }
+export interface NormalizationWarning { code: string; before: string; start: number; end: number }
+export interface NormalizePreview { original: string; spoken: string; language: string; locale: string; mode: NormalizationMode; normalizer_version: string; changes: NormalizationChange[]; warnings: NormalizationWarning[]; coverage: Record<string, CoverageLevel> }

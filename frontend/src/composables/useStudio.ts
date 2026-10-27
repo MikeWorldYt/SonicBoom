@@ -5,10 +5,11 @@ import { isCancelledError } from '@tanstack/vue-query';
 import { createResourceCache } from '../app/queryClient';
 import { createHttpClient, ApiError } from '../services/http';
 import { createApi, type Api } from '../services/api';
+import { effectiveLocale, localeChoices, showLocaleChoice } from '../features/speech/pronunciation';
 import { modelLanguages } from '../services/providerLanguages';
 import { activatePocketModel as activatePocketBundle } from '../services/pocketActivation';
 import type { HomeData } from '../types';
-import type { ServerInfo, ProviderStatus, Capabilities, Voice, BuiltinVoice, ConfigSnapshot, ConfigStatus, Schema, Json, JsonObject, AudioDevice } from '../services/contracts';
+import type { NormalizationMode, SpeechPronunciation, ServerInfo, ProviderStatus, Capabilities, Voice, BuiltinVoice, ConfigSnapshot, ConfigStatus, Schema, Json, JsonObject, AudioDevice } from '../services/contracts';
 import { errorMessage, type Message } from '../i18n';
 export function getPath(object: JsonObject | undefined, path: string): Json | undefined {
   return path.split('.').reduce<Json | undefined>((value, key) => value && typeof value === 'object' && !Array.isArray(value) ? value[key] : undefined, object);
@@ -71,6 +72,24 @@ export function createStudio(data: HomeData, overrides?: { api?: Api }) {
   const samplingIssues = computed(() => samplingErrors(sampling.value, info.value?.synthesis?.sampling));
   const samplingParams = computed(() => samplingQuery(sampling.value, info.value?.synthesis?.sampling));
   function resetSampling() { sampling.value = { ...DEFAULT_SAMPLING }; }
+  // Pronunciation (text normalization). The speech language is the form's language,
+  // never the UI language, and every locale comes from /api/info.
+  const normalizationInfo = computed(() => info.value?.normalization);
+  const normalizationAvailable = computed(() => !!normalizationInfo.value);
+  const normalizationChoice = ref<NormalizationMode | null>(null);
+  const normalizationMode = computed<NormalizationMode>({
+    get: () => normalizationChoice.value ?? normalizationInfo.value?.default_mode ?? 'auto',
+    set: value => { normalizationChoice.value = value; },
+  });
+  const pronunciationLocale = ref('');
+  const normalizationLanguage = computed(() => normalizationInfo.value?.languages.find(entry => entry.language === language.value));
+  const pronunciationLocales = computed(() => localeChoices(normalizationLanguage.value));
+  const showPronunciationLocale = computed(() => showLocaleChoice(normalizationLanguage.value, normalizationMode.value));
+  /** Query fields for synthesis; undefined when the server predates normalization (legacy behavior). */
+  const pronunciation = computed<SpeechPronunciation | undefined>(() => normalizationInfo.value
+    ? { normalization: normalizationMode.value, locale: effectiveLocale(normalizationLanguage.value, pronunciationLocale.value, normalizationMode.value) }
+    : undefined);
+  watch(pronunciationLocales, options => { if (pronunciationLocale.value && !options.includes(pronunciationLocale.value)) pronunciationLocale.value = ''; });
   let session = new AbortController();
   const cache = createResourceCache();
   const api = overrides?.api ?? createApi(createHttpClient(() => token.value, () => info.value?.auth.required ?? true, () => session.signal));
@@ -226,7 +245,7 @@ export function createStudio(data: HomeData, overrides?: { api?: Api }) {
     void refresh(slowRefreshDue(tick));
   }, STUDIO_FAST_MS);
   onUnmounted(dispose);
-  return { api, token, scopeEpoch, info, providers, capabilities, diagnostics, builtinVoices, voices, config, status, schema, devices, errors, loading, model, voice, language, text, preview, sampling, samplingIssues, samplingParams, resetSampling, models, selectedModel, availableVoices, refresh, refreshConfig, refreshProviders, refreshVoices, saveSetting, toggleProvider, activatePocketModel, profileCompatible, selectProfile, dispose };
+  return { api, token, scopeEpoch, info, providers, capabilities, diagnostics, builtinVoices, voices, config, status, schema, devices, errors, loading, model, voice, language, text, preview, sampling, samplingIssues, samplingParams, resetSampling, normalizationAvailable, normalizationMode, pronunciationLocale, normalizationLanguage, pronunciationLocales, showPronunciationLocale, pronunciation, models, selectedModel, availableVoices, refresh, refreshConfig, refreshProviders, refreshVoices, saveSetting, toggleProvider, activatePocketModel, profileCompatible, selectProfile, dispose };
 }
 export type Studio = ReturnType<typeof createStudio>;
 export const studioKey: InjectionKey<Studio> = Symbol('SonicBoom studio');

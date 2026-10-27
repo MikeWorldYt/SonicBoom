@@ -6,6 +6,8 @@ import { useSynthesis } from '../../composables/useSynthesis';
 import NumberField from '../ui/NumberField.vue';
 import WaveformPlayer from '../audio/WaveformPlayer.vue';
 import VoiceSelector from './VoiceSelector.vue';
+import PronunciationSettings from './PronunciationSettings.vue';
+import SpokenPreview from './SpokenPreview.vue';
 const studio = useStudio();
 const { text, model, voice, language, models, selectedModel, availableVoices, preview, sampling, samplingIssues, info, resetSampling } = studio;
 const { pending, cancelling, jobId, active, snapshot, results, audioUrl, audioFilename, audioBlob, error, complete, canGenerate, generate, regenerate, removeResult, resume, cancel } = useSynthesis(studio);
@@ -58,7 +60,9 @@ onBeforeUnmount(() => { detachPlayback(); pauseComparisons(); });
   <div class="studio-create">
   <form class="create-editor" @submit.prevent="generate()" :aria-busy="pending">
     <div class="form-group"><div class="label-row"><label for="text">{{ t('What would you like to say?') }}</label><span id="charCount" class="char-count">{{ t(codepoints === 1 ? '{count} character' : '{count} characters', { count: codepoints }) }}<template v-if="constraints"> / {{ constraints.max_text_chars }}</template><template v-if="bytesRelevant && constraints"> · {{ textBytes }} / {{ constraints.max_body_bytes }} bytes</template></span></div><textarea id="text"  v-model="text" :placeholder="t('A story, an idea, a welcome message… Start writing here.')" :readonly="pending"/></div>
+    <SpokenPreview/>
     <div class="row"><div class="field"><label for="model">{{ t('Model') }}</label><select id="model" v-model="model" :disabled="pending"><option v-for="item in models" :key="item.id" :value="item.id">{{ item.id }} · {{ t(item.ready ? 'ready' : 'Not ready') }}</option></select></div><div class="field"><label for="lang">{{ t('Language') }}</label><select id="lang" v-model="language" :disabled="pending"><option v-for="code in languages" :key="code" :value="code">{{ t(`language.${code}`) }}</option></select></div></div>
+    <PronunciationSettings :disabled="pending"/>
     <VoiceSelector v-model="voice" :voices="availableVoices" :disabled="pending"/>
     <details v-if="advancedAvailable" id="advancedGeneration" :open="advancedOpen" @toggle="advancedOpen = ($event.target as HTMLDetailsElement).open">
       <summary>{{ t('Advanced generation settings') }}</summary>

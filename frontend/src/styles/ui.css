@@ -333,3 +333,19 @@ th { color: var(--text-secondary); background: var(--surface-raised); }
 .button-spinner { display: inline-block; width: 1em; height: 1em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -.1em; margin-inline-end: .5em; animation: spinner-turn .8s linear infinite; }
 @keyframes spinner-turn { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .button-spinner { animation: none; } }
+/* Pronunciation controls and the "What will be spoken?" preview. */
+.pronunciation-settings .field-hint { margin-top: 6px; }
+.spoken-preview { margin-top: 12px; margin-bottom: 20px; min-width: 0; }
+.spoken-preview .toolbar { margin-bottom: 8px; }
+.spoken-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; margin-top: 12px; }
+.spoken-compare textarea { min-height: 96px; overflow-wrap: anywhere; }
+.spoken-meta { margin-top: 12px; overflow-wrap: anywhere; }
+.spoken-section h4 { font-size: 13px; margin: 16px 0 6px; }
+.spoken-list { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow: auto; border: 1px solid var(--border-subtle); border-radius: var(--radius-control); }
+.spoken-list li { padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; }
+.spoken-list li:last-child { border-bottom: 0; }
+.spoken-kind { display: inline-block; padding: 0 8px; border-radius: 999px; background: var(--accent-surface); color: var(--accent); font-size: 12px; font-weight: 600; }
+.spoken-after { font-weight: 600; }
+.spoken-warnings li { background: var(--warning-surface); color: var(--warning); }
+.spoken-warnings .muted { color: inherit; }
+.spoken-stale { margin-top: 8px; }

@@ -1,12 +1,32 @@
 import { z } from './schema';
 import { ApiError } from './http';
-import type { ServerInfo, ProvidersResponse, ConfigSnapshot, ConfigStatus, SettingSchema, Job, QualityReport, Json } from './contracts';
+import type { ServerInfo, NormalizationInfo, NormalizePreview, ProvidersResponse, ConfigSnapshot, ConfigStatus, SettingSchema, Job, QualityReport, Json } from './contracts';
 import { voiceSummarySchema } from '../features/cloning/cloneSchemas';
 const number = z.number().finite();
 const optionalNumber = number.nullish().transform(value => value ?? undefined);
 const optionalString = z.string().nullish().transform(value => value ?? undefined);
 const json: z.ZodType<Json> = z.lazy(() => z.union([z.null(), z.boolean(), number, z.string(), z.array(json), z.record(z.string(), json)]));
 const numericBounds = z.object({ min: number, max: number, integer: z.boolean().optional(), exclusive_min: z.boolean().optional() }).refine(value => value.min <= value.max);
+const coverageLevel = z.enum(['full', 'partial', 'none']);
+const normalizationMode = z.enum(['auto', 'off']);
+const byteOffset = number.int().nonnegative();
+/** The `normalization` block of GET /api/info. Locale lists come only from the server. */
+export const normalizationInfoSchema: z.ZodType<NormalizationInfo> = z.object({
+  ruleset_version: z.string().min(1),
+  default_mode: normalizationMode,
+  languages: z.array(z.object({
+    language: z.string().min(1), locales: z.array(z.string().min(1)), default_locale: z.string(),
+    rules: coverageLevel, features: z.record(z.string(), coverageLevel).default({}),
+  })),
+});
+/** Response of POST /api/tts/normalize. */
+export const normalizePreviewSchema: z.ZodType<NormalizePreview> = z.object({
+  original: z.string(), spoken: z.string(), language: z.string().min(1), locale: z.string().min(1),
+  mode: normalizationMode, normalizer_version: z.string().min(1),
+  changes: z.array(z.object({ kind: z.string().min(1), before: z.string(), after: z.string(), start: byteOffset, end: byteOffset, confidence: z.string() }).refine(value => value.end >= value.start)),
+  warnings: z.array(z.object({ code: z.string().min(1), before: z.string(), start: byteOffset, end: byteOffset }).refine(value => value.end >= value.start)),
+  coverage: z.record(z.string(), coverageLevel).default({}),
+});
 export const infoSchema: z.ZodType<ServerInfo> = z.object({
   version: z.string(), mode: z.string(), setup_complete: z.boolean(),
   auth: z.object({ mode: z.string(), required: z.boolean() }),
@@ -16,6 +36,8 @@ export const infoSchema: z.ZodType<ServerInfo> = z.object({
     max_text_chars: number.int().positive(), max_body_bytes: number.int().positive(),
     sampling: z.object({ provider: z.string(), seed_max: z.string().regex(/^\d{1,20}$/), temperature: numericBounds, top_k: numericBounds, top_p: numericBounds, repetition_penalty: numericBounds }),
   }).optional(),
+  // A malformed or absent block means "older server": the pronunciation controls stay hidden.
+  normalization: normalizationInfoSchema.nullish().catch(undefined).transform(value => value ?? undefined),
 });
 export const providersSchema: z.ZodType<ProvidersResponse> = z.object({
   providers: z.array(z.object({

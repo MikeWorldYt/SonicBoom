@@ -3,7 +3,8 @@ import { jsonBody } from './http';
 import * as responses from './responseSchemas';
 import { voiceCreateResultSchema } from '../features/cloning/cloneSchemas';
 import { parseConstraints } from '../features/cloning/constraints';
-import type { ServerInfo, ProvidersResponse, BuiltinVoice, Voice, ConfigSnapshot, ConfigStatus, Schema, SettingSchema, JsonObject, AudioDevice, Job, CloneInput, SetupStatus, SetupInput, SetupResult } from './contracts';
+import { pronunciationQuery, previewRequestBody } from '../features/speech/pronunciation';
+import type { ServerInfo, ProvidersResponse, BuiltinVoice, Voice, ConfigSnapshot, ConfigStatus, Schema, SettingSchema, JsonObject, AudioDevice, Job, CloneInput, SpeechPronunciation, NormalizeRequest, SetupStatus, SetupInput, SetupResult } from './contracts';
 const id = encodeURIComponent;
 /** Optional Qwen3-TTS sampling/quality query parameters. Empty values are omitted. */
 export type SamplingQuery = Record<string, string | number | undefined | null>;
@@ -33,13 +34,17 @@ export function createApi(http: HttpClient) {
     audioDevices: async (signal?: AbortSignal) => responses.parseResponse(responses.devicesSchema, await http.json<unknown>('/api/audio/devices', { signal })).devices,
     audioOutput: async () => responses.parseResponse(responses.audioOutputSchema, await http.json<unknown>('/api/audio/output')),
     testAudio: (text: string) => http.response('/api/tts/play', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text }),
-    createJob: (text: string, language: string, voice: string, cloned: boolean, sampling?: SamplingQuery, signal?: AbortSignal) => {
+    createJob: (text: string, language: string, voice: string, cloned: boolean, sampling?: SamplingQuery, signal?: AbortSignal, pronunciation?: SpeechPronunciation) => {
       const params = new URLSearchParams({ lang: language, format: 'wav', [cloned ? 'profile' : 'voice']: voice });
       if (sampling) for (const [key, value] of Object.entries(sampling)) {
         if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
       }
+      // Added last and only when present: legacy callers produce the same URL as before.
+      for (const [key, value] of Object.entries(pronunciationQuery(pronunciation))) params.set(key, value);
       return http.json<unknown>(`/api/tts/jobs?${params}`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text, signal }).then(value => responses.parseResponse(responses.jobCreatedSchema, value));
     },
+    /** "What will be spoken?" preview. Pass a signal so a stale request can be cancelled. */
+    previewNormalization: async (request: NormalizeRequest, signal?: AbortSignal) => responses.parseResponse(responses.normalizePreviewSchema, await http.json<unknown>('/api/tts/normalize', { method: 'POST', ...jsonBody(previewRequestBody(request)), signal })),
     job: async (job: string, signal?: AbortSignal) => responses.parseResponse(responses.jobSchema, await http.json<unknown>(`/api/tts/jobs/${id(job)}`, { signal })),
     jobEvents: (job: string, signal?: AbortSignal) => http.response(`/api/tts/jobs/${id(job)}/events`, { signal }),
     jobAudio: (job: string, signal?: AbortSignal) => http.blob(`/api/tts/jobs/${id(job)}/audio`, { signal }),
