@@ -377,7 +377,7 @@ pub fn diff(old: &AppConfig, new: &AppConfig) -> Vec<ConfigChange> {
             ],
             ConfigChange::TtsLimits { .. } => super::loader::ALL_CONFIG_PATHS
                 .iter()
-                .filter(|p| p.starts_with("tts."))
+                .filter(|p| p.starts_with("tts.") && !p.starts_with("tts.normalization."))
                 .map(|p| (*p).to_string())
                 .collect(),
             _ => vec![change.path()],
@@ -571,6 +571,48 @@ mod tests {
             changes
                 .iter()
                 .any(|c| matches!(c, ConfigChange::TtsLimits { .. }))
+        );
+    }
+
+    #[test]
+    fn normalization_only_change_is_reported_and_hot() {
+        let mut new = config();
+        new.tts.normalization.mode = "off".to_string();
+        new.tts.normalization.max_normalized_chars = 5_000;
+        let changes = diff(&config(), &new);
+        assert!(
+            !changes
+                .iter()
+                .any(|c| matches!(c, ConfigChange::TtsLimits { .. })),
+            "normalization must not look like a body-limit change"
+        );
+        for path in [
+            "tts.normalization.mode",
+            "tts.normalization.max_normalized_chars",
+        ] {
+            let change = changes
+                .iter()
+                .find(|c| c.path() == path)
+                .unwrap_or_else(|| panic!("missing change for {path}"));
+            assert_eq!(change.strategy(), ApplyStrategy::Hot);
+        }
+    }
+
+    #[test]
+    fn normalization_change_alongside_tts_limits_is_not_swallowed() {
+        let mut new = config();
+        new.tts.max_text_length = 20_000;
+        new.tts.normalization.enabled = false;
+        let changes = diff(&config(), &new);
+        assert!(
+            changes
+                .iter()
+                .any(|c| matches!(c, ConfigChange::TtsLimits { .. }))
+        );
+        assert!(
+            changes
+                .iter()
+                .any(|c| c.path() == "tts.normalization.enabled")
         );
     }
 

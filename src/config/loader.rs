@@ -138,6 +138,12 @@ pub const ALL_CONFIG_PATHS: &[&str] = &[
     "tts.openai_max_body_bytes",
     "tts.queue_max_body_bytes",
     "tts.admin_max_body_bytes",
+    "tts.normalization.enabled",
+    "tts.normalization.mode",
+    "tts.normalization.default_locale",
+    "tts.normalization.report_ambiguities",
+    "tts.normalization.max_expansion_ratio",
+    "tts.normalization.max_normalized_chars",
     "inference.max_concurrent",
     "inference.max_pending",
     "rate_limit.requests",
@@ -689,6 +695,101 @@ mod tests {
         record_default_sources(&mut sources);
         apply_environment_with(&|name| map.get(name).cloned(), &mut config, &mut sources)?;
         Ok((config, sources))
+    }
+
+    #[test]
+    fn old_config_without_normalization_section_uses_defaults() {
+        let effective = from_toml(
+            "[tts]
+max_text_length = 5000
+",
+        )
+        .unwrap();
+        let n = &effective.config.tts.normalization;
+        assert!(n.enabled);
+        assert_eq!(n.mode, "auto");
+        assert_eq!(n.default_locale, "auto");
+        assert!(n.report_ambiguities);
+        assert_eq!(n.max_expansion_ratio, 8.0);
+        assert_eq!(n.max_normalized_chars, 20_000);
+        assert_eq!(
+            effective.source_of("tts.normalization.mode"),
+            Some(ConfigSource::Default)
+        );
+        let none = from_toml("").unwrap();
+        assert_eq!(none.config.tts.normalization.mode, "auto");
+    }
+
+    #[test]
+    fn normalization_section_parses_and_normalizes_mode() {
+        use crate::tts::normalization::NormalizationMode;
+        let effective = from_toml(
+            "[tts.normalization]
+mode = \" OFF \"
+default_locale = \"es-PE\"
+             report_ambiguities = false
+max_expansion_ratio = 4.5
+             max_normalized_chars = 1000
+",
+        )
+        .unwrap();
+        let n = &effective.config.tts.normalization;
+        assert_eq!(n.mode, "off");
+        assert_eq!(n.default_locale, "es-PE");
+        assert!(!n.report_ambiguities);
+        assert_eq!(n.max_expansion_ratio, 4.5);
+        assert_eq!(n.max_normalized_chars, 1000);
+        assert_eq!(n.effective_mode(), NormalizationMode::Off);
+        assert_eq!(
+            effective.source_of("tts.normalization.mode"),
+            Some(ConfigSource::Toml)
+        );
+        assert_eq!(n.limits(777).max_input_chars, 777);
+        assert_eq!(n.limits(777).max_output_chars, 1000);
+    }
+
+    #[test]
+    fn disabled_normalization_forces_off_even_when_mode_is_auto() {
+        use crate::tts::normalization::NormalizationMode;
+        let effective = from_toml(
+            "[tts.normalization]
+enabled = false
+mode = \"auto\"
+",
+        )
+        .unwrap();
+        assert_eq!(
+            effective.config.tts.normalization.effective_mode(),
+            NormalizationMode::Off
+        );
+        assert_eq!(
+            AppConfig::default().tts.normalization.effective_mode(),
+            NormalizationMode::Auto
+        );
+    }
+
+    #[test]
+    fn unknown_normalization_key_is_rejected() {
+        assert!(
+            from_toml(
+                "[tts.normalization]
+strictness = 3
+"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn normalization_section_round_trips_through_toml() {
+        let mut config = AppConfig::default();
+        config.tts.normalization.mode = "off".to_string();
+        config.tts.normalization.default_locale = "pt-BR".to_string();
+        let text = toml::to_string_pretty(&config).unwrap();
+        let back = parse_toml(&text).unwrap();
+        assert_eq!(back.tts.normalization.mode, "off");
+        assert_eq!(back.tts.normalization.default_locale, "pt-BR");
+        assert_eq!(back.tts.normalization.max_normalized_chars, 20_000);
     }
 
     #[test]

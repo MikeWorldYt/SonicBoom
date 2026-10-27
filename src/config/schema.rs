@@ -286,6 +286,100 @@ pub fn schema() -> BTreeMap<String, SettingSchema> {
         secret: false,
         allowed_values_source: None,
     });
+    add(SettingSchema {
+        path: "tts.normalization.enabled".to_string(),
+        description: "Enable text normalization before synthesis; false forces mode off"
+            .to_string(),
+        type_name: "boolean",
+        apply: ApplyStrategy::Hot,
+        min: None,
+        max: None,
+        allowed_values: None,
+        nullable: false,
+        secret: false,
+        allowed_values_source: None,
+    });
+    add(SettingSchema {
+        path: "tts.normalization.mode".to_string(),
+        description: "Default normalization mode: auto (conservative number/date/currency rewriting) or off (text spoken exactly as sent)".to_string(),
+        type_name: "string",
+        apply: ApplyStrategy::Hot,
+        min: None,
+        max: None,
+        allowed_values: Some(vec!["auto".to_string(), "off".to_string()]),
+        nullable: false,
+        secret: false,
+        allowed_values_source: None,
+    });
+    add(SettingSchema {
+        path: "tts.normalization.default_locale".to_string(),
+        description:
+            "Default pronunciation locale: auto (per-language default) or a supported locale tag"
+                .to_string(),
+        type_name: "string",
+        apply: ApplyStrategy::Hot,
+        min: None,
+        max: None,
+        allowed_values: Some(vec![
+            "auto".to_string(),
+            "es-ES".to_string(),
+            "es-MX".to_string(),
+            "es-PE".to_string(),
+            "en-US".to_string(),
+            "en-GB".to_string(),
+            "pt-BR".to_string(),
+            "pt-PT".to_string(),
+            "fr-FR".to_string(),
+            "de-DE".to_string(),
+            "it-IT".to_string(),
+            "ru-RU".to_string(),
+            "zh-CN".to_string(),
+            "zh-TW".to_string(),
+            "ja-JP".to_string(),
+            "ko-KR".to_string(),
+        ]),
+        nullable: false,
+        secret: false,
+        allowed_values_source: None,
+    });
+    add(SettingSchema {
+        path: "tts.normalization.report_ambiguities".to_string(),
+        description:
+            "Report ambiguous expressions (for example 01/02/2026) as warnings instead of guessing"
+                .to_string(),
+        type_name: "boolean",
+        apply: ApplyStrategy::Hot,
+        min: None,
+        max: None,
+        allowed_values: None,
+        nullable: false,
+        secret: false,
+        allowed_values_source: None,
+    });
+    add(SettingSchema {
+        path: "tts.normalization.max_expansion_ratio".to_string(),
+        description: "Maximum spoken-to-original length ratio".to_string(),
+        type_name: "number",
+        apply: ApplyStrategy::Hot,
+        min: Some(1.0),
+        max: Some(16.0),
+        allowed_values: None,
+        nullable: false,
+        secret: false,
+        allowed_values_source: None,
+    });
+    add(SettingSchema {
+        path: "tts.normalization.max_normalized_chars".to_string(),
+        description: "Maximum spoken text length after normalization (characters)".to_string(),
+        type_name: "integer",
+        apply: ApplyStrategy::Hot,
+        min: Some(1.0),
+        max: Some(200000.0),
+        allowed_values: None,
+        nullable: false,
+        secret: false,
+        allowed_values_source: None,
+    });
     for (path, max, desc) in [
         (
             "tts.max_body_bytes",

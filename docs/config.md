@@ -156,6 +156,43 @@ Both providers default to `enabled = false`: existing builds boot
 Supertonic exactly as before and fetch no extra weights. See
 [providers.md](providers.md).
 
+### Text Normalization (TOML only)
+
+Before synthesis, the server can rewrite numbers, dates, times, currency,
+percentages and similar expressions into words so every provider pronounces
+them correctly. The section is optional: files without
+`[tts.normalization]` load with the defaults below.
+
+```toml
+[tts.normalization]
+enabled = true              # false forces mode "off"
+mode = "auto"               # "auto" | "off" (case-insensitive)
+default_locale = "auto"     # "auto" = per-language default, or a tag such as "es-PE"
+report_ambiguities = true
+max_expansion_ratio = 8.0   # 1.0..=16.0
+max_normalized_chars = 20000  # 1..=200000
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `true` | Master switch. `false` behaves like `mode = "off"` whatever `mode` says. |
+| `mode` | `"auto"` | `auto` applies conservative, high-confidence rewrites for the features each language supports and leaves everything else untouched. `off` speaks the text exactly as sent. Requests may override it per call with `normalization=auto\|off`. |
+| `default_locale` | `"auto"` | `auto` uses the documented default locale of the speech language (`es-ES`, `en-US`, `pt-BR`, `fr-FR`, `de-DE`, `it-IT`, `ru-RU`, `zh-CN`, `ja-JP`, `ko-KR`); it is never inferred from the server location. A concrete tag (`es-ES`, `es-MX`, `es-PE`, `en-US`, `en-GB`, `pt-BR`, `pt-PT`, `fr-FR`, `de-DE`, `it-IT`, `ru-RU`, `zh-CN`, `zh-TW`, `ja-JP`, `ko-KR`) is treated as an explicit choice, which allows ambiguous slash dates to be converted. Requests may override it with `locale=<tag>`. |
+| `report_ambiguities` | `true` | Report expressions that could be read two ways (for example `01/02/2026`) as warnings. They are preserved, not guessed. |
+| `max_expansion_ratio` | `8.0` | Upper bound on spoken length relative to the original text. Requests that would exceed it are rejected. |
+| `max_normalized_chars` | `20000` | Upper bound on the spoken text length in characters, independent of `tts.max_text_length`, which still bounds the original text. |
+
+Notes:
+
+- The default `mode = "auto"` changes the audio that legacy callers get for
+  text containing numbers, dates, currency and similar expressions: it is
+  spoken as words instead of being left to each provider's own handling.
+  Set `enabled = false` or `mode = "off"` (or send `normalization=off` per
+  request) to restore the previous text handling byte for byte.
+- Changes apply on the next request; no restart or model reload is needed.
+- Unknown keys in the section and out-of-range values are rejected, so a
+  typo fails loudly rather than being ignored.
+
 ### Security
 
 | Variable | Default | Description |

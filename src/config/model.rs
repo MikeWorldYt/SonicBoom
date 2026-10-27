@@ -212,6 +212,75 @@ pub struct TtsConfig {
     /// Body limit for admin endpoints (bytes).
     #[serde(default = "default_admin_max_body_bytes")]
     pub admin_max_body_bytes: usize,
+    /// Text normalization (pronunciation) settings.
+    #[serde(default)]
+    pub normalization: NormalizationConfig,
+}
+
+/// Text normalization applied before synthesis (numbers, dates,
+/// currency, ...). Additive section: older files without
+/// `[tts.normalization]` load with these defaults.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NormalizationConfig {
+    /// `false` forces mode `off` regardless of `mode`.
+    pub enabled: bool,
+    /// `auto` or `off` (case-insensitive; stored lowercase).
+    #[serde(deserialize_with = "deserialize_normalization_mode")]
+    pub mode: String,
+    /// `auto` (per-language default) or a supported locale tag.
+    pub default_locale: String,
+    /// Report ambiguous expressions as warnings.
+    pub report_ambiguities: bool,
+    /// Maximum spoken/original length ratio (1.0..=16.0).
+    pub max_expansion_ratio: f32,
+    /// Maximum spoken text length in characters (1..=200000).
+    pub max_normalized_chars: usize,
+}
+
+impl Default for NormalizationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            mode: "auto".to_string(),
+            default_locale: "auto".to_string(),
+            report_ambiguities: true,
+            max_expansion_ratio: 8.0,
+            max_normalized_chars: 20_000,
+        }
+    }
+}
+
+impl NormalizationConfig {
+    /// Effective default mode: `enabled = false` is always `Off`;
+    /// otherwise the parsed `mode` (falls back to `Auto` for a value
+    /// validation would already have rejected).
+    pub fn effective_mode(&self) -> crate::tts::normalization::NormalizationMode {
+        use crate::tts::normalization::NormalizationMode;
+        if !self.enabled {
+            return NormalizationMode::Off;
+        }
+        NormalizationMode::parse(&self.mode).unwrap_or(NormalizationMode::Auto)
+    }
+
+    /// Normalizer limits; the input bound comes from `tts.max_text_length`.
+    pub fn limits(&self, max_input_chars: usize) -> crate::tts::normalization::NormalizeLimits {
+        crate::tts::normalization::NormalizeLimits {
+            max_input_chars,
+            max_output_chars: self.max_normalized_chars,
+            max_expansion_ratio: self.max_expansion_ratio,
+        }
+    }
+}
+
+/// Trim and lowercase the mode so `"OFF"` is stored as `off`.
+/// Validation rejects values other than `auto`/`off`.
+fn deserialize_normalization_mode<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    Ok(raw.trim().to_ascii_lowercase())
 }
 
 /// Inference admission control.
@@ -795,6 +864,7 @@ impl Default for AppConfig {
                 openai_max_body_bytes: default_openai_max_body_bytes(),
                 queue_max_body_bytes: default_queue_max_body_bytes(),
                 admin_max_body_bytes: default_admin_max_body_bytes(),
+                normalization: NormalizationConfig::default(),
             },
             inference: InferenceConfig {
                 max_concurrent: default_max_concurrent_inference(),
@@ -891,6 +961,7 @@ impl Default for TtsConfig {
             openai_max_body_bytes: default_openai_max_body_bytes(),
             queue_max_body_bytes: default_queue_max_body_bytes(),
             admin_max_body_bytes: default_admin_max_body_bytes(),
+            normalization: NormalizationConfig::default(),
         }
     }
 }

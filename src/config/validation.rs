@@ -187,6 +187,39 @@ fn validate_tts(config: &AppConfig) -> Result<(), String> {
             ));
         }
     }
+    validate_normalization(&tts.normalization)
+}
+
+/// Upper bound for `tts.normalization.max_normalized_chars`.
+const MAX_NORMALIZED_CHARS_LIMIT: usize = 200_000;
+/// Bounds for `tts.normalization.max_expansion_ratio`.
+const MIN_EXPANSION_RATIO: f32 = 1.0;
+const MAX_EXPANSION_RATIO: f32 = 16.0;
+
+fn validate_normalization(n: &super::model::NormalizationConfig) -> Result<(), String> {
+    use crate::tts::normalization::{NormalizationMode, is_supported_locale};
+    if NormalizationMode::parse(&n.mode).is_none() {
+        return Err("tts.normalization.mode must be one of: auto, off".to_string());
+    }
+    let locale = n.default_locale.trim();
+    if !locale.eq_ignore_ascii_case("auto") && !is_supported_locale(locale) {
+        return Err(
+            "tts.normalization.default_locale must be \"auto\" or a supported locale tag              (for example es-ES, es-MX, es-PE, en-US, en-GB, pt-BR, pt-PT, fr-FR, de-DE,              it-IT, ru-RU, zh-CN, zh-TW, ja-JP, ko-KR)"
+                .to_string(),
+        );
+    }
+    if !n.max_expansion_ratio.is_finite()
+        || !(MIN_EXPANSION_RATIO..=MAX_EXPANSION_RATIO).contains(&n.max_expansion_ratio)
+    {
+        return Err(format!(
+            "tts.normalization.max_expansion_ratio must be a finite number between              {MIN_EXPANSION_RATIO} and {MAX_EXPANSION_RATIO}"
+        ));
+    }
+    if !(1..=MAX_NORMALIZED_CHARS_LIMIT).contains(&n.max_normalized_chars) {
+        return Err(format!(
+            "tts.normalization.max_normalized_chars must be between 1 and {MAX_NORMALIZED_CHARS_LIMIT}"
+        ));
+    }
     Ok(())
 }
 
@@ -426,6 +459,48 @@ mod tests {
             config.paths.audio = Some("./audio".to_string());
         }
         config
+    }
+
+    #[test]
+    fn normalization_defaults_are_valid_and_bad_values_rejected() {
+        let mut config = valid_config();
+        config.tts.normalization.mode = "OFF".to_string();
+        config.tts.normalization.default_locale = "es-pe".to_string();
+        assert!(validate(&config).is_ok());
+
+        type Mutation = fn(&mut AppConfig);
+        let cases: [(&str, Mutation); 8] = [
+            ("tts.normalization.mode", |c| {
+                c.tts.normalization.mode = "strict".into()
+            }),
+            ("tts.normalization.default_locale", |c| {
+                c.tts.normalization.default_locale = "xx-YY".into()
+            }),
+            ("tts.normalization.max_expansion_ratio", |c| {
+                c.tts.normalization.max_expansion_ratio = 0.5
+            }),
+            ("tts.normalization.max_expansion_ratio", |c| {
+                c.tts.normalization.max_expansion_ratio = 16.5
+            }),
+            ("tts.normalization.max_expansion_ratio", |c| {
+                c.tts.normalization.max_expansion_ratio = f32::NAN
+            }),
+            ("tts.normalization.max_expansion_ratio", |c| {
+                c.tts.normalization.max_expansion_ratio = f32::INFINITY
+            }),
+            ("tts.normalization.max_normalized_chars", |c| {
+                c.tts.normalization.max_normalized_chars = 0
+            }),
+            ("tts.normalization.max_normalized_chars", |c| {
+                c.tts.normalization.max_normalized_chars = 200_001
+            }),
+        ];
+        for (field, mutate) in cases {
+            let mut config = valid_config();
+            mutate(&mut config);
+            let error = validate(&config).unwrap_err();
+            assert!(error.contains(field), "{error}");
+        }
     }
 
     #[test]
