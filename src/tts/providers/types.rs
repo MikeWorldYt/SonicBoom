@@ -280,6 +280,12 @@ pub struct ProviderRequest {
     /// Optional per-request quality-detection override. `None` uses the
     /// provider's configured policy.
     pub quality: Option<crate::tts::quality::DetectionMode>,
+    /// Identity of the text preparation that produced `text`
+    /// ([`crate::tts::normalization::SpeechText::identity`], e.g.
+    /// `"tn-v1|auto|es|es-PE"`). Contains no user text. `None` means the
+    /// request was built from raw text. Providers ignore it; the server's
+    /// bounded synthesis boundary refuses requests without it.
+    pub speech_identity: Option<String>,
 }
 
 impl ProviderRequest {
@@ -301,6 +307,7 @@ impl ProviderRequest {
             seed: None,
             sampling: None,
             quality: None,
+            speech_identity: None,
         }
     }
 }
