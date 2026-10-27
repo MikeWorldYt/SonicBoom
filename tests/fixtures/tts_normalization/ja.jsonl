@@ -1,0 +1,19 @@
+{"id":"ja-jp-spec-input-attached-date-preserved","language":"ja","locale":"ja-JP","mode":"auto","input":"2026年10月26日","expected_unchanged":true,"warning_codes":[],"features":["dates"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-iso-date","language":"ja","locale":"ja-JP","mode":"auto","input":"日付 2026-10-26","expected_spoken":"日付 二千二十六年十月二十六日","warning_codes":[],"features":["dates"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-time","language":"ja","locale":"ja-JP","mode":"auto","input":"会議は 15:30 から","expected_spoken":"会議は 十五時三十分 から","warning_codes":[],"features":["times"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-time-on-the-hour","language":"ja","locale":"ja-JP","mode":"auto","input":"開始 9:00","expected_spoken":"開始 九時","warning_codes":[],"features":["times"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-percent","language":"ja","locale":"ja-JP","mode":"auto","input":"増加 12.5%","expected_spoken":"増加 十二点五パーセント","warning_codes":[],"features":["percentages","decimals"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-decimal","language":"ja","locale":"ja-JP","mode":"auto","input":"円周率 3.14","expected_spoken":"円周率 三点一四","warning_codes":[],"features":["decimals"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-jpy-code","language":"ja","locale":"ja-JP","mode":"auto","input":"500 JPY","expected_spoken":"五百円","warning_codes":[],"features":["currency"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-yen-symbol-ambiguous","language":"ja","locale":"ja-JP","mode":"auto","input":"¥500","expected_unchanged":true,"warning_codes":["ambiguous_currency"],"features":["currency"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-counter-preserved","language":"ja","locale":"ja-JP","mode":"auto","input":"3 人","expected_unchanged":true,"warning_codes":["ambiguous_number"],"features":["cardinal_numbers"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-attached-counter-preserved","language":"ja","locale":"ja-JP","mode":"auto","input":"500円です","expected_unchanged":true,"warning_codes":[],"features":["currency"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-ten-million","language":"ja","locale":"ja-JP","mode":"auto","input":"人口 10000000","expected_spoken":"人口 一千万","warning_codes":[],"features":["cardinal_numbers"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-year-number","language":"ja","locale":"ja-JP","mode":"auto","input":"西暦 2026","expected_spoken":"西暦 二千二十六","warning_codes":[],"features":["cardinal_numbers"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-comma-grouping","language":"ja","locale":"ja-JP","mode":"auto","input":"合計 1,234","expected_spoken":"合計 千二百三十四","warning_codes":[],"features":["cardinal_numbers"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-negative","language":"ja","locale":"ja-JP","mode":"auto","input":"気温 -5","expected_spoken":"気温 マイナス五","warning_codes":[],"features":["cardinal_numbers"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-speed","language":"ja","locale":"ja-JP","mode":"auto","input":"100 km/h","expected_spoken":"時速百キロメートル","warning_codes":[],"features":["units"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-temperature","language":"ja","locale":"ja-JP","mode":"auto","input":"25 °C","expected_spoken":"二十五度","warning_codes":[],"features":["units"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-cents-preserved","language":"ja","locale":"ja-JP","mode":"auto","input":"12.50 USD","expected_unchanged":true,"warning_codes":[],"features":["currency"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-jp-invalid-date","language":"ja","locale":"ja-JP","mode":"auto","input":"31/02/2026","expected_unchanged":true,"warning_codes":["invalid_date"],"features":["dates"],"reviewed_by":"agent-unreviewed"}
+{"id":"ja-default-locale-ambiguous-date","language":"ja","locale":"auto","mode":"auto","input":"01/02/2026","expected_unchanged":true,"warning_codes":["ambiguous_date"],"features":["dates"],"reviewed_by":"agent-unreviewed"}

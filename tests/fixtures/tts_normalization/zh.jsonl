@@ -1,0 +1,20 @@
+{"id":"zh-cn-spec-input-attached-date-preserved","language":"zh","locale":"zh-CN","mode":"auto","input":"2026年10月26日","expected_unchanged":true,"warning_codes":[],"features":["dates"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-cn-iso-date","language":"zh","locale":"zh-CN","mode":"auto","input":"日期 2026-10-26","expected_spoken":"日期 二零二六年十月二十六日","warning_codes":[],"features":["dates"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-tw-iso-date","language":"zh","locale":"zh-TW","mode":"auto","input":"日期 2026-10-26","expected_spoken":"日期 二零二六年十月二十六日","warning_codes":[],"features":["dates"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-cn-time","language":"zh","locale":"zh-CN","mode":"auto","input":"会议在 15:30 开始","expected_spoken":"会议在 十五点三十分 开始","warning_codes":[],"features":["times"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-cn-time-two-oclock","language":"zh","locale":"zh-CN","mode":"auto","input":"现在是 2:00","expected_spoken":"现在是 两点","warning_codes":[],"features":["times"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-tw-time-two-oclock","language":"zh","locale":"zh-TW","mode":"auto","input":"現在是 2:00","expected_spoken":"現在是 兩點","warning_codes":[],"features":["times"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-cn-percent","language":"zh","locale":"zh-CN","mode":"auto","input":"增长 12.5%","expected_spoken":"增长 百分之十二点五","warning_codes":[],"features":["percentages","decimals"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-cn-decimal","language":"zh","locale":"zh-CN","mode":"auto","input":"圆周率 3.14","expected_spoken":"圆周率 三点一四","warning_codes":[],"features":["decimals"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-tw-decimal","language":"zh","locale":"zh-TW","mode":"auto","input":"圓周率 3.14","expected_spoken":"圓周率 三點一四","warning_codes":[],"features":["decimals"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-cn-ten-thousand","language":"zh","locale":"zh-CN","mode":"auto","input":"价格 10000","expected_spoken":"价格 一万","warning_codes":[],"features":["cardinal_numbers"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-cn-internal-zeros","language":"zh","locale":"zh-CN","mode":"auto","input":"共 100010","expected_spoken":"共 十万零一十","warning_codes":[],"features":["cardinal_numbers"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-cn-comma-grouping","language":"zh","locale":"zh-CN","mode":"auto","input":"共 1,234","expected_spoken":"共 一千二百三十四","warning_codes":[],"features":["cardinal_numbers"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-cn-usd-code","language":"zh","locale":"zh-CN","mode":"auto","input":"100 USD","expected_spoken":"一百美元","warning_codes":[],"features":["currency"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-tw-currency-preserved","language":"zh","locale":"zh-TW","mode":"auto","input":"100 USD","expected_unchanged":true,"warning_codes":[],"features":["currency"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-cn-yen-symbol-ambiguous","language":"zh","locale":"zh-CN","mode":"auto","input":"¥500","expected_unchanged":true,"warning_codes":["ambiguous_currency"],"features":["currency"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-cn-measure-word-preserved","language":"zh","locale":"zh-CN","mode":"auto","input":"2 个","expected_unchanged":true,"warning_codes":["ambiguous_number"],"features":["cardinal_numbers"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-cn-unit-km","language":"zh","locale":"zh-CN","mode":"auto","input":"5 km","expected_spoken":"五公里","warning_codes":[],"features":["units"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-cn-comma-decimal-ambiguous","language":"zh","locale":"zh-CN","mode":"auto","input":"3,14","expected_unchanged":true,"warning_codes":["ambiguous_number"],"features":["decimals"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-cn-invalid-date","language":"zh","locale":"zh-CN","mode":"auto","input":"31/02/2026","expected_unchanged":true,"warning_codes":["invalid_date"],"features":["dates"],"reviewed_by":"agent-unreviewed"}
+{"id":"zh-default-locale-ambiguous-date","language":"zh","locale":"auto","mode":"auto","input":"01/02/2026","expected_unchanged":true,"warning_codes":["ambiguous_date"],"features":["dates"],"reviewed_by":"agent-unreviewed"}

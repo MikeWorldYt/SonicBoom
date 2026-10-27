@@ -1,0 +1,27 @@
+{"id":"neg-spec-version-es","language":"es","locale":"es-PE","mode":"auto","input":"Minecraft 1.21.11","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"spec"}
+{"id":"neg-spec-version-en","language":"en","locale":"en-US","mode":"auto","input":"Minecraft 1.21.11","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"spec"}
+{"id":"neg-spec-ip-port","language":"es","locale":"es-PE","mode":"auto","input":"10.0.0.1:8080","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"spec"}
+{"id":"neg-spec-url-en","language":"en","locale":"en-US","mode":"auto","input":"https://example.org/a?b=3.14","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"spec"}
+{"id":"neg-spec-url-es","language":"es","locale":"es-PE","mode":"auto","input":"https://example.org/a?b=3.14","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"spec"}
+{"id":"neg-spec-semver","language":"en","locale":"en-US","mode":"auto","input":"v1.2.3-beta.2","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"spec"}
+{"id":"neg-spec-email","language":"es","locale":"es-PE","mode":"auto","input":"user@example.org","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"spec"}
+{"id":"neg-spec-invalid-date-es","language":"es","locale":"es-PE","mode":"auto","input":"31/02/2026","expected_unchanged":true,"warning_codes":["invalid_date"],"features":["dates"],"reviewed_by":"spec"}
+{"id":"neg-spec-invalid-date-en","language":"en","locale":"en-US","mode":"auto","input":"31/02/2026","expected_unchanged":true,"warning_codes":["invalid_date"],"features":["dates"],"reviewed_by":"spec"}
+{"id":"neg-spec-vulgar-fraction","language":"es","locale":"es-PE","mode":"auto","input":"½","expected_unchanged":true,"warning_codes":["ambiguous_fraction"],"features":["fractions"],"reviewed_by":"spec"}
+{"id":"neg-spec-slash-fraction","language":"en","locale":"en-US","mode":"auto","input":"3/4","expected_unchanged":true,"warning_codes":["ambiguous_fraction"],"features":["fractions"],"reviewed_by":"spec"}
+{"id":"neg-spec-ratio","language":"es","locale":"es-PE","mode":"auto","input":"1:2","expected_unchanged":true,"warning_codes":["ambiguous_fraction"],"features":["fractions"],"reviewed_by":"spec"}
+{"id":"neg-spec-leading-zeros","language":"en","locale":"en-US","mode":"auto","input":"007","expected_unchanged":true,"warning_codes":["ambiguous_number"],"features":["cardinal_numbers"],"reviewed_by":"spec"}
+{"id":"neg-spec-zwj-emoji","language":"es","locale":"es-PE","mode":"auto","input":"😊👨‍👩‍👧‍👦","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"spec"}
+{"id":"neg-accents-en","language":"en","locale":"en-GB","mode":"auto","input":"Pingüino, niño, acción, áéíóú","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"agent-unreviewed"}
+{"id":"neg-ipv6","language":"es","locale":"es-PE","mode":"auto","input":"2001:db8::1","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"agent-unreviewed"}
+{"id":"neg-ipv4-no-port","language":"es","locale":"es-ES","mode":"auto","input":"10.0.0.1","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"agent-unreviewed"}
+{"id":"neg-phone-groups","language":"en","locale":"en-US","mode":"auto","input":"Call 987 654 321","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"agent-unreviewed"}
+{"id":"neg-alnum-codes","language":"es","locale":"es-ES","mode":"auto","input":"Qwen3 en 4K y 3D","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"agent-unreviewed"}
+{"id":"neg-hyphen-id","language":"es","locale":"es-PE","mode":"auto","input":"COVID-19 y 123-456","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"agent-unreviewed"}
+{"id":"neg-too-large","language":"en","locale":"en-US","mode":"auto","input":"1000000000000000","expected_unchanged":true,"warning_codes":["number_too_large"],"features":["cardinal_numbers"],"reviewed_by":"agent-unreviewed"}
+{"id":"neg-inline-code","language":"es","locale":"es-PE","mode":"auto","input":"Usa `x = 3.14` aquí","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"agent-unreviewed"}
+{"id":"neg-iso-invalid","language":"en","locale":"en-US","mode":"auto","input":"2026-02-30","expected_unchanged":true,"warning_codes":["invalid_date"],"features":["dates"],"reviewed_by":"agent-unreviewed"}
+{"id":"neg-two-digit-year","language":"es","locale":"es-PE","mode":"auto","input":"1/2/26","expected_unchanged":true,"warning_codes":["ambiguous_date"],"features":["dates"],"reviewed_by":"agent-unreviewed"}
+{"id":"neg-yen-ambiguous","language":"en","locale":"en-US","mode":"auto","input":"¥500","expected_unchanged":true,"warning_codes":["ambiguous_currency"],"features":["currency"],"reviewed_by":"agent-unreviewed"}
+{"id":"neg-hms-time","language":"en","locale":"en-US","mode":"auto","input":"10:30:15","expected_unchanged":true,"warning_codes":["ambiguous_time"],"features":["times"],"reviewed_by":"agent-unreviewed"}
+{"id":"neg-handle-and-tag","language":"en","locale":"en-US","mode":"auto","input":"@user123 #42","expected_unchanged":true,"warning_codes":[],"features":[],"reviewed_by":"agent-unreviewed"}
