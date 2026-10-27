@@ -5,6 +5,7 @@ pub mod devices;
 pub mod download;
 pub mod inference;
 pub mod model;
+pub mod normalization;
 pub mod providers;
 pub mod quality;
 #[cfg(feature = "playback")]
